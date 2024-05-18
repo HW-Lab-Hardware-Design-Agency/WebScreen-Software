@@ -10,7 +10,7 @@ let port;
 let selectedPort = '/dev/ttyACM1';
 
 // Serve static files from the "public" directory
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, '../public')));
 
 app.get('/ports', async (req, res) => {
     try {
@@ -53,7 +53,7 @@ app.get('/connect', (req, res) => {
 
 // Serve the index.html file on the root URL
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(__dirname, '../public', 'index.html'));
 });
 
 wss.on('connection', function connection(ws) {
@@ -78,8 +78,10 @@ wss.on('connection', function connection(ws) {
     });
 });
 
-app.listen(3000, () => {
+const server = app.listen(3000, () => {
     console.log('Express server listening on port 3000');
 });
 
 console.log('WebSocket server listening on port 8765');
+
+module.exports = server;

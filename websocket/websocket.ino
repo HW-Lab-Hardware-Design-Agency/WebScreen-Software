@@ -1,6 +1,10 @@
 #include <Arduino.h>
-#include "lvgl.h" /* https://github.com/lvgl/lvgl.git */
-#include "rm67162.h"
+#include "lvgl.h"          // Include LVGL library
+#include "rm67162.h"       // Display driver
+#include "notification.h"  // Include the header for the animated GIF
+
+// Declare the GIF image data from the generated file
+extern const lv_img_dsc_t notification;
 
 #if ARDUINO_USB_CDC_ON_BOOT != 1
 #warning "If you need to monitor printed data, be sure to set USB CDC On boot to ENABLE, otherwise you will not see any data in the serial monitor"
@@ -13,6 +17,7 @@
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf;
 lv_obj_t *label;  // Global label object
+lv_obj_t *gif;    // GIF object
 
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
   uint32_t w = (area->x2 - area->x1 + 1);
@@ -47,23 +52,20 @@ void setup() {
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, HIGH);
 
-  rm67162_init();  // amoled lcd initialization
-
+  rm67162_init();  // Initialize the AMOLED display
   lcd_setRotation(1);
 
-  lv_init();
+  lv_init();  // Initialize the LVGL library
 
   buf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
   assert(buf);
 
   lv_disp_draw_buf_init(&draw_buf, buf, NULL, LVGL_LCD_BUF_SIZE);
 
-  /*Initialize the display*/
   static lv_disp_drv_t disp_drv;
   lv_disp_drv_init(&disp_drv);
-  /*Change the following line to your display resolution*/
-  disp_drv.hor_res = EXAMPLE_LCD_H_RES;
-  disp_drv.ver_res = EXAMPLE_LCD_V_RES;
+  disp_drv.hor_res = 536; // Update to your display resolution
+  disp_drv.ver_res = 240; // Update to your display resolution
   disp_drv.flush_cb = my_disp_flush;
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register(&disp_drv);
@@ -85,7 +87,16 @@ void setup() {
   lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, 0);     // Align the label to the bottom middle
 
   // Create scroll animation
-  create_scroll_animation(label, EXAMPLE_LCD_V_RES + 75, -lv_obj_get_height(label), 15000); // 15 seconds for a full scroll
+  create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 20000); // 15 seconds for a full scroll
+
+  // Create a GIF object
+  gif = lv_gif_create(lv_scr_act());
+  lv_gif_set_src(gif, &notification);
+  lv_obj_align(gif, LV_ALIGN_CENTER, 0, 0);  // Correctly align the GIF on the screen
+
+  // Initially hide the label and show the GIF
+  lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(gif, LV_OBJ_FLAG_HIDDEN);
 }
 
 void loop() {
@@ -95,7 +106,11 @@ void loop() {
     String received = Serial.readStringUntil('\n');
     lv_label_set_text(label, received.c_str());
     lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, 0); // Re-align the label to the bottom middle
-    create_scroll_animation(label, EXAMPLE_LCD_V_RES + 75, -lv_obj_get_height(label), 15000); // Restart scroll animation
+    create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 20000); // Restart scroll animation
+
+    // Hide the GIF and show the label
+    lv_obj_add_flag(gif, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
   }
   delay(5);
 }

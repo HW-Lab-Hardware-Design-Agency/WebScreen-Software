@@ -18,7 +18,7 @@
 #define SEND_BUF_SIZE (0x4000)  //(LCD_WIDTH * LCD_HEIGHT + 8) / 10
 
 #define TFT_TE 9
-#define TFT_SDO 8
+#define TFT_SDO 8 
 
 #define TFT_DC 7
 #define TFT_RES 17

@@ -27,20 +27,14 @@
         <div class="form-group">
             <label for="wifiSSID">SSID:</label>
             <input type="text" id="wifiSSID" class="form-control" placeholder="Enter Wi-Fi SSID">
+            <button onclick="fetchWifiNetworks()" class="btn btn-secondary mt-2">Scan Wi-Fi Networks</button>
+            <div id="wifiNetworksList" class="mt-2"></div>
         </div>
         <div class="form-group">
             <label for="wifiPassword">Password:</label>
             <input type="password" id="wifiPassword" class="form-control" placeholder="Enter Wi-Fi Password">
         </div>
         <button onclick="saveWiFiSettings()" class="btn btn-primary">Save Wi-Fi Settings</button>
-
-        <!-- Bluetooth Settings Section -->
-        <h2 class="mt-5">Bluetooth Settings</h2>
-        <div class="form-group">
-            <label for="bluetoothDevice">Device Name:</label>
-            <input type="text" id="bluetoothDevice" class="form-control" placeholder="Enter Bluetooth Device Name">
-        </div>
-        <button onclick="saveBluetoothSettings()" class="btn btn-primary">Save Bluetooth Settings</button>
     </div>
 
     <!-- Bootstrap JS and dependencies -->

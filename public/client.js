@@ -16,6 +16,28 @@ function startWebSocket() {
   };
 }
 
+async function fetchWifiNetworks() {
+  try {
+    const response = await fetch('/wifi-networks');
+    const data = await response.json();
+    const networks = data.networks;
+    const wifiNetworksList = document.getElementById('wifiNetworksList');
+    wifiNetworksList.innerHTML = '';
+
+    networks.forEach(network => {
+      const div = document.createElement('div');
+      div.classList.add('wifi-network');
+      div.textContent = network.ssid;
+      div.onclick = () => {
+        document.getElementById('wifiSSID').value = network.ssid;
+      };
+      wifiNetworksList.appendChild(div);
+    });
+  } catch (error) {
+    console.error('Error fetching WiFi networks:', error);
+  }
+}
+
 function fetchSerialPorts() {
   fetch('/ports')
     .then(response => response.json())
@@ -52,3 +74,9 @@ function sendMessage() {
   ws.send(message);
   console.log('Sent:', message);
 }
+
+
+window.onload = function () {
+  //fetchWiFiNetworks();
+  fetchSerialPorts();
+};

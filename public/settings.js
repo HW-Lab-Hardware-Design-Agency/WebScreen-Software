@@ -15,23 +15,3 @@ function saveBluetoothSettings() {
   alert('Bluetooth settings saved!');
 }
 
-function fetchWiFiNetworks() {
-  fetch('/wifi-networks')
-    .then(response => response.json())
-    .then(data => {
-      const selectBox = document.getElementById('wifiSSID');
-      selectBox.innerHTML = ''; // Clear existing options
-      data.networks.forEach(network => {
-        const option = document.createElement('option');
-        option.value = network.ssid;
-        option.textContent = network.ssid;
-        selectBox.appendChild(option);
-      });
-    })
-    .catch(error => console.error('Error fetching Wi-Fi networks:', error));
-}
-
-window.onload = function () {
-  fetchWiFiNetworks();
-  fetchSerialPorts();
-};

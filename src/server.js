@@ -70,7 +70,7 @@ app.get('/wifi-networks', (req, res) => {
 
 // Serve the index.html file on the root URL
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, '../public', 'index.html'));
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 wss.on('connection', function connection(ws) {

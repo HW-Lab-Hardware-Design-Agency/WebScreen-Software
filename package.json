@@ -49,6 +49,7 @@
   },
   "dependencies": {
     "express": "^4.18.2",
+    "node-wifi": "^2.0.16",
     "serialport": "^12.0.0",
     "ws": "^8.17.0"
   },

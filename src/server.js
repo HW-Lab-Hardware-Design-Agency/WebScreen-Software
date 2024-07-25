@@ -2,12 +2,17 @@ const WebSocket = require('ws');
 const { SerialPort } = require('serialport');
 const express = require('express');
 const path = require('path');
-
+const wifi = require('node-wifi');
 const app = express();
 const wss = new WebSocket.Server({ port: 8765 });
 
 let port;
 let selectedPort = '/dev/ttyACM1';
+
+// Initialize wifi module
+wifi.init({
+    iface: null // network interface, choose a random wifi interface if set to null
+});
 
 // Serve static files from the "public" directory
 app.use(express.static(path.join(__dirname, '../public')));
@@ -48,6 +53,18 @@ app.get('/connect', (req, res) => {
 
     port.on('error', (err) => {
         console.error('Serial port error:', err.message);
+    });
+});
+
+// Endpoint to scan available Wi-Fi networks
+app.get('/wifi-networks', (req, res) => {
+    wifi.scan((err, networks) => {
+        if (err) {
+            console.error('Error scanning Wi-Fi networks:', err);
+            res.status(500).json({ error: 'Failed to scan Wi-Fi networks' });
+        } else {
+            res.json({ networks });
+        }
     });
 });
 

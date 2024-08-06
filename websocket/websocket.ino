@@ -38,7 +38,14 @@ void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, uint32_t
   lv_anim_set_time(&a, duration);
   lv_anim_set_exec_cb(&a, scroll_anim_cb);
   lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out); // Smooth animation
-  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE); // Repeat forever
+  lv_anim_set_repeat_count(&a, 2); // Repeat twice
+
+  lv_anim_set_ready_cb(&a, [](lv_anim_t *anim) {
+    lv_obj_t *obj = static_cast<lv_obj_t *>(anim->var);
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN); // Hide the text label
+    lv_obj_clear_flag(gif, LV_OBJ_FLAG_HIDDEN); // Show the GIF
+  });
+
   lv_anim_start(&a);
 }
 
@@ -53,7 +60,7 @@ void setup() {
   digitalWrite(PIN_LED, HIGH);
 
   rm67162_init();  // Initialize the AMOLED display
-  lcd_setRotation(1);
+  lcd_setRotation(3);
 
   lv_init();  // Initialize the LVGL library
 
@@ -64,8 +71,8 @@ void setup() {
 
   static lv_disp_drv_t disp_drv;
   lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = 536; // Update to your display resolution
-  disp_drv.ver_res = 240; // Update to your display resolution
+  disp_drv.hor_res = 536;  // Update to your display resolution
+  disp_drv.ver_res = 240;  // Update to your display resolution
   disp_drv.flush_cb = my_disp_flush;
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register(&disp_drv);
@@ -73,21 +80,21 @@ void setup() {
   // Style settings for the label
   static lv_style_t style;
   lv_style_init(&style);
-  lv_style_set_text_font(&style, &lv_font_montserrat_40); // Use Montserrat font size 40
-  lv_style_set_text_color(&style, lv_color_white()); // White text color
-  lv_style_set_bg_color(&style, lv_color_black()); // Black background color
-  lv_style_set_pad_all(&style, 5); // Set padding
-  lv_style_set_text_align(&style, LV_TEXT_ALIGN_CENTER); // Center align the text
+  lv_style_set_text_font(&style, &lv_font_montserrat_40);  // Use Montserrat font size 40
+  lv_style_set_text_color(&style, lv_color_white());       // White text color
+  lv_style_set_bg_color(&style, lv_color_black());         // Black background color
+  lv_style_set_pad_all(&style, 5);                         // Set padding
+  lv_style_set_text_align(&style, LV_TEXT_ALIGN_CENTER);   // Center align the text
 
   label = lv_label_create(lv_scr_act());
-  lv_obj_add_style(label, &style, 0); // Apply style to label
+  lv_obj_add_style(label, &style, 0);  // Apply style to label
   lv_label_set_text(label, "This is a long text that will be scrolled up and down automatically. Add more text here to test scrolling functionality. This is a very long text indeed.");
   lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);  // Break the long lines
   lv_obj_set_width(label, 525);                       // Adjust the label width to the display width
-  lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, 0);     // Align the label to the bottom middle
+  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);         // Align the label to the bottom middle
 
   // Create scroll animation
-  create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 20000); // 15 seconds for a full scroll
+  create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 10000);  // 15 seconds for a full scroll
 
   // Create a GIF object
   gif = lv_gif_create(lv_scr_act());
@@ -105,12 +112,10 @@ void loop() {
   if (Serial.available()) {
     String received = Serial.readStringUntil('\n');
     lv_label_set_text(label, received.c_str());
-    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, 0); // Re-align the label to the bottom middle
-    create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 20000); // Restart scroll animation
-
-    // Hide the GIF and show the label
-    lv_obj_add_flag(gif, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0); // Re-align the label
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN); // Show the label
+    lv_obj_add_flag(gif, LV_OBJ_FLAG_HIDDEN); // Hide the GIF
+    create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 10000); // Restart scroll animation
   }
   delay(5);
 }

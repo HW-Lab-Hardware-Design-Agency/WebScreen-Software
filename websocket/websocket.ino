@@ -60,7 +60,7 @@ void setup() {
   digitalWrite(PIN_LED, HIGH);
 
   rm67162_init();  // Initialize the AMOLED display
-  lcd_setRotation(3);
+  lcd_setRotation(1);
 
   lv_init();  // Initialize the LVGL library
 

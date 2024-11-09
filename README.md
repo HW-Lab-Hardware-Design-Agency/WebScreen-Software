@@ -37,7 +37,7 @@ WebScreen is an open-source project that provides firmware for a customizable se
 
 2. **Clone This Repository**:
    ```bash
-   git clone https://github.com/yourusername/webscreen-firmware.git
+   https://github.com/HW-Lab-Hardware-Design-Agency/WebScreen-Software.git
    ```
 
 3. **Install Required Libraries**:

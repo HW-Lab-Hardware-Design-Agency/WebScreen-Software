@@ -1,6 +1,6 @@
 # WebScreen Firmware
 
-**WebScreen - Stay Connected, Stay Focused**
+**WebScreen - Stay Connected, Stay Focused - Subscribe: https://www.crowdsupply.com/hw-media-lab/webscreen**
 
 ## Project Description
 

@@ -1,121 +1,325 @@
 #include <Arduino.h>
-#include "lvgl.h"          // Include LVGL library
-#include "rm67162.h"       // Display driver
-#include "notification.h"  // Include the header for the animated GIF
+#include <WiFi.h>
+#include <FS.h>
+#include <SD_MMC.h>
+#include <stdio.h>
 
-// Declare the GIF image data from the generated file
-extern const lv_img_dsc_t notification;
-
-#if ARDUINO_USB_CDC_ON_BOOT != 1
-#warning "If you need to monitor printed data, be sure to set USB CDC On boot to ENABLE, otherwise you will not see any data in the serial monitor"
-#endif
-
-#ifndef BOARD_HAS_PSRAM
-#error "Detected that PSRAM is not turned on. Please set PSRAM to OPI PSRAM in ArduinoIDE"
-#endif
-
-static lv_disp_draw_buf_t draw_buf;
-static lv_color_t *buf;
-lv_obj_t *label;  // Global label object
-lv_obj_t *gif;    // GIF object
-
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
-  uint32_t w = (area->x2 - area->x1 + 1);
-  uint32_t h = (area->y2 - area->y1 + 1);
-  lcd_PushColors(area->x1, area->y1, w, h, (uint16_t *)&color_p->full);
-  lv_disp_flush_ready(disp);
+// Include elk.h with extern "C" to ensure correct linkage in C++
+extern "C" {
+  #include "elk.h"
 }
 
-static void scroll_anim_cb(void *var, int32_t v) {
-  lv_obj_set_y((lv_obj_t *)var, v);
+// Define SD card pins (adjust these pins according to your hardware setup)
+#define PIN_SD_CMD 13  // CMD
+#define PIN_SD_CLK 11  // CLK
+#define PIN_SD_D0  12  // Data0
+
+// Elk JavaScript engine instance
+struct js *js;
+
+/*************************************************************
+ * 1) Define all JavaScript-accessible functions here
+ *************************************************************/
+
+// Native function to print to the Serial Monitor
+static jsval_t js_print(struct js *js, jsval_t *args, int nargs) {
+  for (int i = 0; i < nargs; i++) {
+    const char *str = js_str(js, args[i]);
+    if (str != NULL) {
+      Serial.println(str);
+    } else {
+      Serial.println("print: argument is not a string");
+    }
+  }
+  return js_mknull();
 }
 
-void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, uint32_t duration) {
-  lv_anim_t a;
-  lv_anim_init(&a);
-  lv_anim_set_var(&a, obj);
-  lv_anim_set_values(&a, start, end);
-  lv_anim_set_time(&a, duration);
-  lv_anim_set_exec_cb(&a, scroll_anim_cb);
-  lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out); // Smooth animation
-  lv_anim_set_repeat_count(&a, 2); // Repeat twice
+// Native function to connect to Wi-Fi
+static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
+  if (nargs != 2) {
+    Serial.println("wifi_connect: expected 2 arguments");
+    return js_mkfalse();
+  }
+  const char *ssid_with_quotes     = js_str(js, args[0]);
+  const char *password_with_quotes = js_str(js, args[1]);
+  if (!ssid_with_quotes || !password_with_quotes) {
+    Serial.println("wifi_connect: arguments must be strings");
+    return js_mkfalse();
+  }
 
-  lv_anim_set_ready_cb(&a, [](lv_anim_t *anim) {
-    lv_obj_t *obj = static_cast<lv_obj_t *>(anim->var);
-    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN); // Hide the text label
-    lv_obj_clear_flag(gif, LV_OBJ_FLAG_HIDDEN); // Show the GIF
-  });
+  // Strip surrounding quotes if present
+  String ssid = String(ssid_with_quotes);
+  if (ssid.startsWith("\"") && ssid.endsWith("\"")) {
+    ssid = ssid.substring(1, ssid.length() - 1);
+  }
 
-  lv_anim_start(&a);
+  String password = String(password_with_quotes);
+  if (password.startsWith("\"") && password.endsWith("\"")) {
+    password = password.substring(1, password.length() - 1);
+  }
+
+  Serial.printf("Connecting to Wi-Fi SSID: %s\n", ssid.c_str());
+  WiFi.begin(ssid.c_str(), password.c_str());
+
+  int max_attempts = 20;
+  while (WiFi.status() != WL_CONNECTED && max_attempts > 0) {
+    delay(500);
+    Serial.print(".");
+    max_attempts--;
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Wi-Fi connected");
+    return js_mktrue();
+  } else {
+    Serial.println("Failed to connect to Wi-Fi");
+    return js_mkfalse();
+  }
 }
 
+// Native function to check Wi-Fi connection status
+static jsval_t js_wifi_status(struct js *js, jsval_t *args, int nargs) {
+  return (WiFi.status() == WL_CONNECTED) ? js_mktrue() : js_mkfalse();
+}
+
+// Native function to get IP address
+static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Not connected to Wi-Fi");
+    return js_mknull();
+  }
+  IPAddress ip = WiFi.localIP();
+  String ipStr = ip.toString();
+  return js_mkstr(js, ipStr.c_str(), ipStr.length());
+}
+
+// Native function to delay execution
+static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
+  if (nargs != 1) {
+    Serial.println("delay: expected 1 argument");
+    return js_mknull();
+  }
+  double ms = js_getnum(args[0]);
+  delay((unsigned long)ms);
+  return js_mknull();
+}
+
+// Native function to read a file from the SD card
+static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
+  if (nargs != 1) {
+    Serial.println("sd_read_file: expected 1 argument");
+    return js_mknull();
+  }
+  const char *path = js_str(js, args[0]);
+  if (!path) {
+    Serial.println("sd_read_file: argument is not a string");
+    return js_mknull();
+  }
+
+  File file = SD_MMC.open(path);
+  if (!file) {
+    Serial.printf("Failed to open file: %s\n", path);
+    return js_mknull();
+  }
+
+  String content = file.readString();
+  file.close();
+
+  // Return file contents to JavaScript
+  return js_mkstr(js, content.c_str(), content.length());
+}
+
+// Native function to write data to a file on the SD card
+static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
+  if (nargs != 2) {
+    Serial.println("sd_write_file: expected 2 arguments");
+    return js_mkfalse();
+  }
+  const char *path = js_str(js, args[0]);
+  const char *data = js_str(js, args[1]);
+  if (!path || !data) {
+    Serial.println("sd_write_file: arguments must be strings");
+    return js_mkfalse();
+  }
+
+  File file = SD_MMC.open(path, FILE_WRITE);
+  if (!file) {
+    Serial.printf("Failed to open file for writing: %s\n", path);
+    return js_mkfalse();
+  }
+
+  file.write((const uint8_t *)data, strlen(data));
+  file.close();
+
+  return js_mktrue();
+}
+
+// Native function to list files in a directory on the SD card
+static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
+  if (nargs != 1) {
+    Serial.println("sd_list_dir: expected 1 argument");
+    return js_mknull();
+  }
+  const char *path_with_quotes = js_str(js, args[0]);
+  if (!path_with_quotes) {
+    Serial.println("sd_list_dir: argument is not a string");
+    return js_mknull();
+  }
+
+  // Strip the surrounding quotes from path
+  String path = String(path_with_quotes);
+  if (path.startsWith("\"") && path.endsWith("\"")) {
+    path = path.substring(1, path.length() - 1);
+  }
+
+  File root = SD_MMC.open(path);
+  if (!root) {
+    Serial.printf("Failed to open directory: %s\n", path.c_str());
+    return js_mknull();
+  }
+  if (!root.isDirectory()) {
+    Serial.println("Not a directory");
+    root.close();
+    return js_mknull();
+  }
+
+  // Use a fixed-size buffer for listing
+  char fileList[512]; // Adjust if you expect many files
+  int fileListLen = 0;
+
+  File file = root.openNextFile();
+  while (file) {
+    const char* type = file.isDirectory() ? "DIR: " : "FILE: ";
+    const char* name = file.name();
+
+    int len = snprintf(fileList + fileListLen,
+                       sizeof(fileList) - fileListLen,
+                       "%s%s\n", type, name);
+    if (len < 0 || len >= (int)(sizeof(fileList) - fileListLen)) {
+      // Buffer is full or error
+      break;
+    }
+    fileListLen += len;
+    file = root.openNextFile();
+  }
+  root.close();
+
+  return js_mkstr(js, fileList, fileListLen);
+}
+
+/*************************************************************
+ * 2) LVGL-Related Placeholders
+ *    If you don't have LVGL integrated yet, these stubs
+ *    prevent JS errors when calling lvgl_display_label() etc.
+ *************************************************************/
+static jsval_t js_lvgl_display_label(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) {
+    Serial.println("lvgl_display_label: expected at least 1 argument");
+    return js_mknull();
+  }
+  const char *text = js_str(js, args[0]);
+  // Placeholder: Just print to serial. Replace with real LVGL code.
+  Serial.printf("[Placeholder] lvgl_display_label: %s\n", text);
+  return js_mknull();
+}
+
+static jsval_t js_lvgl_display_image(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) {
+    Serial.println("lvgl_display_image: expected at least 1 argument");
+    return js_mknull();
+  }
+  const char *path = js_str(js, args[0]);
+  // Placeholder: Just print to serial. Replace with real LVGL code.
+  Serial.printf("[Placeholder] lvgl_display_image: %s\n", path);
+  return js_mknull();
+}
+
+/*************************************************************
+ * 3) Register the functions with Elk
+ *************************************************************/
+void register_js_functions() {
+  jsval_t global = js_glob(js);
+
+  js_set(js, global, "print",             js_mkfun(js_print));
+  js_set(js, global, "wifi_connect",      js_mkfun(js_wifi_connect));
+  js_set(js, global, "wifi_status",       js_mkfun(js_wifi_status));
+  js_set(js, global, "wifi_get_ip",       js_mkfun(js_wifi_get_ip));
+  js_set(js, global, "delay",             js_mkfun(js_delay));
+  js_set(js, global, "sd_read_file",      js_mkfun(js_sd_read_file));
+  js_set(js, global, "sd_write_file",     js_mkfun(js_sd_write_file));
+  js_set(js, global, "sd_list_dir",       js_mkfun(js_sd_list_dir));
+
+  // LVGL placeholder functions
+  js_set(js, global, "lvgl_display_label", js_mkfun(js_lvgl_display_label));
+  js_set(js, global, "lvgl_display_image", js_mkfun(js_lvgl_display_image));
+}
+
+/*************************************************************
+ * 4) Load and execute a JavaScript script from the SD card
+ *************************************************************/
+bool load_and_execute_js_script(const char* path) {
+  Serial.printf("Loading JavaScript script from: %s\n", path);
+
+  File file = SD_MMC.open(path);
+  if (!file) {
+    Serial.println("Failed to open JavaScript script file");
+    return false;
+  }
+
+  // Read the entire file into a String
+  String jsScript = file.readString();
+  file.close();
+
+  // Execute the JavaScript script
+  jsval_t res = js_eval(js, jsScript.c_str(), jsScript.length());
+  if (js_type(res) == JS_ERR) {
+    const char *error = js_str(js, res);
+    Serial.printf("Error executing script: %s\n", error);
+    return false;
+  }
+
+  Serial.println("JavaScript script executed successfully");
+  return true;
+}
+
+/*************************************************************
+ * 5) Arduino setup() and loop()
+ *************************************************************/
 void setup() {
   Serial.begin(115200);
-  /*
-    * Compatible with touch version
-    * Touch version, IO38 is the screen power enable
-    * Non-touch version, IO38 is an onboard LED light
-    * * */
-  pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, HIGH);
+  delay(5000);
 
-  rm67162_init();  // Initialize the AMOLED display
-  lcd_setRotation(1);
+  // Set SD card pins
+  SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
 
-  lv_init();  // Initialize the LVGL library
+  // Initialize SD card
+  if (!SD_MMC.begin("/sdcard", true)) {
+    Serial.println("Card Mount Failed");
+    return;
+  }
 
-  buf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
-  assert(buf);
+  // Initialize Wi-Fi (Station mode)
+  WiFi.mode(WIFI_STA);
 
-  lv_disp_draw_buf_init(&draw_buf, buf, NULL, LVGL_LCD_BUF_SIZE);
+  // Initialize Elk with a memory buffer
+  static uint8_t elk_memory[4096];  // Increase if needed
+  js = js_create(elk_memory, sizeof(elk_memory));
+  if (!js) {
+    Serial.println("Failed to initialize Elk");
+    return;
+  }
 
-  static lv_disp_drv_t disp_drv;
-  lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = 536;  // Update to your display resolution
-  disp_drv.ver_res = 240;  // Update to your display resolution
-  disp_drv.flush_cb = my_disp_flush;
-  disp_drv.draw_buf = &draw_buf;
-  lv_disp_drv_register(&disp_drv);
+  // Register custom JS functions with Elk
+  register_js_functions();
 
-  // Style settings for the label
-  static lv_style_t style;
-  lv_style_init(&style);
-  lv_style_set_text_font(&style, &lv_font_montserrat_40);  // Use Montserrat font size 40
-  lv_style_set_text_color(&style, lv_color_white());       // White text color
-  lv_style_set_bg_color(&style, lv_color_black());         // Black background color
-  lv_style_set_pad_all(&style, 5);                         // Set padding
-  lv_style_set_text_align(&style, LV_TEXT_ALIGN_CENTER);   // Center align the text
-
-  label = lv_label_create(lv_scr_act());
-  lv_obj_add_style(label, &style, 0);  // Apply style to label
-  lv_label_set_text(label, "This is a long text that will be scrolled up and down automatically. Add more text here to test scrolling functionality. This is a very long text indeed.");
-  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);  // Break the long lines
-  lv_obj_set_width(label, 525);                       // Adjust the label width to the display width
-  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);         // Align the label to the bottom middle
-
-  // Create scroll animation
-  create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 10000);  // 15 seconds for a full scroll
-
-  // Create a GIF object
-  gif = lv_gif_create(lv_scr_act());
-  lv_gif_set_src(gif, &notification);
-  lv_obj_align(gif, LV_ALIGN_CENTER, 0, 0);  // Correctly align the GIF on the screen
-
-  // Initially hide the label and show the GIF
-  lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gif, LV_OBJ_FLAG_HIDDEN);
+  // Load and execute a sample script from the SD card
+  if (!load_and_execute_js_script("/script.js")) {
+    Serial.println("Failed to load and execute JavaScript script");
+  }
 }
 
 void loop() {
-  lv_timer_handler();
-
-  if (Serial.available()) {
-    String received = Serial.readStringUntil('\n');
-    lv_label_set_text(label, received.c_str());
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0); // Re-align the label
-    lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN); // Show the label
-    lv_obj_add_flag(gif, LV_OBJ_FLAG_HIDDEN); // Hide the GIF
-    create_scroll_animation(label, EXAMPLE_LCD_V_RES, -lv_obj_get_height(label), 10000); // Restart scroll animation
-  }
-  delay(5);
+  // Placeholder for any periodic tasks
+  delay(5000);
 }

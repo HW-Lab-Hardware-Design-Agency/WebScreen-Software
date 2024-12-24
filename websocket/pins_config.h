@@ -39,3 +39,8 @@
 
 #define PIN_BUTTON_1 0
 #define PIN_BUTTON_2 21
+
+// Define SD card pins.
+#define PIN_SD_CMD 13  // CMD
+#define PIN_SD_CLK 11  // CLK
+#define PIN_SD_D0  12  // Data0

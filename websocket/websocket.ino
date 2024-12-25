@@ -3,19 +3,20 @@
  * Demonstrates:
  *   - Elk + Wi-Fi + SD_MMC + LVGL
  *   - Registering a normal 'S' driver for typical SD usage
- *   - **Registering a 'M' memory driver** to feed data from PSRAM
+ *   - Registering a 'M' memory driver to feed data from PSRAM (for GIFs)
  *   - show_gif_from_sd("/wallpaper.gif") loads the file into PSRAM, then tells
  *     LVGL to open "M:mygif" from memory (bypassing SD streaming).
  *   - Basic label placeholders, directory listing, etc.
+ *   - ***NEW***: draw_label, draw_rect, show_image to draw shapes/images from SD.
+ *   - ***FIX***: in show_image() we strip extra quotes so it won't become S:"/messi.png".
  *
  * Prerequisites:
- *   1) "pins_config.h" in the same folder, containing your pin definitions and
- *      EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, LVGL_LCD_BUF_SIZE, etc.
- *   2) "rm67162.h" for the AMOLED driver (in the same or an include folder).
- *   3) "notification.h" if you use the "show_gif" approach with a compiled-in GIF.
+ *   1) "pins_config.h" in the same folder (pin definitions, LVGL_LCD_BUF_SIZE, etc.).
+ *   2) "rm67162.h" for the AMOLED driver (in the same folder).
+ *   3) "notification.h" if you want the compiled-in GIF approach (optional).
  *   4) Place a JavaScript file "/script.js" on your SD card that calls
- *      `show_gif_from_sd("/wallpaper.gif")`.
- *   5) Have "wallpaper.gif" in your SD card root.
+ *      show_gif_from_sd("/wallpaper.gif"), draw_label(...), show_image(...), etc.
+ *   5) Have "/messi.png" in your SD card root if you want to show that image.
  *
  * Copy/paste into a file named, e.g., "main.ino"
  ********************************************************************************/
@@ -183,8 +184,6 @@ static size_t   g_gifSize   = 0;
 
 // Open callback for the memory driver
 static void * my_mem_open_cb(lv_fs_drv_t * drv, const char * path, lv_fs_mode_t mode) {
-  // We ignore 'path' because we only have one "file" in memory named "mygif" etc.
-  // Create a small struct to track read position
   mem_file_t * mf = new mem_file_t();
   mf->pos = 0;
   return mf;
@@ -199,7 +198,6 @@ static lv_fs_res_t my_mem_close_cb(lv_fs_drv_t * drv, void * file_p) {
 
 static lv_fs_res_t my_mem_read_cb(lv_fs_drv_t * drv, void * file_p,
                                   void * buf, uint32_t btr, uint32_t * br) {
-  // read from g_gifBuffer
   mem_file_t *mf = (mem_file_t *)file_p;
   if(!mf) return LV_FS_RES_INV_PARAM;
 
@@ -214,7 +212,7 @@ static lv_fs_res_t my_mem_read_cb(lv_fs_drv_t * drv, void * file_p,
 
 static lv_fs_res_t my_mem_write_cb(lv_fs_drv_t * drv, void * file_p,
                                    const void * buf, uint32_t btw, uint32_t * bw) {
-  // We don't support writing to our memory buffer
+  // We don't support writing in the memory buffer
   *bw = 0;
   return LV_FS_RES_NOT_IMP;
 }
@@ -412,12 +410,9 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
 }
 
 // ---------------------------------------------------------------------------------
-// Section D: Load GIF from SD into g_gifBuffer, then let LVGL read from memory
+// D) Load GIF from SD into g_gifBuffer, then let LVGL read from memory
 // ---------------------------------------------------------------------------------
 
-/**
- * Load entire file from SD into g_gifBuffer + g_gifSize
- */
 bool load_gif_into_ram(const char * path) {
   File f = SD_MMC.open(path, FILE_READ);
   if(!f) {
@@ -450,11 +445,6 @@ bool load_gif_into_ram(const char * path) {
   return true;
 }
 
-/**
- * show_gif_from_sd("/wallpaper.gif"):
- *   1) Load file -> g_gifBuffer in RAM
- *   2) lv_gif_set_src(gif, "M:mygif") => read from memory driver
- */
 static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
   if(nargs < 1) {
     Serial.println("show_gif_from_sd: expects 1 argument (path)");
@@ -463,43 +453,110 @@ static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
   const char *rawPath = js_str(js, args[0]);
   if(!rawPath) return js_mknull();
 
-  // strip extra quotes if needed
   String path = String(rawPath);
   if(path.startsWith("\"") && path.endsWith("\"")) {
     path = path.substring(1, path.length() - 1);
   }
 
-  // 1) Load entire file from SD into g_gifBuffer
   if(!load_gif_into_ram(path.c_str())) {
     Serial.println("Could not load GIF into RAM");
     return js_mknull();
   }
 
-  // 2) Now let LVGL open "M:mygif" from memory
-  //    The memory driver will use g_gifBuffer + g_gifSize
   lv_obj_t *gif = lv_gif_create(lv_scr_act());
-  lv_gif_set_src(gif, "M:mygif"); // Triggers "my_mem_open_cb" etc.
-
+  lv_gif_set_src(gif, "M:mygif"); // memory driver
   lv_obj_align(gif, LV_ALIGN_CENTER, 0, 0);
 
   Serial.printf("Showing GIF from memory driver (file was %s)\n", path.c_str());
   return js_mknull();
 }
 
-// Provide placeholder definitions if they are missing
-static jsval_t js_lvgl_display_label(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mknull();
-  const char *text = js_str(js, args[0]);
-  Serial.printf("[Placeholder] lvgl_display_label: %s\n", text);
-  // If you ever want real code to create an LVGL label, do it here
+// ---------------------------------------------------------------------------------
+// *** Drawing + Image
+// ---------------------------------------------------------------------------------
+
+/**
+ * draw_label(text, x, y)
+ * Creates an LVGL label at (x,y)
+ */
+static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 3) {
+    Serial.println("draw_label: expects text, x, y");
+    return js_mknull();
+  }
+  const char *labelText = js_str(js, args[0]);
+  int x = (int)js_getnum(args[1]);
+  int y = (int)js_getnum(args[2]);
+
+  lv_obj_t *label = lv_label_create(lv_scr_act());
+  if(labelText) lv_label_set_text(label, labelText);
+  lv_obj_set_pos(label, x, y);
+
+  Serial.printf("draw_label: '%s' at (%d,%d)\n", labelText, x, y);
   return js_mknull();
 }
 
-static jsval_t js_lvgl_display_image(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mknull();
-  const char *path = js_str(js, args[0]);
-  Serial.printf("[Placeholder] lvgl_display_image: %s\n", path);
-  // If you ever want real code to create an LVGL image, do it here
+/**
+ * draw_rect(x, y, w, h)
+ */
+static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 4) {
+    Serial.println("draw_rect: expects x, y, w, h");
+    return js_mknull();
+  }
+  int x = (int)js_getnum(args[0]);
+  int y = (int)js_getnum(args[1]);
+  int w = (int)js_getnum(args[2]);
+  int h = (int)js_getnum(args[3]);
+
+  lv_obj_t *rect = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(rect, w, h);
+  lv_obj_set_pos(rect, x, y);
+
+  // optional style
+  static lv_style_t styleRect;
+  lv_style_init(&styleRect);
+  lv_style_set_bg_color(&styleRect, lv_color_hex(0x00ff00)); // green
+  lv_style_set_radius(&styleRect, 5);
+  lv_obj_add_style(rect, &styleRect, 0);
+
+  Serial.printf("draw_rect: at (%d,%d) size (%d,%d)\n", x, y, w, h);
+  return js_mknull();
+}
+
+/**
+ * show_image("/messi.png", x, y)
+ * Fix: Strip quotes, so path becomes "S:/messi.png" not "S:"/messi.png"
+ */
+static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 3) {
+    Serial.println("show_image: expects path, x, y");
+    return js_mknull();
+  }
+  const char *rawPath = js_str(js, args[0]);
+  int x = (int)js_getnum(args[1]);
+  int y = (int)js_getnum(args[2]);
+
+  if(!rawPath) {
+    Serial.println("show_image: invalid path");
+    return js_mknull();
+  }
+
+  // Convert to Arduino String
+  String path = String(rawPath);
+  // strip leading/trailing quotes if present
+  if(path.startsWith("\"") && path.endsWith("\"")) {
+    path = path.substring(1, path.length() - 1);
+  }
+
+  // e.g. "/messi.png" => "S:/messi.png"
+  String lvglPath = "S:" + path;
+
+  lv_obj_t *img = lv_img_create(lv_scr_act());
+  lv_img_set_src(img, lvglPath.c_str());
+  lv_obj_set_pos(img, x, y);
+
+  Serial.printf("show_image: '%s' at (%d,%d)\n", lvglPath.c_str(), x, y);
   return js_mknull();
 }
 
@@ -519,12 +576,13 @@ void register_js_functions() {
   js_set(js, global, "sd_write_file",js_mkfun(js_sd_write_file));
   js_set(js, global, "sd_list_dir",  js_mkfun(js_sd_list_dir));
 
-  // Placeholders
-  js_set(js, global, "lvgl_display_label", js_mkfun(js_lvgl_display_label));
-  js_set(js, global, "lvgl_display_image", js_mkfun(js_lvgl_display_image));
-
-  // Updated function: loads file -> g_gifBuffer, then uses memory driver "M:"
+  // For GIF
   js_set(js, global, "show_gif_from_sd", js_mkfun(js_show_gif_from_sd));
+
+  // ***NEW*** shape/drawing + image
+  js_set(js, global, "draw_label",  js_mkfun(js_lvgl_draw_label));
+  js_set(js, global, "draw_rect",   js_mkfun(js_lvgl_draw_rect));
+  js_set(js, global, "show_image",  js_mkfun(js_lvgl_show_image));
 }
 
 // ---------------------------------------------------------------------------------
@@ -575,7 +633,7 @@ void setup() {
   // 4) Register 'S' for normal SD usage
   init_lv_fs();
 
-  // 4b) Register 'M' for memory usage
+  // 4b) Register 'M' for memory usage (GIF approach)
   init_mem_fs();
 
   // 5) Create Elk

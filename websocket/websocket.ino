@@ -7,15 +7,17 @@
  *   - show_gif_from_sd("/wallpaper.gif") loads the file into PSRAM, then tells
  *     LVGL to open "M:mygif" from memory (bypassing SD streaming).
  *   - Basic label placeholders, directory listing, etc.
- *   - ***NEW***: draw_label, draw_rect, show_image to draw shapes/images from SD.
- *   - ***FIX***: in show_image() we strip extra quotes so it won't become S:"/messi.png".
+ *   - draw_label, draw_rect, show_image to draw shapes/images from SD (unchanged).
+ *   - ***NEW*** object handle approach: create_image, rotate_obj, move_obj, animate_obj
+ *     so we can rotate/animate any created image object.
  *
  * Prerequisites:
  *   1) "pins_config.h" in the same folder (pin definitions, LVGL_LCD_BUF_SIZE, etc.).
  *   2) "rm67162.h" for the AMOLED driver (in the same folder).
  *   3) "notification.h" if you want the compiled-in GIF approach (optional).
  *   4) Place a JavaScript file "/script.js" on your SD card that calls
- *      show_gif_from_sd("/wallpaper.gif"), draw_label(...), show_image(...), etc.
+ *      show_gif_from_sd("/wallpaper.gif"), draw_label(...), show_image(...),
+ *      or create_image(...), rotate_obj(...), animate_obj(...), etc.
  *   5) Have "/messi.png" in your SD card root if you want to show that image.
  *
  * Copy/paste into a file named, e.g., "main.ino"
@@ -172,17 +174,15 @@ void init_lv_fs() {
 }
 
 // ---------------------------------------------------------------------------------
-// Section B2: "Memory" driver 'M' - read from global PSRAM buffer
+// Section B2: "M" driver - read from global PSRAM buffer (for GIFs)
 // ---------------------------------------------------------------------------------
 typedef struct {
-  size_t pos;       // current read position
+  size_t pos;
 } mem_file_t;
 
-// The pointer + size we store after loading from SD
 static uint8_t *g_gifBuffer = NULL;
 static size_t   g_gifSize   = 0;
 
-// Open callback for the memory driver
 static void * my_mem_open_cb(lv_fs_drv_t * drv, const char * path, lv_fs_mode_t mode) {
   mem_file_t * mf = new mem_file_t();
   mf->pos = 0;
@@ -212,7 +212,6 @@ static lv_fs_res_t my_mem_read_cb(lv_fs_drv_t * drv, void * file_p,
 
 static lv_fs_res_t my_mem_write_cb(lv_fs_drv_t * drv, void * file_p,
                                    const void * buf, uint32_t btw, uint32_t * bw) {
-  // We don't support writing in the memory buffer
   *bw = 0;
   return LV_FS_RES_NOT_IMP;
 }
@@ -244,11 +243,11 @@ void init_mem_fs() {
   static lv_fs_drv_t mem_drv;
   lv_fs_drv_init(&mem_drv);
 
-  mem_drv.letter = 'M'; // "M" for "memory"
+  mem_drv.letter = 'M';
   mem_drv.open_cb  = my_mem_open_cb;
   mem_drv.close_cb = my_mem_close_cb;
   mem_drv.read_cb  = my_mem_read_cb;
-  mem_drv.write_cb = my_mem_write_cb; // not supported
+  mem_drv.write_cb = my_mem_write_cb;
   mem_drv.seek_cb  = my_mem_seek_cb;
   mem_drv.tell_cb  = my_mem_tell_cb;
 
@@ -260,7 +259,6 @@ void init_mem_fs() {
 // Section C: Elk-Facing Functions
 // ---------------------------------------------------------------------------------
 
-// (C1) Basic print
 static jsval_t js_print(struct js *js, jsval_t *args, int nargs) {
   for(int i=0; i<nargs; i++) {
     const char *str = js_str(js, args[i]);
@@ -270,14 +268,12 @@ static jsval_t js_print(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-// (C2) wifi_connect("ssid","pass")
 static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
   if(nargs != 2) return js_mkfalse();
   const char *ssid_with_quotes = js_str(js, args[0]);
   const char *pass_with_quotes = js_str(js, args[1]);
   if(!ssid_with_quotes || !pass_with_quotes) return js_mkfalse();
 
-  // strip quotes
   String ssid(ssid_with_quotes);
   String pass(pass_with_quotes);
   if(ssid.startsWith("\"") && ssid.endsWith("\"")) {
@@ -291,7 +287,7 @@ static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
   WiFi.begin(ssid.c_str(), pass.c_str());
 
   int attempts = 20;
-  while (WiFi.status() != WL_CONNECTED && attempts > 0) {
+  while(WiFi.status() != WL_CONNECTED && attempts > 0) {
     delay(500);
     Serial.print(".");
     attempts--;
@@ -307,12 +303,10 @@ static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
   }
 }
 
-// (C3) wifi_status()
 static jsval_t js_wifi_status(struct js *js, jsval_t *args, int nargs) {
   return (WiFi.status() == WL_CONNECTED) ? js_mktrue() : js_mkfalse();
 }
 
-// (C4) wifi_get_ip()
 static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
   if(WiFi.status() != WL_CONNECTED) {
     Serial.println("Not connected to Wi-Fi");
@@ -323,7 +317,6 @@ static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, ipStr.c_str(), ipStr.length());
 }
 
-// (C5) delay(ms)
 static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
   if(nargs != 1) return js_mknull();
   double ms = js_getnum(args[0]);
@@ -331,7 +324,6 @@ static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-// (C6) sd_read_file(path)
 static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
   if(nargs != 1) return js_mknull();
   const char *path = js_str(js, args[0]);
@@ -347,7 +339,6 @@ static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, content.c_str(), content.length());
 }
 
-// (C7) sd_write_file(path, data)
 static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
   if(nargs != 2) return js_mkfalse();
   const char *path = js_str(js, args[0]);
@@ -364,7 +355,6 @@ static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
   return js_mktrue();
 }
 
-// (C8) sd_list_dir(path)
 static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
   if(nargs != 1) return js_mknull();
   const char *path_with_quotes = js_str(js, args[0]);
@@ -410,9 +400,8 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
 }
 
 // ---------------------------------------------------------------------------------
-// D) Load GIF from SD into g_gifBuffer, then let LVGL read from memory
+// D) show_gif_from_sd
 // ---------------------------------------------------------------------------------
-
 bool load_gif_into_ram(const char * path) {
   File f = SD_MMC.open(path, FILE_READ);
   if(!f) {
@@ -422,7 +411,6 @@ bool load_gif_into_ram(const char * path) {
   size_t fileSize = f.size();
   Serial.printf("File %s is %u bytes\n", path, (unsigned)fileSize);
 
-  // Allocate from PSRAM
   uint8_t *tmp = (uint8_t *)ps_malloc(fileSize);
   if(!tmp) {
     Serial.printf("Failed to allocate %u bytes in PSRAM\n", (unsigned)fileSize);
@@ -472,13 +460,8 @@ static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
 }
 
 // ---------------------------------------------------------------------------------
-// *** Drawing + Image
+// E) draw_label, draw_rect, show_image
 // ---------------------------------------------------------------------------------
-
-/**
- * draw_label(text, x, y)
- * Creates an LVGL label at (x,y)
- */
 static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs) {
   if(nargs < 3) {
     Serial.println("draw_label: expects text, x, y");
@@ -496,9 +479,6 @@ static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-/**
- * draw_rect(x, y, w, h)
- */
 static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   if(nargs < 4) {
     Serial.println("draw_rect: expects x, y, w, h");
@@ -513,10 +493,9 @@ static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   lv_obj_set_size(rect, w, h);
   lv_obj_set_pos(rect, x, y);
 
-  // optional style
   static lv_style_t styleRect;
   lv_style_init(&styleRect);
-  lv_style_set_bg_color(&styleRect, lv_color_hex(0x00ff00)); // green
+  lv_style_set_bg_color(&styleRect, lv_color_hex(0x00ff00));
   lv_style_set_radius(&styleRect, 5);
   lv_obj_add_style(rect, &styleRect, 0);
 
@@ -524,10 +503,6 @@ static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-/**
- * show_image("/messi.png", x, y)
- * Fix: Strip quotes, so path becomes "S:/messi.png" not "S:"/messi.png"
- */
 static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
   if(nargs < 3) {
     Serial.println("show_image: expects path, x, y");
@@ -542,14 +517,10 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
     return js_mknull();
   }
 
-  // Convert to Arduino String
   String path = String(rawPath);
-  // strip leading/trailing quotes if present
   if(path.startsWith("\"") && path.endsWith("\"")) {
     path = path.substring(1, path.length() - 1);
   }
-
-  // e.g. "/messi.png" => "S:/messi.png"
   String lvglPath = "S:" + path;
 
   lv_obj_t *img = lv_img_create(lv_scr_act());
@@ -557,6 +528,153 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
   lv_obj_set_pos(img, x, y);
 
   Serial.printf("show_image: '%s' at (%d,%d)\n", lvglPath.c_str(), x, y);
+  return js_mknull();
+}
+
+// *** ADDED handle code *** 
+// We'll store references to objects so we can rotate/animate them
+static const int MAX_OBJECTS = 16;
+static lv_obj_t *g_lv_obj_map[MAX_OBJECTS] = { nullptr };
+
+static int store_lv_obj(lv_obj_t *obj) {
+  for(int i = 0; i < MAX_OBJECTS; i++) {
+    if(!g_lv_obj_map[i]) {
+      g_lv_obj_map[i] = obj;
+      return i;
+    }
+  }
+  return -1; // no slot
+}
+static lv_obj_t* get_lv_obj(int handle) {
+  if(handle < 0 || handle >= MAX_OBJECTS) return nullptr;
+  return g_lv_obj_map[handle];
+}
+
+/**
+ * create_image("/messi.png", x, y) => returns handle
+ */
+static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 3) {
+    Serial.println("create_image: expects path, x, y");
+    return js_mknum(-1);
+  }
+  const char *rawPath = js_str(js, args[0]);
+  int x = (int) js_getnum(args[1]);
+  int y = (int) js_getnum(args[2]);
+  if(!rawPath) return js_mknum(-1);
+
+  String path = String(rawPath);
+  if(path.startsWith("\"") && path.endsWith("\"")) {
+    path = path.substring(1, path.length() - 1);
+  }
+  String fullPath = "S:" + path;
+
+  lv_obj_t *img = lv_img_create(lv_scr_act());
+  lv_img_set_src(img, fullPath.c_str());
+  lv_obj_set_pos(img, x, y);
+
+  int handle = store_lv_obj(img);
+  Serial.printf("create_image: '%s' => handle %d\n", fullPath.c_str(), handle);
+  return js_mknum(handle);
+}
+
+/**
+ * rotate_obj(handle, angle)
+ * For lv_img: angle in [0..3600] => 0..360 degrees
+ */
+static jsval_t js_rotate_obj(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 2) {
+    Serial.println("rotate_obj: expects handle, angle");
+    return js_mknull();
+  }
+  int handle = (int)js_getnum(args[0]);
+  int angle  = (int)js_getnum(args[1]);
+
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) {
+    Serial.println("rotate_obj: invalid handle");
+    return js_mknull();
+  }
+  lv_img_set_angle(obj, angle);
+  Serial.printf("rotate_obj: handle=%d angle=%d\n", handle, angle);
+  return js_mknull();
+}
+
+/**
+ * move_obj(handle, x, y)
+ */
+static jsval_t js_move_obj(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 3) {
+    Serial.println("move_obj: expects handle, x, y");
+    return js_mknull();
+  }
+  int handle = (int) js_getnum(args[0]);
+  int x      = (int) js_getnum(args[1]);
+  int y      = (int) js_getnum(args[2]);
+
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) {
+    Serial.println("move_obj: invalid handle");
+    return js_mknull();
+  }
+  lv_obj_set_pos(obj, x, y);
+  Serial.printf("move_obj: handle=%d => pos(%d,%d)\n", handle, x, y);
+  return js_mknull();
+}
+
+// We'll animate X + Y with two separate anims
+static void anim_x_cb(void *var, int32_t v) {
+  lv_obj_t *obj = (lv_obj_t *)var;
+  lv_obj_set_x(obj, v);
+}
+static void anim_y_cb(void *var, int32_t v) {
+  lv_obj_t *obj = (lv_obj_t *)var;
+  lv_obj_set_y(obj, v);
+}
+
+/**
+ * animate_obj(handle, x0, y0, x1, y1, duration)
+ */
+static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 5) {
+    Serial.println("animate_obj: expects handle, x0, y0, x1, y1, [duration]");
+    return js_mknull();
+  }
+  int handle   = (int) js_getnum(args[0]);
+  int x0       = (int) js_getnum(args[1]);
+  int y0       = (int) js_getnum(args[2]);
+  int x1       = (int) js_getnum(args[3]);
+  int y1       = (int) js_getnum(args[4]);
+  int duration = (nargs >= 6) ? (int) js_getnum(args[5]) : 1000;
+
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) {
+    Serial.println("animate_obj: invalid handle");
+    return js_mknull();
+  }
+  // set initial pos
+  lv_obj_set_pos(obj, x0, y0);
+
+  // Animate X
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, obj);
+  lv_anim_set_values(&a, x0, x1);
+  lv_anim_set_time(&a, duration);
+  lv_anim_set_exec_cb(&a, anim_x_cb);
+  lv_anim_start(&a);
+
+  // Animate Y
+  lv_anim_t a2;
+  lv_anim_init(&a2);
+  lv_anim_set_var(&a2, obj);
+  lv_anim_set_values(&a2, y0, y1);
+  lv_anim_set_time(&a2, duration);
+  lv_anim_set_exec_cb(&a2, anim_y_cb);
+  lv_anim_start(&a2);
+
+  Serial.printf("animate_obj: handle=%d from(%d,%d) to(%d,%d) dur=%d\n",
+                handle, x0, y0, x1, y1, duration);
   return js_mknull();
 }
 
@@ -576,13 +694,19 @@ void register_js_functions() {
   js_set(js, global, "sd_write_file",js_mkfun(js_sd_write_file));
   js_set(js, global, "sd_list_dir",  js_mkfun(js_sd_list_dir));
 
-  // For GIF
+  // Keep show_gif_from_sd
   js_set(js, global, "show_gif_from_sd", js_mkfun(js_show_gif_from_sd));
 
-  // ***NEW*** shape/drawing + image
+  // draw_label, draw_rect, show_image
   js_set(js, global, "draw_label",  js_mkfun(js_lvgl_draw_label));
   js_set(js, global, "draw_rect",   js_mkfun(js_lvgl_draw_rect));
   js_set(js, global, "show_image",  js_mkfun(js_lvgl_show_image));
+
+  // ***ADDED***
+  js_set(js, global, "create_image",  js_mkfun(js_create_image));
+  js_set(js, global, "rotate_obj",    js_mkfun(js_rotate_obj));
+  js_set(js, global, "move_obj",      js_mkfun(js_move_obj));
+  js_set(js, global, "animate_obj",   js_mkfun(js_animate_obj));
 }
 
 // ---------------------------------------------------------------------------------

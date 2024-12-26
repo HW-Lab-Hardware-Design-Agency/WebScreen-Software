@@ -9,7 +9,7 @@
 
 // 2) LVGL + display driver
 #include <lvgl.h>
-#include "rm67162.h"
+#include "rm67162.h"  // Your custom display driver
 
 // 4) Memory storage
 struct RamImage {
@@ -42,9 +42,14 @@ static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf = NULL;
 
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+  // Calculate width/height from the area
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
+
+  // Push the rendered data to the display
   lcd_PushColors(area->x1, area->y1, w, h, (uint16_t *)&color_p->full);
+
+  // Tell LVGL flush is done
   lv_disp_flush_ready(disp);
 }
 
@@ -106,13 +111,14 @@ typedef struct {
 } lv_arduino_fs_file_t;
 
 static void *my_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode) {
-  String fullPath = String("/") + path;
+  String fullPath = String("/") + path; 
   const char *modeStr = (mode == LV_FS_MODE_WR) ? FILE_WRITE : FILE_READ;
   File f = SD_MMC.open(fullPath, modeStr);
   if (!f) {
     Serial.printf("my_open_cb: failed to open %s\n", fullPath.c_str());
     return NULL;
   }
+
   lv_arduino_fs_file_t *fp = new lv_arduino_fs_file_t();
   fp->file = f;
   return fp;
@@ -147,6 +153,7 @@ static lv_fs_res_t my_seek_cb(lv_fs_drv_t *drv, void *file_p, uint32_t pos, lv_f
   SeekMode m = SeekSet;
   if (whence == LV_FS_SEEK_CUR) m = SeekCur;
   if (whence == LV_FS_SEEK_END) m = SeekEnd;
+
   fp->file.seek(pos, m);
   return LV_FS_RES_OK;
 }
@@ -166,7 +173,7 @@ void init_lv_fs() {
   fs_drv.open_cb  = my_open_cb;
   fs_drv.close_cb = my_close_cb;
   fs_drv.read_cb  = my_read_cb;
-  fs_drv.write_cb = my_write_cb;
+  fs_drv.write_cb = my_write_cb;  
   fs_drv.seek_cb  = my_seek_cb;
   fs_drv.tell_cb  = my_tell_cb;
 
@@ -549,6 +556,9 @@ static lv_obj_t* get_lv_obj(int handle) {
   return g_lv_obj_map[handle];
 }
 
+// Forward declaration, needed for create_image_from_ram()
+bool load_image_file_into_ram(const char *path, RamImage *outImg);
+
 // create_image("/messi.png", x,y) => returns handle
 static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
   if(nargs<3) {
@@ -575,6 +585,7 @@ static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
   return js_mknum(handle);
 }
 
+// create_image_from_ram("/somefile.bin", x, y)
 static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     Serial.println("create_image_from_ram: expects path, x, y");
@@ -598,17 +609,14 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
   }
   RamImage *ri = &g_ram_images[slot];
 
-  // 3) Strip any quotes, build full SD path "S:/filename" if needed
+  // 3) Strip quotes
   String path = String(rawPath);
   if (path.startsWith("\"") && path.endsWith("\"")) {
     path = path.substring(1, path.length() - 1);
   }
-  // We'll just do "/filename" for SD_MMC.open(...)
-  // or if you prefer "S:/filename" you can remove the slash
-  String filePath = path;  
 
   // 4) Actually load the file into the RamImage
-  if (!load_image_file_into_ram(filePath.c_str(), ri)) {
+  if (!load_image_file_into_ram(path.c_str(), ri)) {
     Serial.println("Could not load image into RAM");
     return js_mknum(-1);
   }
@@ -624,7 +632,7 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
   // 8) Store it in our handle-based system
   int handle = store_lv_obj(img);
   Serial.printf("create_image_from_ram: '%s' => ram slot=%d => handle %d\n",
-                filePath.c_str(), slot, handle);
+                path.c_str(), slot, handle);
   return js_mknum(handle);
 }
 
@@ -940,7 +948,7 @@ static jsval_t js_style_set_transform_angle(struct js *js, jsval_t *args, int na
   return js_mknull();
 }
 
-// Text 
+// Text
 static jsval_t js_style_set_text_color(struct js *js, jsval_t *args, int nargs) {
   if(nargs<2) return js_mknull();
   int styleH   = (int)js_getnum(args[0]);
@@ -1160,6 +1168,116 @@ static jsval_t js_obj_align(struct js *js, jsval_t *args, int nargs) {
 }
 
 /******************************************************************************
+ * ***ADDED FOR NEW EXAMPLES***
+ * For scrolling, flex, flags, etc.
+ ******************************************************************************/
+static jsval_t js_obj_set_scroll_snap_x(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mknull();
+  int handle     = (int)js_getnum(args[0]);
+  int snap_mode  = (int)js_getnum(args[1]); // numeric for LV_SCROLL_SNAP_x
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_scroll_snap_x(obj, (lv_scroll_snap_t)snap_mode);
+  return js_mknull();
+}
+
+static jsval_t js_obj_set_scroll_snap_y(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mknull();
+  int handle     = (int)js_getnum(args[0]);
+  int snap_mode  = (int)js_getnum(args[1]);
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_scroll_snap_y(obj, (lv_scroll_snap_t)snap_mode);
+  return js_mknull();
+}
+
+static jsval_t js_obj_add_flag(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mknull();
+  int handle = (int)js_getnum(args[0]);
+  int flag   = (int)js_getnum(args[1]);
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_add_flag(obj, (lv_obj_flag_t)flag);
+  return js_mknull();
+}
+
+static jsval_t js_obj_clear_flag(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mknull();
+  int handle = (int)js_getnum(args[0]);
+  int flag   = (int)js_getnum(args[1]);
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_clear_flag(obj, (lv_obj_flag_t)flag);
+  return js_mknull();
+}
+
+static jsval_t js_obj_set_scroll_dir(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mknull();
+  int handle = (int)js_getnum(args[0]);
+  int dir    = (int)js_getnum(args[1]); // e.g. LV_DIR_VER or ...
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_scroll_dir(obj, (lv_dir_t)dir);
+  return js_mknull();
+}
+
+static jsval_t js_obj_set_scrollbar_mode(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mknull();
+  int handle = (int)js_getnum(args[0]);
+  int mode   = (int)js_getnum(args[1]); // e.g. LV_SCROLLBAR_MODE_OFF
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_scrollbar_mode(obj, (lv_scrollbar_mode_t)mode);
+  return js_mknull();
+}
+
+static jsval_t js_obj_set_flex_flow(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mknull();
+  int handle   = (int)js_getnum(args[0]);
+  int flowEnum = (int)js_getnum(args[1]); // e.g. LV_FLEX_FLOW_ROW_WRAP
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_flex_flow(obj, (lv_flex_flow_t)flowEnum);
+  return js_mknull();
+}
+
+static jsval_t js_obj_set_flex_align(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<4) return js_mknull();
+  int handle     = (int)js_getnum(args[0]);
+  int main_place = (int)js_getnum(args[1]);
+  int cross_place= (int)js_getnum(args[2]);
+  int track_place= (int)js_getnum(args[3]);
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_flex_align(obj, (lv_flex_align_t)main_place,
+                             (lv_flex_align_t)cross_place,
+                             (lv_flex_align_t)track_place);
+  return js_mknull();
+}
+
+static jsval_t js_obj_set_style_clip_corner(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<3) return js_mknull();
+  int handle  = (int)js_getnum(args[0]);
+  bool en     = (bool)js_getnum(args[1]);
+  int part    = (int)js_getnum(args[2]);
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_style_clip_corner(obj, en, part);
+  return js_mknull();
+}
+
+static jsval_t js_obj_set_style_base_dir(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<3) return js_mknull();
+  int handle   = (int)js_getnum(args[0]);
+  int base_dir = (int)js_getnum(args[1]); // e.g. LV_BASE_DIR_RTL
+  int part     = (int)js_getnum(args[2]);
+  lv_obj_t *obj = get_lv_obj(handle);
+  if(!obj) return js_mknull();
+  lv_obj_set_style_base_dir(obj, (lv_base_dir_t)base_dir, part);
+  return js_mknull();
+}
+
+/******************************************************************************
  * I) Register All JS Functions
  ******************************************************************************/
 void register_js_functions() {
@@ -1184,11 +1302,11 @@ void register_js_functions() {
   js_set(js, global, "show_image",   js_mkfun(js_lvgl_show_image));
 
   // Handle-based image creation + transforms
-  js_set(js, global, "create_image", js_mkfun(js_create_image));
+  js_set(js, global, "create_image",          js_mkfun(js_create_image));
   js_set(js, global, "create_image_from_ram", js_mkfun(js_create_image_from_ram));
-  js_set(js, global, "rotate_obj",   js_mkfun(js_rotate_obj));
-  js_set(js, global, "move_obj",     js_mkfun(js_move_obj));
-  js_set(js, global, "animate_obj",  js_mkfun(js_animate_obj));
+  js_set(js, global, "rotate_obj",            js_mkfun(js_rotate_obj));
+  js_set(js, global, "move_obj",              js_mkfun(js_move_obj));
+  js_set(js, global, "animate_obj",           js_mkfun(js_animate_obj));
 
   // ***NEW*** style creation + property setters
   js_set(js, global, "create_style",              js_mkfun(js_create_style));
@@ -1231,34 +1349,25 @@ void register_js_functions() {
   js_set(js, global, "style_set_y",               js_mkfun(js_style_set_y));
 
   // ***NEW*** object property setters
-  js_set(js, global, "obj_set_size",  js_mkfun(js_obj_set_size));
-  js_set(js, global, "obj_align",     js_mkfun(js_obj_align));
+  js_set(js, global, "obj_set_size",        js_mkfun(js_obj_set_size));
+  js_set(js, global, "obj_align",           js_mkfun(js_obj_align));
+
+  // ***NEW*** scroll, flex, flags
+  js_set(js, global, "obj_set_scroll_snap_x",   js_mkfun(js_obj_set_scroll_snap_x));
+  js_set(js, global, "obj_set_scroll_snap_y",   js_mkfun(js_obj_set_scroll_snap_y));
+  js_set(js, global, "obj_add_flag",            js_mkfun(js_obj_add_flag));
+  js_set(js, global, "obj_clear_flag",          js_mkfun(js_obj_clear_flag));
+  js_set(js, global, "obj_set_scroll_dir",      js_mkfun(js_obj_set_scroll_dir));
+  js_set(js, global, "obj_set_scrollbar_mode",  js_mkfun(js_obj_set_scrollbar_mode));
+  js_set(js, global, "obj_set_flex_flow",       js_mkfun(js_obj_set_flex_flow));
+  js_set(js, global, "obj_set_flex_align",      js_mkfun(js_obj_set_flex_align));
+  js_set(js, global, "obj_set_style_clip_corner", js_mkfun(js_obj_set_style_clip_corner));
+  js_set(js, global, "obj_set_style_base_dir",  js_mkfun(js_obj_set_style_base_dir));
 }
 
 /******************************************************************************
  * J) Load + Execute JS from SD
  ******************************************************************************/
-bool load_and_execute_js_script(const char* path) {
-  Serial.printf("Loading JavaScript script from: %s\n", path);
-
-  File file = SD_MMC.open(path);
-  if(!file) {
-    Serial.println("Failed to open JavaScript script file");
-    return false;
-  }
-  String jsScript = file.readString();
-  file.close();
-
-  jsval_t res = js_eval(js, jsScript.c_str(), jsScript.length());
-  if(js_type(res) == JS_ERR) {
-    const char *error = js_str(js, res);
-    Serial.printf("Error executing script: %s\n", error);
-    return false;
-  }
-  Serial.println("JavaScript script executed successfully");
-  return true;
-}
-
 bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   // 1) Open file
   File f = SD_MMC.open(path, FILE_READ);
@@ -1293,25 +1402,44 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   outImg->size   = fileSize;
 
   // 5) Fill out the lv_img_dsc_t with minimal info
-  //    - If it's a "raw" (non-LVGL-native) image, you might need an external decoder
-  //    - For simplicity, let's assume it's a prepared "True color" or "RAW" format:
+  //    - If it's a "raw" or "true color" format, you can do:
   lv_img_dsc_t *d = &outImg->dsc;
   memset(d, 0, sizeof(*d));
 
   // Basic mandatory fields:
   d->data_size       = fileSize;
   d->data            = buf;
-  // If the file is EXACTLY LVGL's "true color" or "raw" format, you can do:
   d->header.always_zero = 0;
   d->header.w       = 200;
   d->header.h       = 200;
   d->header.cf      = LV_IMG_CF_TRUE_COLOR; 
   // or LV_IMG_CF_RAW if using a custom decoder
 
-  // If you can't know width/height from file alone, you may default them or parse
+  // If you can't know width/height from file alone, you may just guess or parse
   // For a PNG/JPG you'd typically use an external decoder to fill w,h
 
   Serial.println("Image loaded into PSRAM successfully");
+  return true;
+}
+
+bool load_and_execute_js_script(const char* path) {
+  Serial.printf("Loading JavaScript script from: %s\n", path);
+
+  File file = SD_MMC.open(path);
+  if(!file) {
+    Serial.println("Failed to open JavaScript script file");
+    return false;
+  }
+  String jsScript = file.readString();
+  file.close();
+
+  jsval_t res = js_eval(js, jsScript.c_str(), jsScript.length());
+  if(js_type(res) == JS_ERR) {
+    const char *error = js_str(js, res);
+    Serial.printf("Error executing script: %s\n", error);
+    return false;
+  }
+  Serial.println("JavaScript script executed successfully");
   return true;
 }
 
@@ -1352,7 +1480,7 @@ void setup() {
   }
   register_js_functions();
 
-  // 6) Load + execute "/script.js" from SD
+  // 6) Load & execute "/script.js" from SD
   if(!load_and_execute_js_script("/script.js")) {
     Serial.println("Failed to load and execute JavaScript script");
   }

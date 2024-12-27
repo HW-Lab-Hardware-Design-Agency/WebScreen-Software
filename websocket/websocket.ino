@@ -32,7 +32,7 @@ extern "C" {
 /******************************************************************************
  * A) Elk Memory + Global Instances
  ******************************************************************************/
-static uint8_t elk_memory[4096];    // Increase if needed
+static uint8_t elk_memory[16 * 1024]; // 16 KB
 struct js *js = NULL;               // Global Elk instance
 
 /******************************************************************************
@@ -1277,6 +1277,1489 @@ static jsval_t js_obj_set_style_base_dir(struct js *js, jsval_t *args, int nargs
   return js_mknull();
 }
 
+/*******************************************************
+ * CHART BRIDGING
+ *******************************************************/
+
+static jsval_t js_lv_chart_create(struct js *js, jsval_t *args, int nargs) {
+    // Creates a chart object on the current screen
+    lv_obj_t *chart = lv_chart_create(lv_scr_act());
+    // Optionally set default size or alignment
+    lv_obj_set_size(chart, 200, 150);
+    lv_obj_center(chart);
+
+    // Store in your handle-based system
+    int handle = store_lv_obj(chart);
+    Serial.printf("lv_chart_create => handle %d\n", handle);
+
+    // Return handle to JS
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_chart_set_type(struct js *js, jsval_t *args, int nargs) {
+    // (handle, lv_chart_type int)
+    if(nargs < 2) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    int t = (int)js_getnum(args[1]); // e.g. LV_CHART_TYPE_LINE, LV_CHART_TYPE_BAR, etc.
+
+    lv_obj_t *obj = get_lv_obj(h);
+    if(!obj) return js_mknull();
+
+    lv_chart_set_type(obj, (lv_chart_type_t)t);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_div_line_count(struct js *js, jsval_t *args, int nargs) {
+    // (handle, y_div, x_div)
+    if(nargs < 3) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    int y_div = (int)js_getnum(args[1]);
+    int x_div = (int)js_getnum(args[2]);
+
+    lv_obj_t *obj = get_lv_obj(h);
+    if(!obj) return js_mknull();
+
+    lv_chart_set_div_line_count(obj, y_div, x_div);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_update_mode(struct js *js, jsval_t *args, int nargs) {
+    // (handle, mode)
+    // e.g. mode = LV_CHART_UPDATE_MODE_SHIFT, LV_CHART_UPDATE_MODE_CIRCULAR
+    if(nargs < 2) return js_mknull();
+    int h    = (int)js_getnum(args[0]);
+    int mode = (int)js_getnum(args[1]);
+
+    lv_obj_t *obj = get_lv_obj(h);
+    if(!obj) return js_mknull();
+
+    lv_chart_set_update_mode(obj, (lv_chart_update_mode_t)mode);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_range(struct js *js, jsval_t *args, int nargs) {
+    // (handle, axis, min, max)
+    // e.g. axis=LV_CHART_AXIS_PRIMARY_Y, min=0, max=100
+    if(nargs < 4) return js_mknull();
+    int h    = (int)js_getnum(args[0]);
+    int axis = (int)js_getnum(args[1]);
+    int mn   = (int)js_getnum(args[2]);
+    int mx   = (int)js_getnum(args[3]);
+
+    lv_obj_t *obj = get_lv_obj(h);
+    if(!obj) return js_mknull();
+
+    lv_chart_set_range(obj, (lv_chart_axis_t)axis, mn, mx);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_point_count(struct js *js, jsval_t *args, int nargs) {
+    // (handle, count)
+    if(nargs < 2) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    int c = (int)js_getnum(args[1]);
+
+    lv_obj_t *obj = get_lv_obj(h);
+    if(!obj) return js_mknull();
+
+    lv_chart_set_point_count(obj, c);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_refresh(struct js *js, jsval_t *args, int nargs) {
+    // (handle)
+    if(nargs < 1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+
+    lv_obj_t *obj = get_lv_obj(h);
+    if(!obj) return js_mknull();
+
+    lv_chart_refresh(obj);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_add_series(struct js *js, jsval_t *args, int nargs) {
+    // (handle, color, axis)
+    if(nargs < 3) return js_mknull();
+    int h     = (int)js_getnum(args[0]);
+    double col= js_getnum(args[1]);
+    int axis  = (int)js_getnum(args[2]);
+
+    lv_obj_t *obj = get_lv_obj(h);
+    if(!obj) return js_mknull();
+
+    lv_chart_series_t *ser = lv_chart_add_series(obj, lv_color_hex((uint32_t)col), (lv_chart_axis_t)axis);
+    // Return the pointer as a number (NOT safe on 64-bit, but workable for small usage)
+    // Alternatively, you can store it in a separate map if you want handle-based approach for series.
+    intptr_t p = (intptr_t)(ser);
+    return js_mknum((double)p);
+}
+
+static jsval_t js_lv_chart_set_next_value(struct js *js, jsval_t *args, int nargs) {
+    // (chartHandle, seriesPtr, value)
+    if(nargs < 3) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    intptr_t sp = (intptr_t)js_getnum(args[1]);
+    int val = (int)js_getnum(args[2]);
+
+    lv_obj_t *chart = get_lv_obj(h);
+    if(!chart) return js_mknull();
+
+    lv_chart_series_t *ser = (lv_chart_series_t *)sp;
+    lv_chart_set_next_value(chart, ser, val);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_next_value2(struct js *js, jsval_t *args, int nargs) {
+    // (chartHandle, seriesPtr, xVal, yVal)
+    if(nargs < 4) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    intptr_t sp = (intptr_t)js_getnum(args[1]);
+    int xval = (int)js_getnum(args[2]);
+    int yval = (int)js_getnum(args[3]);
+
+    lv_obj_t *chart = get_lv_obj(h);
+    if(!chart) return js_mknull();
+
+    lv_chart_series_t *ser = (lv_chart_series_t *)sp;
+    lv_chart_set_next_value2(chart, ser, xval, yval);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_axis_tick(struct js *js, jsval_t *args, int nargs) {
+    // (chartH, axis, majorLen, minorLen, majorCnt, minorCnt, label_en, draw_size)
+    if(nargs < 8) return js_mknull();
+    int h       = (int)js_getnum(args[0]);
+    int axis    = (int)js_getnum(args[1]);
+    int majorLen= (int)js_getnum(args[2]);
+    int minorLen= (int)js_getnum(args[3]);
+    int majorCnt= (int)js_getnum(args[4]);
+    int minorCnt= (int)js_getnum(args[5]);
+    bool label  = (bool)js_getnum(args[6]);
+    int drawSiz = (int)js_getnum(args[7]);
+
+    lv_obj_t *chart = get_lv_obj(h);
+    if(!chart) return js_mknull();
+
+    lv_chart_set_axis_tick(chart, (lv_chart_axis_t)axis, majorLen, minorLen,
+                           majorCnt, minorCnt, label, drawSiz);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_zoom_x(struct js *js, jsval_t *args, int nargs) {
+    // (chartH, zoom)
+    if(nargs < 2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int zm  = (int)js_getnum(args[1]);
+    lv_obj_t *chart = get_lv_obj(h);
+    if(!chart) return js_mknull();
+
+    lv_chart_set_zoom_x(chart, zm);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_zoom_y(struct js *js, jsval_t *args, int nargs) {
+    // (chartH, zoom)
+    if(nargs < 2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int zm  = (int)js_getnum(args[1]);
+    lv_obj_t *chart = get_lv_obj(h);
+    if(!chart) return js_mknull();
+
+    lv_chart_set_zoom_y(chart, zm);
+    return js_mknull();
+}
+
+static jsval_t js_lv_chart_get_y_array(struct js *js, jsval_t *args, int nargs) {
+    // (chartH, seriesPtr) -> returns a pointer number to the array
+    if(nargs < 2) return js_mknull();
+    int h      = (int)js_getnum(args[0]);
+    intptr_t sp= (intptr_t)js_getnum(args[1]);
+
+    lv_obj_t *chart = get_lv_obj(h);
+    if(!chart) return js_mknull();
+
+    lv_chart_series_t *ser = (lv_chart_series_t *)sp;
+    lv_coord_t *arr = lv_chart_get_y_array(chart, ser);
+    // Return pointer as numeric
+    intptr_t ret = (intptr_t)arr;
+    return js_mknum((double)ret);
+}
+
+// Similarly you can add bridging for lv_chart_set_ext_y_array, lv_chart_set_ext_x_array,
+// lv_chart_get_x_array, lv_chart_get_pressed_point, lv_chart_set_cursor_point, etc.
+// if your examples require them.
+
+
+/*******************************************************
+ * CHECKBOX BRIDGING
+ *******************************************************/
+
+static jsval_t js_lv_checkbox_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t *cb = lv_checkbox_create(lv_scr_act());
+    // Return handle
+    int handle = store_lv_obj(cb);
+    Serial.printf("lv_checkbox_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_checkbox_set_text(struct js *js, jsval_t *args, int nargs) {
+    // (checkboxHandle, text)
+    if(nargs < 2) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    const char* txt = js_str(js, args[1]);
+    if(!txt) return js_mknull();
+
+    lv_obj_t *cb = get_lv_obj(h);
+    if(!cb) return js_mknull();
+
+    lv_checkbox_set_text(cb, txt);
+    return js_mknull();
+}
+
+
+/*******************************************************
+ * MENU BRIDGING
+ *******************************************************/
+
+static jsval_t js_lv_menu_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t *menu = lv_menu_create(lv_scr_act());
+    // Return handle
+    int handle = store_lv_obj(menu);
+    Serial.printf("lv_menu_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_menu_page_create(struct js *js, jsval_t *args, int nargs) {
+    // (menuHandle)
+    if(nargs < 1) return js_mknull();
+    int mh = (int)js_getnum(args[0]);
+
+    lv_obj_t *menu = get_lv_obj(mh);
+    if(!menu) return js_mknull();
+
+    lv_obj_t *page = lv_menu_page_create(menu, NULL);
+    int handle = store_lv_obj(page);
+    Serial.printf("lv_menu_page_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_menu_set_page(struct js *js, jsval_t *args, int nargs) {
+    // (menuH, pageH)
+    if(nargs < 2) return js_mknull();
+    int mh = (int)js_getnum(args[0]);
+    int ph = (int)js_getnum(args[1]);
+
+    lv_obj_t *menu = get_lv_obj(mh);
+    lv_obj_t *page = get_lv_obj(ph);
+    if(!menu || !page) return js_mknull();
+
+    lv_menu_set_page(menu, page);
+    return js_mknull();
+}
+
+static jsval_t js_lv_menu_cont_create(struct js *js, jsval_t *args, int nargs) {
+    // (pageH)
+    if(nargs < 1) return js_mknull();
+    int ph = (int)js_getnum(args[0]);
+    lv_obj_t *page = get_lv_obj(ph);
+    if(!page) return js_mknull();
+
+    lv_obj_t *cont = lv_menu_cont_create(page);
+    int handle = store_lv_obj(cont);
+    Serial.printf("lv_menu_cont_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_menu_set_load_page_event(struct js *js, jsval_t *args, int nargs) {
+    // (menuH, containerH, pageH)
+    if(nargs < 3) return js_mknull();
+    int mh = (int)js_getnum(args[0]);
+    int ch = (int)js_getnum(args[1]);
+    int ph = (int)js_getnum(args[2]);
+
+    lv_obj_t *menu = get_lv_obj(mh);
+    lv_obj_t *cont = get_lv_obj(ch);
+    lv_obj_t *page = get_lv_obj(ph);
+    if(!menu || !cont || !page) return js_mknull();
+
+    // Ties an event to load "page" when user clicks "cont" item
+    lv_menu_set_load_page_event(menu, cont, page);
+    return js_mknull();
+}
+
+static jsval_t js_lv_menu_set_mode_root_back_btn(struct js *js, jsval_t *args, int nargs) {
+    // (menuHandle, modeEnabled)
+    if(nargs < 2) return js_mknull();
+    int h       = (int)js_getnum(args[0]);
+    bool enable = (bool)js_getnum(args[1]);
+
+    lv_obj_t *menu = get_lv_obj(h);
+    if(!menu) return js_mknull();
+
+    lv_menu_set_mode_root_back_btn(menu, enable ? LV_MENU_ROOT_BACK_BTN_ENABLED
+                                                : LV_MENU_ROOT_BACK_BTN_DISABLED);
+    return js_mknull();
+}
+
+static jsval_t js_lv_menu_back_btn_is_root(struct js *js, jsval_t *args, int nargs) {
+    // (menuHandle, btnHandle) -> returns bool
+    if(nargs < 2) return js_mkfalse();
+    int mh = (int)js_getnum(args[0]);
+    int bh = (int)js_getnum(args[1]);
+
+    lv_obj_t *menu = get_lv_obj(mh);
+    lv_obj_t *btn  = get_lv_obj(bh);
+    if(!menu || !btn) return js_mkfalse();
+
+    bool isRoot = lv_menu_back_btn_is_root(menu, btn);
+    return isRoot ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t js_lv_menu_separator_create(struct js *js, jsval_t *args, int nargs) {
+    // (pageHandle) -> returns handle
+    if(nargs < 1) return js_mknum(-1);
+    int ph = (int)js_getnum(args[0]);
+
+    lv_obj_t *page = get_lv_obj(ph);
+    if(!page) return js_mknum(-1);
+
+    lv_obj_t *sep = lv_menu_separator_create(page);
+    int handle = store_lv_obj(sep);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_menu_section_create(struct js *js, jsval_t *args, int nargs) {
+    // (pageHandle) -> returns handle
+    if(nargs < 1) return js_mknum(-1);
+    int ph = (int)js_getnum(args[0]);
+
+    lv_obj_t *page = get_lv_obj(ph);
+    if(!page) return js_mknum(-1);
+
+    lv_obj_t *sec = lv_menu_section_create(page);
+    int handle = store_lv_obj(sec);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_menu_set_sidebar_page(struct js *js, jsval_t *args, int nargs) {
+    // (menuHandle, pageHandleOrNull)
+    if(nargs<2) return js_mknull();
+    int mh = (int)js_getnum(args[0]);
+    int ph = (int)js_getnum(args[1]); // might be -1 if we pass null from JS
+
+    lv_obj_t *menu = get_lv_obj(mh);
+    if(!menu) return js_mknull();
+
+    lv_obj_t *page = get_lv_obj(ph); // if ph == -1 => null
+    lv_menu_set_sidebar_page(menu, page);
+    return js_mknull();
+}
+
+static jsval_t js_lv_menu_clear_history(struct js *js, jsval_t *args, int nargs) {
+    // (menuHandle)
+    if(nargs<1) return js_mknull();
+    int mh = (int)js_getnum(args[0]);
+
+    lv_obj_t *menu = get_lv_obj(mh);
+    if(!menu) return js_mknull();
+
+    lv_menu_clear_history(menu);
+    return js_mknull();
+}
+
+/********************************************************************************
+ * METER
+ ********************************************************************************/
+// Example calls: 
+//   lv_meter_create, lv_meter_add_scale, lv_meter_set_scale_ticks, 
+//   lv_meter_set_scale_major_ticks, lv_meter_set_scale_range
+//   lv_meter_add_arc, lv_meter_add_scale_lines, lv_meter_add_needle_line,
+//   lv_meter_add_needle_img
+//   lv_meter_set_indicator_start_value, lv_meter_set_indicator_end_value, lv_meter_set_indicator_value
+
+static jsval_t js_lv_meter_create(struct js *js, jsval_t *args, int nargs) {
+    // no params
+    lv_obj_t *m = lv_meter_create(lv_scr_act());
+    int handle = store_lv_obj(m);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs) {
+    // (meterHandle) -> scale pointer as number
+    if(nargs<1) return js_mknull();
+    int mh = (int)js_getnum(args[0]);
+    lv_obj_t *mt = get_lv_obj(mh);
+    if(!mt) return js_mknull();
+
+    lv_meter_scale_t *sc = lv_meter_add_scale(mt);
+    // Return pointer as numeric
+    intptr_t p = (intptr_t)sc;
+    return js_mknum((double)p);
+}
+
+static jsval_t js_lv_meter_set_scale_ticks(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, scalePtr, cnt, width, length, color)
+    if(nargs<6) return js_mknull();
+    int mH     = (int)js_getnum(args[0]);
+    intptr_t scP = (intptr_t)js_getnum(args[1]);
+    int cnt    = (int)js_getnum(args[2]);
+    int width  = (int)js_getnum(args[3]);
+    int length = (int)js_getnum(args[4]);
+    double col = js_getnum(args[5]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_scale_t *sc = (lv_meter_scale_t*) scP;
+    lv_meter_set_scale_ticks(mt, sc, cnt, width, length, lv_color_hex((uint32_t)col));
+    return js_mknull();
+}
+
+static jsval_t js_lv_meter_set_scale_major_ticks(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, scalePtr, freq, width, length, color, label_gap)
+    if(nargs<7) return js_mknull();
+    int mH     = (int)js_getnum(args[0]);
+    intptr_t scP = (intptr_t)js_getnum(args[1]);
+    int freq   = (int)js_getnum(args[2]);
+    int width  = (int)js_getnum(args[3]);
+    int length = (int)js_getnum(args[4]);
+    double col = js_getnum(args[5]);
+    int label_gap = (int)js_getnum(args[6]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+
+    lv_meter_scale_t *sc = (lv_meter_scale_t*) scP;
+    lv_meter_set_scale_major_ticks(mt, sc, freq, width, length, lv_color_hex((uint32_t)col), label_gap);
+    return js_mknull();
+}
+
+static jsval_t js_lv_meter_set_scale_range(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, scalePtr, min, max, angle_range, rotation)
+    if(nargs<6) return js_mknull();
+    int mH   = (int)js_getnum(args[0]);
+    intptr_t scP= (intptr_t)js_getnum(args[1]);
+    int minV = (int)js_getnum(args[2]);
+    int maxV = (int)js_getnum(args[3]);
+    int angleRange = (int)js_getnum(args[4]);
+    int rotation   = (int)js_getnum(args[5]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_scale_t *sc = (lv_meter_scale_t*) scP;
+    lv_meter_set_scale_range(mt, sc, minV, maxV, angleRange, rotation);
+    return js_mknull();
+}
+
+// meter indicator creation
+static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, scalePtr, width, color, rMod)
+    // returns indicator pointer
+    if(nargs<5) return js_mknull();
+    int mH     = (int)js_getnum(args[0]);
+    intptr_t scP = (intptr_t)js_getnum(args[1]);
+    int width  = (int)js_getnum(args[2]);
+    double col = js_getnum(args[3]);
+    int rMod   = (int)js_getnum(args[4]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+
+    lv_meter_indicator_t *ind = lv_meter_add_arc(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
+    intptr_t ret = (intptr_t)ind;
+    return js_mknum((double)ret);
+}
+
+static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, scalePtr, color_main, color_grad, local, width_mod)
+    // returns indicator pointer
+    if(nargs<6) return js_mknull();
+    int mH         = (int)js_getnum(args[0]);
+    intptr_t scP   = (intptr_t)js_getnum(args[1]);
+    double colorM  = js_getnum(args[2]);
+    double colorG  = js_getnum(args[3]);
+    bool local     = (bool)js_getnum(args[4]);
+    int widthMod   = (int)js_getnum(args[5]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+
+    lv_meter_indicator_t *ind = lv_meter_add_scale_lines(mt, sc,
+        lv_color_hex((uint32_t)colorM),
+        lv_color_hex((uint32_t)colorG),
+        local, widthMod
+    );
+    intptr_t ret = (intptr_t)ind;
+    return js_mknum((double)ret);
+}
+
+static jsval_t js_lv_meter_add_needle_line(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, scalePtr, width, color, rMod)
+    if(nargs<5) return js_mknull();
+    int mH     = (int)js_getnum(args[0]);
+    intptr_t scP= (intptr_t)js_getnum(args[1]);
+    int width  = (int)js_getnum(args[2]);
+    double col = js_getnum(args[3]);
+    int rMod   = (int)js_getnum(args[4]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+
+    lv_meter_indicator_t *ind = lv_meter_add_needle_line(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
+    intptr_t ret = (intptr_t)ind;
+    return js_mknum((double)ret);
+}
+
+static jsval_t js_lv_meter_add_needle_img(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, scalePtr, srcAddr, pivot_x, pivot_y)
+    // returns indicator pointer
+    if(nargs<5) return js_mknull();
+    int mH        = (int)js_getnum(args[0]);
+    intptr_t scP  = (intptr_t)js_getnum(args[1]);
+    // "srcAddr" is an image source pointer or something
+    intptr_t srcPtr= (intptr_t)js_getnum(args[2]);
+    int pivotX    = (int)js_getnum(args[3]);
+    int pivotY    = (int)js_getnum(args[4]);
+
+    // If we have a global or static "LV_IMG_DECLARE(img_hand);" we normally pass &img_hand
+    // from JS. That means we store "img_hand" pointer in a variable. 
+    // For simplicity let's assume srcPtr is the actual pointer to an lv_img_dsc_t.
+
+    const lv_img_dsc_t * src_dsc = (const lv_img_dsc_t *)srcPtr;
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+
+    lv_meter_indicator_t *ind = lv_meter_add_needle_img(mt, sc, src_dsc, pivotX, pivotY);
+    intptr_t ret = (intptr_t)ind;
+    return js_mknum((double)ret);
+}
+
+// meter set indicator
+static jsval_t js_lv_meter_set_indicator_start_value(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, indicatorPtr, startVal)
+    if(nargs<3) return js_mknull();
+    int mH      = (int)js_getnum(args[0]);
+    intptr_t indP= (intptr_t)js_getnum(args[1]);
+    int stVal   = (int)js_getnum(args[2]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_indicator_t *ind = (lv_meter_indicator_t*) indP;
+
+    lv_meter_set_indicator_start_value(mt, ind, stVal);
+    return js_mknull();
+}
+
+static jsval_t js_lv_meter_set_indicator_end_value(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, indicatorPtr, endVal)
+    if(nargs<3) return js_mknull();
+    int mH      = (int)js_getnum(args[0]);
+    intptr_t indP= (intptr_t)js_getnum(args[1]);
+    int endVal  = (int)js_getnum(args[2]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_indicator_t *ind = (lv_meter_indicator_t*) indP;
+
+    lv_meter_set_indicator_end_value(mt, ind, endVal);
+    return js_mknull();
+}
+
+static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int nargs) {
+    // (meterH, indicatorPtr, val)
+    if(nargs<3) return js_mknull();
+    int mH      = (int)js_getnum(args[0]);
+    intptr_t indP= (intptr_t)js_getnum(args[1]);
+    int val     = (int)js_getnum(args[2]);
+
+    lv_obj_t *mt = get_lv_obj(mH);
+    if(!mt) return js_mknull();
+    lv_meter_indicator_t *ind = (lv_meter_indicator_t*) indP;
+
+    lv_meter_set_indicator_value(mt, ind, val);
+    return js_mknull();
+}
+
+/********************************************************************************
+ * SPINBOX
+ ********************************************************************************/
+static jsval_t js_lv_spinbox_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t *sb = lv_spinbox_create(lv_scr_act());
+    int handle = store_lv_obj(sb);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_spinbox_set_range(struct js *js, jsval_t *args, int nargs) {
+    // (spinboxH, min, max)
+    if(nargs<3) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int mn  = (int)js_getnum(args[1]);
+    int mx  = (int)js_getnum(args[2]);
+
+    lv_obj_t *sb = get_lv_obj(h);
+    if(!sb) return js_mknull();
+    lv_spinbox_set_range(sb, mn, mx);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spinbox_set_digit_format(struct js *js, jsval_t *args, int nargs) {
+    // (spinboxH, digit_count, separator_pos)
+    if(nargs<3) return js_mknull();
+    int h        = (int)js_getnum(args[0]);
+    int digCount = (int)js_getnum(args[1]);
+    int sepPos   = (int)js_getnum(args[2]);
+
+    lv_obj_t *sb = get_lv_obj(h);
+    if(!sb) return js_mknull();
+    lv_spinbox_set_digit_format(sb, digCount, sepPos);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spinbox_step_prev(struct js *js, jsval_t *args, int nargs) {
+    // (spinboxH)
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *sb = get_lv_obj(h);
+    if(!sb) return js_mknull();
+    lv_spinbox_step_prev(sb);
+    return js_mknull();
+}
+static jsval_t js_lv_spinbox_step_next(struct js *js, jsval_t *args, int nargs) {
+    // (spinboxH)
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *sb = get_lv_obj(h);
+    if(!sb) return js_mknull();
+    lv_spinbox_step_next(sb);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spinbox_increment(struct js *js, jsval_t *args, int nargs) {
+    // (spinboxH)
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *sb = get_lv_obj(h);
+    if(!sb) return js_mknull();
+    lv_spinbox_increment(sb);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spinbox_decrement(struct js *js, jsval_t *args, int nargs) {
+    // (spinboxH)
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *sb = get_lv_obj(h);
+    if(!sb) return js_mknull();
+    lv_spinbox_decrement(sb);
+    return js_mknull();
+}
+
+/********************************************************************************
+ * MSGBOX
+ ********************************************************************************/
+static jsval_t js_lv_msgbox_create(struct js *js, jsval_t *args, int nargs) {
+    // (parentH or -1), titleStr, txtStr, an array of const char*(?), add_ok? 
+    // This is tricky because we need a char** for the buttons. Let's do a simpler approach:
+    // We might do: (title, text, btn1, btn2, ...) or the user can pass a single string "btn1,btn2"
+    // For simplicity let's just do an overloaded approach: (title, text, "OK\nClose"), or (NULL for last param)
+    // We can't easily parse an array from Elk JS. Let's do a simpler approach: 
+    // (title, text, "OK,Close", is_modal_bool)
+    if(nargs<4) return js_mknull();
+
+    const char* title = js_str(js, args[0]);
+    const char* msg   = js_str(js, args[1]);
+    const char* btns  = js_str(js, args[2]);
+    bool addModal     = (bool)js_getnum(args[3]);
+
+    // parse the "OK,Close" into a static array of char*
+    // E.g. we can do a quick split
+    static const char * defBtns[16];
+    memset(defBtns, 0, sizeof(defBtns));
+
+    char tmp[256];
+    strncpy(tmp, btns ? btns : "", sizeof(tmp)-1);
+    tmp[sizeof(tmp)-1] = '\0';
+
+    int idx=0;
+    char *token = strtok(tmp, ",");
+    while(token && idx< (int)(sizeof(defBtns)/sizeof(defBtns[0]) -1 )) {
+        defBtns[idx++] = token;
+        token = strtok(NULL, ",");
+    }
+    defBtns[idx] = NULL; // terminator
+
+    lv_obj_t * mb = lv_msgbox_create(NULL, title, msg, defBtns[0] ? defBtns : NULL, addModal);
+    int handle = store_lv_obj(mb);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_msgbox_get_active_btn_text(struct js *js, jsval_t *args, int nargs) {
+    // (msgboxH) -> string
+    if(nargs<1) return js_mkstr(js, "", 0);
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *mb = get_lv_obj(h);
+    if(!mb) return js_mkstr(js,"",0);
+
+    const char* t = lv_msgbox_get_active_btn_text(mb);
+    if(!t) t = "";
+    return js_mkstr(js, t, strlen(t));
+}
+
+/********************************************************************************
+ * ROLLER
+ ********************************************************************************/
+static jsval_t js_lv_roller_create(struct js *js, jsval_t *args, int nargs) {
+    // no param
+    lv_obj_t *roll = lv_roller_create(lv_scr_act());
+    int handle = store_lv_obj(roll);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_roller_set_options(struct js *js, jsval_t *args, int nargs) {
+    // (rollerH, "str with \n", modeEnum)
+    if(nargs<3) return js_mknull();
+    int h  = (int)js_getnum(args[0]);
+    const char* opts = js_str(js, args[1]);
+    int mode = (int)js_getnum(args[2]); // e.g. LV_ROLLER_MODE_NORMAL or LV_ROLLER_MODE_INFINITE
+
+    lv_obj_t *roll = get_lv_obj(h);
+    if(!roll) return js_mknull();
+
+    lv_roller_set_options(roll, opts ? opts : "", (lv_roller_mode_t)mode);
+    return js_mknull();
+}
+
+static jsval_t js_lv_roller_set_visible_row_count(struct js *js, jsval_t *args, int nargs) {
+    // (rollerH, rowCount)
+    if(nargs<2) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    int r = (int)js_getnum(args[1]);
+    lv_obj_t *roll = get_lv_obj(h);
+    if(!roll) return js_mknull();
+    lv_roller_set_visible_row_count(roll, r);
+    return js_mknull();
+}
+
+static jsval_t js_lv_roller_get_selected_str(struct js *js, jsval_t *args, int nargs) {
+    // (rollerH) -> string
+    if(nargs<1) return js_mkstr(js,"",0);
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *roll = get_lv_obj(h);
+    if(!roll) return js_mkstr(js,"",0);
+
+    char buf[64];
+    lv_roller_get_selected_str(roll, buf, sizeof(buf));
+    return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t js_lv_roller_set_selected(struct js *js, jsval_t *args, int nargs) {
+    // (rollerH, sel, animOff0or1)
+    if(nargs<3) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    int sel = (int)js_getnum(args[1]);
+    int anim = (int)js_getnum(args[2]);
+
+    lv_obj_t *roll = get_lv_obj(h);
+    if(!roll) return js_mknull();
+
+    lv_roller_set_selected(roll, sel, anim ? LV_ANIM_ON : LV_ANIM_OFF);
+    return js_mknull();
+}
+
+/********************************************************************************
+ * SLIDER: Possibly we already have basic bridging? 
+ * Additional calls: 
+ *   lv_slider_set_mode, lv_slider_set_value, lv_slider_set_left_value, lv_slider_get_value, lv_slider_get_left_value
+ ********************************************************************************/
+
+static jsval_t js_lv_slider_create(struct js *js, jsval_t *args, int nargs) {
+    // no params
+    lv_obj_t *sld = lv_slider_create(lv_scr_act());
+    int handle = store_lv_obj(sld);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_slider_set_mode(struct js *js, jsval_t *args, int nargs) {
+    // (sliderH, modeEnum) -> e.g. LV_SLIDER_MODE_NORMAL, LV_SLIDER_MODE_RANGE
+    if(nargs<2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int md  = (int)js_getnum(args[1]);
+
+    lv_obj_t *sld = get_lv_obj(h);
+    if(!sld) return js_mknull();
+    lv_slider_set_mode(sld, (lv_slider_mode_t)md);
+    return js_mknull();
+}
+
+static jsval_t js_lv_slider_set_value(struct js *js, jsval_t *args, int nargs) {
+    // (sliderH, val, animOff0or1)
+    if(nargs<3) return js_mknull();
+    int h      = (int)js_getnum(args[0]);
+    int val    = (int)js_getnum(args[1]);
+    bool anim  = (bool)js_getnum(args[2]);
+
+    lv_obj_t *sld = get_lv_obj(h);
+    if(!sld) return js_mknull();
+    lv_slider_set_value(sld, val, anim ? LV_ANIM_ON : LV_ANIM_OFF);
+    return js_mknull();
+}
+
+static jsval_t js_lv_slider_set_left_value(struct js *js, jsval_t *args, int nargs) {
+    // (sliderH, val, animOff0or1)
+    if(nargs<3) return js_mknull();
+    int h      = (int)js_getnum(args[0]);
+    int val    = (int)js_getnum(args[1]);
+    bool anim  = (bool)js_getnum(args[2]);
+
+    lv_obj_t *sld = get_lv_obj(h);
+    if(!sld) return js_mknull();
+    lv_slider_set_left_value(sld, val, anim ? LV_ANIM_ON : LV_ANIM_OFF);
+    return js_mknull();
+}
+
+static jsval_t js_lv_slider_get_value(struct js *js, jsval_t *args, int nargs) {
+    // (sliderH) -> int
+    if(nargs<1) return js_mknum(0);
+    int h = (int)js_getnum(args[0]);
+
+    lv_obj_t *sld = get_lv_obj(h);
+    if(!sld) return js_mknum(0);
+
+    int v = lv_slider_get_value(sld);
+    return js_mknum((double)v);
+}
+
+static jsval_t js_lv_slider_get_left_value(struct js *js, jsval_t *args, int nargs) {
+    // (sliderH) -> int
+    if(nargs<1) return js_mknum(0);
+    int h = (int)js_getnum(args[0]);
+
+    lv_obj_t *sld = get_lv_obj(h);
+    if(!sld) return js_mknum(0);
+
+    int v = lv_slider_get_left_value(sld);
+    return js_mknum((double)v);
+}
+
+
+/********************************************************************************
+ * SPAN
+ ********************************************************************************/
+static jsval_t js_lv_spangroup_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t * spg = lv_spangroup_create(lv_scr_act());
+    int handle = store_lv_obj(spg);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_spangroup_set_align(struct js *js, jsval_t *args, int nargs) {
+    // (spangroupH, alignEnum=LV_TEXT_ALIGN_LEFT/CENTER/RIGHT/AUTO)
+    if(nargs<2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int alg = (int)js_getnum(args[1]);
+    lv_obj_t *spg = get_lv_obj(h);
+    if(!spg) return js_mknull();
+
+    lv_spangroup_set_align(spg, (lv_text_align_t)alg);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spangroup_set_overflow(struct js *js, jsval_t *args, int nargs) {
+    // (spangroupH, overflowEnum=LV_SPAN_OVERFLOW_CLIP/ELLIPSIS)
+    if(nargs<2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int ovf = (int)js_getnum(args[1]);
+    lv_obj_t *spg = get_lv_obj(h);
+    if(!spg) return js_mknull();
+
+    lv_spangroup_set_overflow(spg, (lv_span_overflow_t)ovf);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spangroup_set_indent(struct js *js, jsval_t *args, int nargs) {
+    // (spangroupH, indentPX)
+    if(nargs<2) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    int indent = (int)js_getnum(args[1]);
+    lv_obj_t *spg = get_lv_obj(h);
+    if(!spg) return js_mknull();
+
+    lv_spangroup_set_indent(spg, indent);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spangroup_set_mode(struct js *js, jsval_t *args, int nargs) {
+    // (spangroupH, mode=LV_SPAN_MODE_FIXED/NOWRAP/BREAK)
+    if(nargs<2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int md  = (int)js_getnum(args[1]);
+    lv_obj_t *spg = get_lv_obj(h);
+    if(!spg) return js_mknull();
+
+    lv_spangroup_set_mode(spg, (lv_span_mode_t)md);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spangroup_new_span(struct js *js, jsval_t *args, int nargs) {
+    // (spangroupH) -> pointer
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *spg = get_lv_obj(h);
+    if(!spg) return js_mknull();
+
+    lv_span_t * sp = lv_spangroup_new_span(spg);
+    intptr_t ret = (intptr_t)sp;
+    return js_mknum((double)ret);
+}
+
+static jsval_t js_lv_span_set_text(struct js *js, jsval_t *args, int nargs) {
+    // (spanPtr, text)
+    if(nargs<2) return js_mknull();
+    intptr_t spP = (intptr_t)js_getnum(args[0]);
+    const char* txt = js_str(js, args[1]);
+    if(!txt) return js_mknull();
+
+    lv_span_t * sp = (lv_span_t *)spP;
+    lv_span_set_text(sp, txt);
+    return js_mknull();
+}
+
+static jsval_t js_lv_span_set_text_static(struct js *js, jsval_t *args, int nargs) {
+    // (spanPtr, text) => static
+    if(nargs<2) return js_mknull();
+    intptr_t spP = (intptr_t)js_getnum(args[0]);
+    const char* txt = js_str(js, args[1]);
+    if(!txt) return js_mknull();
+
+    lv_span_t * sp = (lv_span_t *)spP;
+    lv_span_set_text_static(sp, txt);
+    return js_mknull();
+}
+
+static jsval_t js_lv_spangroup_refr_mode(struct js *js, jsval_t *args, int nargs) {
+    // (spangroupH)
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *spg = get_lv_obj(h);
+    if(!spg) return js_mknull();
+
+    lv_spangroup_refr_mode(spg);
+    return js_mknull();
+}
+
+/********************************************************************************
+ * TEXTAREA
+ ********************************************************************************/
+
+static jsval_t js_lv_textarea_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t * ta = lv_textarea_create(lv_scr_act());
+    int handle = store_lv_obj(ta);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_textarea_set_password_mode(struct js *js, jsval_t *args, int nargs) {
+    // (taH, bool)
+    if(nargs<2) return js_mknull();
+    int h  = (int)js_getnum(args[0]);
+    bool b = (bool)js_getnum(args[1]);
+
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    lv_textarea_set_password_mode(ta, b);
+    return js_mknull();
+}
+
+static jsval_t js_lv_textarea_set_one_line(struct js *js, jsval_t *args, int nargs) {
+    // (taH, bool)
+    if(nargs<2) return js_mknull();
+    int h  = (int)js_getnum(args[0]);
+    bool b = (bool)js_getnum(args[1]);
+
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    lv_textarea_set_one_line(ta, b);
+    return js_mknull();
+}
+
+static jsval_t js_lv_textarea_set_accepted_chars(struct js *js, jsval_t *args, int nargs) {
+    // (taH, "0123456789:")
+    if(nargs<2) return js_mknull();
+    int h      = (int)js_getnum(args[0]);
+    const char* c = js_str(js, args[1]);
+    if(!c) return js_mknull();
+
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    lv_textarea_set_accepted_chars(ta, c);
+    return js_mknull();
+}
+
+static jsval_t js_lv_textarea_set_max_length(struct js *js, jsval_t *args, int nargs) {
+    // (taH, len)
+    if(nargs<2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int len = (int)js_getnum(args[1]);
+
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    lv_textarea_set_max_length(ta, len);
+    return js_mknull();
+}
+
+static jsval_t js_lv_textarea_set_text(struct js *js, jsval_t *args, int nargs) {
+    // (taH, text)
+    if(nargs<2) return js_mknull();
+    int h  = (int)js_getnum(args[0]);
+    const char* t = js_str(js, args[1]);
+    if(!t) return js_mknull();
+
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    lv_textarea_set_text(ta, t);
+    return js_mknull();
+}
+
+static jsval_t js_lv_textarea_get_text(struct js *js, jsval_t *args, int nargs) {
+    // (taH) -> string
+    if(nargs<1) return js_mkstr(js,"",0);
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mkstr(js,"",0);
+
+    const char* txt = lv_textarea_get_text(ta);
+    if(!txt) txt="";
+    return js_mkstr(js, txt, strlen(txt));
+}
+
+static jsval_t js_lv_textarea_set_cursor_pos(struct js *js, jsval_t *args, int nargs) {
+    // (taH, pos)
+    if(nargs<2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    int pos = (int)js_getnum(args[1]);
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    lv_textarea_set_cursor_pos(ta, pos);
+    return js_mknull();
+}
+
+static jsval_t js_lv_textarea_add_char(struct js *js, jsval_t *args, int nargs) {
+    // (taH, char)
+    if(nargs<2) return js_mknull();
+    int h   = (int)js_getnum(args[0]);
+    const char* c = js_str(js, args[1]);
+    if(!c) return js_mknull();
+
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    // Just add first char of the string
+    if(strlen(c)>0) {
+        lv_textarea_add_char(ta, c[0]);
+    }
+    return js_mknull();
+}
+
+static jsval_t js_lv_textarea_del_char(struct js *js, jsval_t *args, int nargs) {
+    // (taH)
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *ta = get_lv_obj(h);
+    if(!ta) return js_mknull();
+
+    lv_textarea_del_char(ta);
+    return js_mknull();
+}
+
+/********************************************************************************
+ * KEYBOARD
+ ********************************************************************************/
+static jsval_t js_lv_keyboard_create(struct js *js, jsval_t *args, int nargs) {
+    // no param
+    lv_obj_t *kb = lv_keyboard_create(lv_scr_act());
+    int handle = store_lv_obj(kb);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_keyboard_set_textarea(struct js *js, jsval_t *args, int nargs) {
+    // (kbH, taH)
+    if(nargs<2) return js_mknull();
+    int kbH = (int)js_getnum(args[0]);
+    int taH = (int)js_getnum(args[1]);
+
+    lv_obj_t *kb = get_lv_obj(kbH);
+    if(!kb) return js_mknull();
+    lv_obj_t *ta = get_lv_obj(taH);
+    // If taH is -1 => pass NULL
+    lv_keyboard_set_textarea(kb, ta);
+    return js_mknull();
+}
+
+static jsval_t js_lv_keyboard_set_mode(struct js *js, jsval_t *args, int nargs) {
+    // (kbH, mode) e.g. LV_KEYBOARD_MODE_TEXT, LV_KEYBOARD_MODE_NUMBER, etc.
+    if(nargs<2) return js_mknull();
+    int kbH  = (int)js_getnum(args[0]);
+    int mode = (int)js_getnum(args[1]);
+    lv_obj_t *kb = get_lv_obj(kbH);
+    if(!kb) return js_mknull();
+
+    lv_keyboard_set_mode(kb, (lv_keyboard_mode_t)mode);
+    return js_mknull();
+}
+
+/********************************************************************************
+ * TABVIEW
+ ********************************************************************************/
+static jsval_t js_lv_tabview_create(struct js *js, jsval_t *args, int nargs) {
+    // (parent or -1 => scr), dirEnum, tabBtnSize
+    // For simplicity, ignore the optional or pass -1 => default
+    int parentH = -1;
+    int dir     = LV_DIR_TOP;
+    int size    = 50;
+    if(nargs>0) parentH = (int)js_getnum(args[0]);
+    if(nargs>1) dir     = (int)js_getnum(args[1]);
+    if(nargs>2) size    = (int)js_getnum(args[2]);
+
+    lv_obj_t *parent = parentH<0? lv_scr_act() : get_lv_obj(parentH);
+    if(!parent) parent = lv_scr_act();
+
+    lv_obj_t *tv = lv_tabview_create(parent, (lv_dir_t)dir, size);
+    int handle = store_lv_obj(tv);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_tabview_add_tab(struct js *js, jsval_t *args, int nargs) {
+    // (tabviewH, "Tab name") => returns handle of the newly created tab page
+    if(nargs<2) return js_mknum(-1);
+    int tvH = (int)js_getnum(args[0]);
+    const char* tname = js_str(js, args[1]);
+    if(!tname) return js_mknum(-1);
+
+    lv_obj_t *tv = get_lv_obj(tvH);
+    if(!tv) return js_mknum(-1);
+
+    lv_obj_t * tabpage = lv_tabview_add_tab(tv, tname);
+    int handle = store_lv_obj(tabpage);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_tabview_get_tab_btns(struct js *js, jsval_t *args, int nargs) {
+    // (tabviewH) => handle to the button matrix
+    if(nargs<1) return js_mknum(-1);
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *tv = get_lv_obj(h);
+    if(!tv) return js_mknum(-1);
+
+    lv_obj_t * tabBtns = lv_tabview_get_tab_btns(tv);
+    int handle = store_lv_obj(tabBtns);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_tabview_get_content(struct js *js, jsval_t *args, int nargs) {
+    // (tabviewH) => handle to the content container
+    if(nargs<1) return js_mknum(-1);
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *tv = get_lv_obj(h);
+    if(!tv) return js_mknum(-1);
+
+    lv_obj_t * cont = lv_tabview_get_content(tv);
+    int handle = store_lv_obj(cont);
+    return js_mknum(handle);
+}
+
+/********************************************************************************
+ * WIN (Window)
+ ********************************************************************************/
+static jsval_t js_lv_win_create(struct js *js, jsval_t *args, int nargs) {
+    // (parentH or -1, headerHeight)
+    int parentH = -1;
+    int headerHeight = 40;
+    if(nargs>0) parentH = (int)js_getnum(args[0]);
+    if(nargs>1) headerHeight = (int)js_getnum(args[1]);
+
+    lv_obj_t *parent = (parentH<0)? lv_scr_act() : get_lv_obj(parentH);
+    if(!parent) parent = lv_scr_act();
+
+    lv_obj_t * win = lv_win_create(parent, headerHeight);
+    int handle = store_lv_obj(win);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_win_add_btn(struct js *js, jsval_t *args, int nargs) {
+    // (winH, symbolOrText, btnWidth)
+    if(nargs<3) return js_mknum(-1);
+    int wh = (int)js_getnum(args[0]);
+    const char* txt = js_str(js, args[1]);
+    int width = (int)js_getnum(args[2]);
+
+    lv_obj_t *win = get_lv_obj(wh);
+    if(!win) return js_mknum(-1);
+
+    lv_obj_t *btn = lv_win_add_btn(win, txt, width);
+    int handle = store_lv_obj(btn);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_win_add_title(struct js *js, jsval_t *args, int nargs) {
+    // (winH, "mytitle")
+    if(nargs<2) return js_mknull();
+    int wh = (int)js_getnum(args[0]);
+    const char* t = js_str(js, args[1]);
+    if(!t) return js_mknull();
+
+    lv_obj_t *win = get_lv_obj(wh);
+    if(!win) return js_mknull();
+
+    lv_win_add_title(win, t);
+    return js_mknull();
+}
+
+static jsval_t js_lv_win_get_content(struct js *js, jsval_t *args, int nargs) {
+    // (winH) => handle
+    if(nargs<1) return js_mknum(-1);
+    int wh = (int)js_getnum(args[0]);
+    lv_obj_t *win = get_lv_obj(wh);
+    if(!win) return js_mknum(-1);
+
+    lv_obj_t * c = lv_win_get_content(win);
+    int handle = store_lv_obj(c);
+    return js_mknum(handle);
+}
+
+/********************************************************************************
+ * TUTORIAL FOR TILES (TileView)
+ ********************************************************************************/
+static jsval_t js_lv_tileview_create(struct js *js, jsval_t *args, int nargs) {
+    // no param
+    lv_obj_t * tv = lv_tileview_create(lv_scr_act());
+    int handle = store_lv_obj(tv);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_tileview_add_tile(struct js *js, jsval_t *args, int nargs) {
+    // (tileviewH, col, row, allowedDir) => returns tile page handle
+    if(nargs<4) return js_mknum(-1);
+    int tvH = (int)js_getnum(args[0]);
+    int col = (int)js_getnum(args[1]);
+    int row = (int)js_getnum(args[2]);
+    int dir = (int)js_getnum(args[3]); // e.g. LV_DIR_LEFT|LV_DIR_RIGHT etc.
+
+    lv_obj_t *tv = get_lv_obj(tvH);
+    if(!tv) return js_mknum(-1);
+
+    lv_obj_t * tile = lv_tileview_add_tile(tv, col, row, dir);
+    int handle = store_lv_obj(tile);
+    return js_mknum(handle);
+}
+
+
+/*******************************************************
+ * LIST BRIDGING
+ *******************************************************/
+
+static jsval_t js_lv_list_create(struct js *js, jsval_t *args, int nargs) {
+    // create a list
+    lv_obj_t *list = lv_list_create(lv_scr_act());
+    int handle = store_lv_obj(list);
+    Serial.printf("lv_list_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_list_add_btn(struct js *js, jsval_t *args, int nargs) {
+    // (listH, iconSymbolOrNULL, txt)
+    if(nargs < 3) return js_mknull();
+    int lh = (int)js_getnum(args[0]);
+    const char* icon = js_str(js, args[1]);
+    const char* txt  = js_str(js, args[2]);
+
+    lv_obj_t *list = get_lv_obj(lh);
+    if(!list) return js_mknull();
+
+    // If icon is "NULL" or "", pass NULL
+    const char* useIcon = NULL;
+    if(icon && strlen(icon) > 0) {
+        useIcon = icon; // e.g. LV_SYMBOL_OK
+    }
+
+    lv_obj_t *btn = lv_list_add_btn(list, useIcon, txt ? txt : "");
+    int handle = store_lv_obj(btn);
+    Serial.printf("lv_list_add_btn => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_list_add_text(struct js *js, jsval_t *args, int nargs) {
+    // (listH, txt)
+    if(nargs < 2) return js_mknull();
+    int lh = (int)js_getnum(args[0]);
+    const char* txt = js_str(js, args[1]);
+
+    lv_obj_t *list = get_lv_obj(lh);
+    if(!list) return js_mknull();
+
+    lv_obj_t *obj = lv_list_add_text(list, txt ? txt : "");
+    int handle = store_lv_obj(obj);
+    Serial.printf("lv_list_add_text => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_list_get_btn_text(struct js *js, jsval_t *args, int nargs) {
+    // (listH, btnH) => returns text string
+    if(nargs < 2) return js_mkstr(js, "", 0);
+    int listH = (int)js_getnum(args[0]);
+    int btnH  = (int)js_getnum(args[1]);
+
+    lv_obj_t *list = get_lv_obj(listH);
+    lv_obj_t *btn  = get_lv_obj(btnH);
+    if(!list || !btn) return js_mkstr(js, "", 0);
+
+    const char* txt = lv_list_get_btn_text(list, btn);
+    if(!txt) txt = "";
+    return js_mkstr(js, txt, strlen(txt));
+}
+
+
+/*******************************************************
+ * LINE BRIDGING
+ *******************************************************/
+
+static jsval_t js_lv_line_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t *line = lv_line_create(lv_scr_act());
+    int handle = store_lv_obj(line);
+    Serial.printf("lv_line_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+// Setting points requires us to parse an array of {x,y} from JS or something
+// For simplicity, here's a bridging that receives e.g. (lineH, x0, y0, x1, y1, x2, y2, ...)
+static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) {
+    // Must have at least (lineH, x0, y0)
+    if(nargs < 3) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+
+    // The rest are coordinate pairs
+    int pairCount = (nargs - 1) / 2; // minus 1 for the handle, then each 2 = one point
+    if(pairCount < 1) return js_mknull();
+
+    lv_obj_t *line = get_lv_obj(h);
+    if(!line) return js_mknull();
+
+    static lv_point_t points[32]; // up to 16 points
+    if(pairCount > 16) pairCount = 16; // clamp
+
+    int idx = 1; // start reading from arg[1]
+    for(int i=0; i<pairCount; i++) {
+        int x = (int)js_getnum(args[idx++]);
+        int y = (int)js_getnum(args[idx++]);
+        points[i].x = x;
+        points[i].y = y;
+    }
+
+    lv_line_set_points(line, points, pairCount);
+    return js_mknull();
+}
+
+
+/*******************************************************
+ * LED BRIDGING
+ *******************************************************/
+
+static jsval_t js_lv_led_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t *led = lv_led_create(lv_scr_act());
+    int handle = store_lv_obj(led);
+    Serial.printf("lv_led_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_led_on(struct js *js, jsval_t *args, int nargs) {
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *led = get_lv_obj(h);
+    if(!led) return js_mknull();
+
+    lv_led_on(led);
+    return js_mknull();
+}
+
+static jsval_t js_lv_led_off(struct js *js, jsval_t *args, int nargs) {
+    if(nargs<1) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    lv_obj_t *led = get_lv_obj(h);
+    if(!led) return js_mknull();
+
+    lv_led_off(led);
+    return js_mknull();
+}
+
+static jsval_t js_lv_led_set_brightness(struct js *js, jsval_t *args, int nargs) {
+    if(nargs<2) return js_mknull();
+    int h    = (int)js_getnum(args[0]);
+    int bright = (int)js_getnum(args[1]);
+    lv_obj_t *led = get_lv_obj(h);
+    if(!led) return js_mknull();
+
+    lv_led_set_brightness(led, bright);
+    return js_mknull();
+}
+
+static jsval_t js_lv_led_set_color(struct js *js, jsval_t *args, int nargs) {
+    if(nargs<2) return js_mknull();
+    int h    = (int)js_getnum(args[0]);
+    double col = js_getnum(args[1]);
+    lv_obj_t *led = get_lv_obj(h);
+    if(!led) return js_mknull();
+
+    lv_led_set_color(led, lv_color_hex((uint32_t)col));
+    return js_mknull();
+}
+
+
+/*******************************************************
+ * DROPDOWN BRIDGING
+ *******************************************************/
+
+static jsval_t js_lv_dropdown_create(struct js *js, jsval_t *args, int nargs) {
+    lv_obj_t *dd = lv_dropdown_create(lv_scr_act());
+    int handle = store_lv_obj(dd);
+    Serial.printf("lv_dropdown_create => handle %d\n", handle);
+    return js_mknum(handle);
+}
+
+static jsval_t js_lv_dropdown_set_options(struct js *js, jsval_t *args, int nargs) {
+    // (ddH, "Apple\nBanana\n...")
+    if(nargs < 2) return js_mknull();
+    int h = (int)js_getnum(args[0]);
+    const char* opts = js_str(js, args[1]);
+    if(!opts) return js_mknull();
+
+    lv_obj_t *dd = get_lv_obj(h);
+    if(!dd) return js_mknull();
+
+    lv_dropdown_set_options(dd, opts);
+    return js_mknull();
+}
+
+static jsval_t js_lv_dropdown_get_selected_str(struct js *js, jsval_t *args, int nargs) {
+    // (ddH)
+    if(nargs < 1) return js_mkstr(js, "", 0);
+    int h = (int)js_getnum(args[0]);
+
+    lv_obj_t *dd = get_lv_obj(h);
+    if(!dd) return js_mkstr(js, "", 0);
+
+    char buf[64];
+    lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
+    return js_mkstr(js, buf, strlen(buf));
+}
+
 /******************************************************************************
  * I) Register All JS Functions
  ******************************************************************************/
@@ -1308,7 +2791,7 @@ void register_js_functions() {
   js_set(js, global, "move_obj",              js_mkfun(js_move_obj));
   js_set(js, global, "animate_obj",           js_mkfun(js_animate_obj));
 
-  // ***NEW*** style creation + property setters
+  // Style creation + property setters
   js_set(js, global, "create_style",              js_mkfun(js_create_style));
   js_set(js, global, "obj_add_style",             js_mkfun(js_obj_add_style));
 
@@ -1348,11 +2831,11 @@ void register_js_functions() {
   js_set(js, global, "style_set_x",               js_mkfun(js_style_set_x));
   js_set(js, global, "style_set_y",               js_mkfun(js_style_set_y));
 
-  // ***NEW*** object property setters
+  // Object property setters
   js_set(js, global, "obj_set_size",        js_mkfun(js_obj_set_size));
   js_set(js, global, "obj_align",           js_mkfun(js_obj_align));
 
-  // ***NEW*** scroll, flex, flags
+  // Scroll, flex, flags
   js_set(js, global, "obj_set_scroll_snap_x",   js_mkfun(js_obj_set_scroll_snap_x));
   js_set(js, global, "obj_set_scroll_snap_y",   js_mkfun(js_obj_set_scroll_snap_y));
   js_set(js, global, "obj_add_flag",            js_mkfun(js_obj_add_flag));
@@ -1363,6 +2846,132 @@ void register_js_functions() {
   js_set(js, global, "obj_set_flex_align",      js_mkfun(js_obj_set_flex_align));
   js_set(js, global, "obj_set_style_clip_corner", js_mkfun(js_obj_set_style_clip_corner));
   js_set(js, global, "obj_set_style_base_dir",  js_mkfun(js_obj_set_style_base_dir));
+
+  // ---------- CHECKBOX bridging
+  js_set(js, global, "lv_checkbox_create",      js_mkfun(js_lv_checkbox_create));
+  js_set(js, global, "lv_checkbox_set_text",    js_mkfun(js_lv_checkbox_set_text));
+
+  // ---------- MENU bridging
+  js_set(js, global, "lv_menu_create",          js_mkfun(js_lv_menu_create));
+  js_set(js, global, "lv_menu_page_create",     js_mkfun(js_lv_menu_page_create));
+  js_set(js, global, "lv_menu_set_page",        js_mkfun(js_lv_menu_set_page));
+  js_set(js, global, "lv_menu_cont_create",     js_mkfun(js_lv_menu_cont_create));
+  js_set(js, global, "lv_menu_set_load_page_event", js_mkfun(js_lv_menu_set_load_page_event));
+  js_set(js, global, "lv_menu_set_mode_root_back_btn",  js_mkfun(js_lv_menu_set_mode_root_back_btn));
+  js_set(js, global, "lv_menu_back_btn_is_root",        js_mkfun(js_lv_menu_back_btn_is_root));
+  js_set(js, global, "lv_menu_separator_create",        js_mkfun(js_lv_menu_separator_create));
+  js_set(js, global, "lv_menu_section_create",          js_mkfun(js_lv_menu_section_create));
+  js_set(js, global, "lv_menu_set_sidebar_page",        js_mkfun(js_lv_menu_set_sidebar_page));
+  js_set(js, global, "lv_menu_clear_history",           js_mkfun(js_lv_menu_clear_history));
+
+  //==================== METER ============================
+  js_set(js, global, "lv_meter_create",                   js_mkfun(js_lv_meter_create));
+  js_set(js, global, "lv_meter_add_scale",                js_mkfun(js_lv_meter_add_scale));
+  js_set(js, global, "lv_meter_set_scale_ticks",          js_mkfun(js_lv_meter_set_scale_ticks));
+  js_set(js, global, "lv_meter_set_scale_major_ticks",    js_mkfun(js_lv_meter_set_scale_major_ticks));
+  js_set(js, global, "lv_meter_set_scale_range",          js_mkfun(js_lv_meter_set_scale_range));
+  js_set(js, global, "lv_meter_add_arc",                  js_mkfun(js_lv_meter_add_arc));
+  js_set(js, global, "lv_meter_add_scale_lines",          js_mkfun(js_lv_meter_add_scale_lines));
+  js_set(js, global, "lv_meter_add_needle_line",          js_mkfun(js_lv_meter_add_needle_line));
+  js_set(js, global, "lv_meter_add_needle_img",           js_mkfun(js_lv_meter_add_needle_img));
+  js_set(js, global, "lv_meter_set_indicator_start_value",js_mkfun(js_lv_meter_set_indicator_start_value));
+  js_set(js, global, "lv_meter_set_indicator_end_value",  js_mkfun(js_lv_meter_set_indicator_end_value));
+  js_set(js, global, "lv_meter_set_indicator_value",      js_mkfun(js_lv_meter_set_indicator_value));
+
+  //==================== SPINBOX =========================
+  js_set(js, global, "lv_spinbox_create",           js_mkfun(js_lv_spinbox_create));
+  js_set(js, global, "lv_spinbox_set_range",        js_mkfun(js_lv_spinbox_set_range));
+  js_set(js, global, "lv_spinbox_set_digit_format", js_mkfun(js_lv_spinbox_set_digit_format));
+  js_set(js, global, "lv_spinbox_step_prev",        js_mkfun(js_lv_spinbox_step_prev));
+  js_set(js, global, "lv_spinbox_step_next",        js_mkfun(js_lv_spinbox_step_next));
+  js_set(js, global, "lv_spinbox_increment",        js_mkfun(js_lv_spinbox_increment));
+  js_set(js, global, "lv_spinbox_decrement",        js_mkfun(js_lv_spinbox_decrement));
+
+  //==================== MSGBOX ==========================
+  js_set(js, global, "lv_msgbox_create",            js_mkfun(js_lv_msgbox_create));
+  js_set(js, global, "lv_msgbox_get_active_btn_text", js_mkfun(js_lv_msgbox_get_active_btn_text));
+
+  //==================== ROLLER =========================
+  js_set(js, global, "lv_roller_create",         js_mkfun(js_lv_roller_create));
+  js_set(js, global, "lv_roller_set_options",    js_mkfun(js_lv_roller_set_options));
+  js_set(js, global, "lv_roller_set_visible_row_count", js_mkfun(js_lv_roller_set_visible_row_count));
+  js_set(js, global, "lv_roller_get_selected_str", js_mkfun(js_lv_roller_get_selected_str));
+  js_set(js, global, "lv_roller_set_selected",   js_mkfun(js_lv_roller_set_selected));
+
+  //==================== SLIDER (additional) =============
+  js_set(js, global, "lv_slider_create",         js_mkfun(js_lv_slider_create));
+  js_set(js, global, "lv_slider_set_mode",       js_mkfun(js_lv_slider_set_mode));
+  js_set(js, global, "lv_slider_set_value",      js_mkfun(js_lv_slider_set_value));
+  js_set(js, global, "lv_slider_set_left_value", js_mkfun(js_lv_slider_set_left_value));
+  js_set(js, global, "lv_slider_get_value",      js_mkfun(js_lv_slider_get_value));
+  js_set(js, global, "lv_slider_get_left_value", js_mkfun(js_lv_slider_get_left_value));
+
+  //==================== SPAN ============================
+  js_set(js, global, "lv_spangroup_create",      js_mkfun(js_lv_spangroup_create));
+  js_set(js, global, "lv_spangroup_set_align",   js_mkfun(js_lv_spangroup_set_align));
+  js_set(js, global, "lv_spangroup_set_overflow",js_mkfun(js_lv_spangroup_set_overflow));
+  js_set(js, global, "lv_spangroup_set_indent",  js_mkfun(js_lv_spangroup_set_indent));
+  js_set(js, global, "lv_spangroup_set_mode",    js_mkfun(js_lv_spangroup_set_mode));
+  js_set(js, global, "lv_spangroup_new_span",    js_mkfun(js_lv_spangroup_new_span));
+  js_set(js, global, "lv_span_set_text",         js_mkfun(js_lv_span_set_text));
+  js_set(js, global, "lv_span_set_text_static",  js_mkfun(js_lv_span_set_text_static));
+  js_set(js, global, "lv_spangroup_refr_mode",   js_mkfun(js_lv_spangroup_refr_mode));
+
+  //==================== TEXTAREA (more) =================
+  js_set(js, global, "lv_textarea_create",           js_mkfun(js_lv_textarea_create));
+  js_set(js, global, "lv_textarea_set_password_mode",js_mkfun(js_lv_textarea_set_password_mode));
+  js_set(js, global, "lv_textarea_set_one_line",     js_mkfun(js_lv_textarea_set_one_line));
+  js_set(js, global, "lv_textarea_set_accepted_chars", js_mkfun(js_lv_textarea_set_accepted_chars));
+  js_set(js, global, "lv_textarea_set_max_length",   js_mkfun(js_lv_textarea_set_max_length));
+  js_set(js, global, "lv_textarea_set_text",         js_mkfun(js_lv_textarea_set_text));
+  js_set(js, global, "lv_textarea_get_text",         js_mkfun(js_lv_textarea_get_text));
+  js_set(js, global, "lv_textarea_set_cursor_pos",   js_mkfun(js_lv_textarea_set_cursor_pos));
+  js_set(js, global, "lv_textarea_add_char",         js_mkfun(js_lv_textarea_add_char));
+  js_set(js, global, "lv_textarea_del_char",         js_mkfun(js_lv_textarea_del_char));
+
+  //==================== KEYBOARD ========================
+  js_set(js, global, "lv_keyboard_create",        js_mkfun(js_lv_keyboard_create));
+  js_set(js, global, "lv_keyboard_set_textarea",  js_mkfun(js_lv_keyboard_set_textarea));
+  js_set(js, global, "lv_keyboard_set_mode",      js_mkfun(js_lv_keyboard_set_mode));
+
+  //==================== TABVIEW =========================
+  js_set(js, global, "lv_tabview_create",         js_mkfun(js_lv_tabview_create));
+  js_set(js, global, "lv_tabview_add_tab",        js_mkfun(js_lv_tabview_add_tab));
+  js_set(js, global, "lv_tabview_get_tab_btns",   js_mkfun(js_lv_tabview_get_tab_btns));
+  js_set(js, global, "lv_tabview_get_content",    js_mkfun(js_lv_tabview_get_content));
+
+  //==================== WIN =============================
+  js_set(js, global, "lv_win_create",             js_mkfun(js_lv_win_create));
+  js_set(js, global, "lv_win_add_btn",            js_mkfun(js_lv_win_add_btn));
+  js_set(js, global, "lv_win_add_title",          js_mkfun(js_lv_win_add_title));
+  js_set(js, global, "lv_win_get_content",        js_mkfun(js_lv_win_get_content));
+
+  //==================== TILEVIEW ========================
+  js_set(js, global, "lv_tileview_create",        js_mkfun(js_lv_tileview_create));
+  js_set(js, global, "lv_tileview_add_tile",      js_mkfun(js_lv_tileview_add_tile));
+
+
+  // ---------- LIST bridging
+  js_set(js, global, "lv_list_create",          js_mkfun(js_lv_list_create));
+  js_set(js, global, "lv_list_add_btn",         js_mkfun(js_lv_list_add_btn));
+  js_set(js, global, "lv_list_add_text",        js_mkfun(js_lv_list_add_text));
+  js_set(js, global, "lv_list_get_btn_text",    js_mkfun(js_lv_list_get_btn_text));
+
+  // ---------- LINE bridging
+  js_set(js, global, "lv_line_create",          js_mkfun(js_lv_line_create));
+  js_set(js, global, "lv_line_set_points",      js_mkfun(js_lv_line_set_points));
+
+  // ---------- LED bridging
+  js_set(js, global, "lv_led_create",           js_mkfun(js_lv_led_create));
+  js_set(js, global, "lv_led_on",               js_mkfun(js_lv_led_on));
+  js_set(js, global, "lv_led_off",              js_mkfun(js_lv_led_off));
+  js_set(js, global, "lv_led_set_brightness",   js_mkfun(js_lv_led_set_brightness));
+  js_set(js, global, "lv_led_set_color",        js_mkfun(js_lv_led_set_color));
+
+  // ---------- DROPDOWN bridging
+  js_set(js, global, "lv_dropdown_create",      js_mkfun(js_lv_dropdown_create));
+  js_set(js, global, "lv_dropdown_set_options", js_mkfun(js_lv_dropdown_set_options));
+  js_set(js, global, "lv_dropdown_get_selected_str", js_mkfun(js_lv_dropdown_get_selected_str));
 }
 
 /******************************************************************************

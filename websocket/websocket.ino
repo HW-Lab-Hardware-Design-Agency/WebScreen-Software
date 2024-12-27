@@ -556,9 +556,6 @@ static lv_obj_t* get_lv_obj(int handle) {
   return g_lv_obj_map[handle];
 }
 
-// Forward declaration, needed for create_image_from_ram()
-bool load_image_file_into_ram(const char *path, RamImage *outImg);
-
 // create_image("/messi.png", x,y) => returns handle
 static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
   if(nargs<3) {
@@ -3052,6 +3049,42 @@ bool load_and_execute_js_script(const char* path) {
   return true;
 }
 
+//------------------------------------------------------------------------------
+// K) The elk_task -- runs Elk + bridging in a separate FreeRTOS task
+//------------------------------------------------------------------------------
+static void elk_task(void *pvParam) 
+{
+  // 1) Create Elk
+  js = js_create(elk_memory, sizeof(elk_memory));
+  if(!js) {
+    Serial.println("Failed to initialize Elk in elk_task");
+    // Delete this task if you want
+    vTaskDelete(NULL);
+    return;
+  }
+
+  // 2) Register bridging
+  register_js_functions();
+
+  // 3) Load & execute your script
+  if(!load_and_execute_js_script("/script.js")) {
+    Serial.println("Failed to load and execute JavaScript script");
+  } else {
+    Serial.println("Script executed successfully in elk_task");
+  }
+
+  // 4) Now keep running lv_timer_handler() or your lvgl_loop
+  // so that the UI remains active
+  for(;;) {
+    lv_timer_handler();
+    delay(5);
+    // or lvgl_loop() if you prefer
+  }
+
+  // If you ever want to exit the task, do:
+  // vTaskDelete(NULL);
+}
+
 /******************************************************************************
  * K) Arduino setup() & loop()
  ******************************************************************************/
@@ -3079,23 +3112,25 @@ void setup() {
   init_mem_fs();
 
   // 4c) Init Memory storage
-  init_ram_images();
-
-  // 5) Create Elk
-  js = js_create(elk_memory, sizeof(elk_memory));
-  if(!js) {
-    Serial.println("Failed to initialize Elk");
-    return;
+  for (int i = 0; i < MAX_RAM_IMAGES; i++) {
+    g_ram_images[i].used   = false;
+    g_ram_images[i].buffer = NULL;
+    g_ram_images[i].size   = 0;
   }
-  register_js_functions();
 
-  // 6) Load & execute "/script.js" from SD
-  if(!load_and_execute_js_script("/script.js")) {
-    Serial.println("Failed to load and execute JavaScript script");
-  }
+  // ***** Instead of calling Elk creation + script here,
+  // ***** we spawn a new FreeRTOS task with a larger stack:
+  xTaskCreatePinnedToCore(
+      elk_task,          // function pointer
+      "ElkTask",         // name of the task
+      16384,             // stack size in bytes (16KB)
+      NULL,              // parameter
+      1,                 // priority
+      NULL,              // task handle
+      1                  // pin to core 1 (or 0 if you want)
+  );
 }
 
 void loop() {
-  lvgl_loop();
-  delay(5);
+  delay(1000);
 }

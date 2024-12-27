@@ -556,6 +556,19 @@ static lv_obj_t* get_lv_obj(int handle) {
   return g_lv_obj_map[handle];
 }
 
+// Helper functions to extract RGB components from lv_color_t
+uint8_t get_red(lv_color_t color) {
+    return (color.full >> 11) & 0x1F; // 5 bits
+}
+
+uint8_t get_green(lv_color_t color) {
+    return (color.full >> 5) & 0x3F; // 6 bits
+}
+
+uint8_t get_blue(lv_color_t color) {
+    return color.full & 0x1F; // 5 bits
+}
+
 // create_image("/messi.png", x,y) => returns handle
 static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
   if(nargs<3) {
@@ -2073,9 +2086,9 @@ static jsval_t js_lv_roller_set_selected(struct js *js, jsval_t *args, int nargs
  *******************************************************/
 
 // create_button(parentHandle, x, y, width, height) => returns handle
-static jsval_t js_lv_button_create(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_lv_btn_create(struct js *js, jsval_t *args, int nargs) {
     if(nargs < 5) {
-        Serial.println("lv_button_create: expects parentHandle, x, y, width, height");
+        Serial.println("lv_btn_create: expects parentHandle, x, y, width, height");
         return js_mknull();
     }
     int parentHandle = (int)js_getnum(args[0]);
@@ -2086,16 +2099,16 @@ static jsval_t js_lv_button_create(struct js *js, jsval_t *args, int nargs) {
 
     lv_obj_t *parent = get_lv_obj(parentHandle);
     if(!parent) {
-        Serial.println("lv_button_create: invalid parent handle");
+        Serial.println("lv_btn_create: invalid parent handle");
         return js_mknull();
     }
 
-    lv_obj_t *button = lv_button_create(parent);
+    lv_obj_t *button = lv_btn_create(parent);
     lv_obj_set_pos(button, x, y);
     lv_obj_set_size(button, width, height);
 
     int handle = store_lv_obj(button);
-    Serial.printf("lv_button_create => handle %d\n", handle);
+    Serial.printf("lv_btn_create => handle %d\n", handle);
     return js_mknum(handle);
 }
 
@@ -2812,20 +2825,18 @@ static jsval_t js_lv_dropdown_get_selected_str(struct js *js, jsval_t *args, int
     return js_mkstr(js, buf, strlen(buf));
 }
 
-/*******************************************************
- * COLORWHEEL BRIDGING
- *******************************************************/
-
-// create_colorwheel(parentHandle, x, y, radius) => returns handle
+// Bridging function: lv_colorwheel_create
+// lv_colorwheel_create(parentHandle, knob_recolor, x, y, diameter) => returns handle
 static jsval_t js_lv_colorwheel_create(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 4) {
-        Serial.println("lv_colorwheel_create: expects parentHandle, x, y, radius");
+    if(nargs < 5) {
+        Serial.println("lv_colorwheel_create: expects parentHandle, knob_recolor, x, y, diameter");
         return js_mknull();
     }
     int parentHandle = (int)js_getnum(args[0]);
-    int x = (int)js_getnum(args[1]);
-    int y = (int)js_getnum(args[2]);
-    int radius = (int)js_getnum(args[3]);
+    bool knob_recolor = (bool)js_getbool(args[1]);
+    int x = (int)js_getnum(args[2]);
+    int y = (int)js_getnum(args[3]);
+    int diameter = (int)js_getnum(args[4]);
 
     lv_obj_t *parent = get_lv_obj(parentHandle);
     if(!parent) {
@@ -2833,159 +2844,70 @@ static jsval_t js_lv_colorwheel_create(struct js *js, jsval_t *args, int nargs) 
         return js_mknull();
     }
 
-    lv_obj_t *colorwheel = lv_colorwheel_create(parent);
+    lv_obj_t *colorwheel = lv_colorwheel_create(parent, knob_recolor);
     lv_obj_set_pos(colorwheel, x, y);
-    lv_obj_set_size(colorwheel, radius * 2, radius * 2); // Diameter
+    lv_obj_set_size(colorwheel, diameter, diameter); // Diameter
 
     int handle = store_lv_obj(colorwheel);
     Serial.printf("lv_colorwheel_create => handle %d\n", handle);
     return js_mknum(handle);
 }
 
-// colorwheel_set_hue(colorwheelHandle, hue)
-static jsval_t js_lv_colorwheel_set_hue(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_colorwheel_set_hue: expects colorwheelHandle, hue");
+// lv_colorwheel_set_hsv(colorwheelHandle, hue, saturation, value) => returns boolean
+static jsval_t js_lv_colorwheel_set_hsv(struct js *js, jsval_t *args, int nargs) {
+    if(nargs < 4) {
+        Serial.println("lv_colorwheel_set_hsv: expects colorwheelHandle, hue, saturation, value");
         return js_mknull();
     }
     int cwHandle = (int)js_getnum(args[0]);
     int hue = (int)js_getnum(args[1]);
+    int saturation = (int)js_getnum(args[2]);
+    int value = (int)js_getnum(args[3]);
 
     lv_obj_t *colorwheel = get_lv_obj(cwHandle);
     if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_hue: invalid colorwheel handle");
+        Serial.println("lv_colorwheel_set_hsv: invalid colorwheel handle");
         return js_mknull();
     }
 
-    lv_colorwheel_set_hue(colorwheel, hue);
-    Serial.printf("lv_colorwheel_set_hue: handle=%d, hue=%d\n", cwHandle, hue);
-    return js_mknull();
+    lv_color_hsv_t hsv;
+    hsv.h = hue;
+    hsv.s = saturation;
+    hsv.v = value;
+
+    bool changed = lv_colorwheel_set_hsv(colorwheel, hsv);
+    Serial.printf("lv_colorwheel_set_hsv: handle=%d, hue=%d, sat=%d, val=%d, changed=%s\n", cwHandle, hue, saturation, value, changed ? "true" : "false");
+    
+    // Return JavaScript boolean value
+    return changed ? js_mktrue() : js_mkfalse();
 }
 
-// colorwheel_get_hue(colorwheelHandle) => returns hue
-static jsval_t js_lv_colorwheel_get_hue(struct js *js, jsval_t *args, int nargs) {
+// lv_colorwheel_get_hsv(colorwheelHandle) => returns {hue, saturation, value}
+static jsval_t js_lv_colorwheel_get_hsv(struct js *js, jsval_t *args, int nargs) {
     if(nargs < 1) {
-        Serial.println("lv_colorwheel_get_hue: expects colorwheelHandle");
-        return js_mknum(-1);
+        Serial.println("lv_colorwheel_get_hsv: expects colorwheelHandle");
+        return js_mknull();
     }
     int cwHandle = (int)js_getnum(args[0]);
 
     lv_obj_t *colorwheel = get_lv_obj(cwHandle);
     if(!colorwheel) {
-        Serial.println("lv_colorwheel_get_hue: invalid colorwheel handle");
-        return js_mknum(-1);
+        Serial.println("lv_colorwheel_get_hsv: invalid colorwheel handle");
+        return js_mknull();
     }
 
-    int hue = lv_colorwheel_get_hue(colorwheel);
-    Serial.printf("lv_colorwheel_get_hue: handle=%d, hue=%d\n", cwHandle, hue);
-    return js_mknum((double)hue);
+    lv_color_hsv_t hsv = lv_colorwheel_get_hsv(colorwheel);
+
+    // Create a JS object to return {hue, saturation, value}
+    jsval_t obj = js_mkobj(js);
+    js_set(js, obj, "hue",        js_mknum((double)hsv.h));
+    js_set(js, obj, "saturation", js_mknum((double)hsv.s));
+    js_set(js, obj, "value",      js_mknum((double)hsv.v));
+    Serial.printf("lv_colorwheel_get_hsv: handle=%d, hue=%d, sat=%d, val=%d\n", cwHandle, hsv.h, hsv.s, hsv.v);
+    return obj;
 }
 
-// colorwheel_set_angle(colorwheelHandle, angle)
-static jsval_t js_lv_colorwheel_set_angle(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_colorwheel_set_angle: expects colorwheelHandle, angle");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int angle = (int)js_getnum(args[1]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_angle: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_colorwheel_set_angle(colorwheel, angle);
-    Serial.printf("lv_colorwheel_set_angle: handle=%d, angle=%d\n", cwHandle, angle);
-    return js_mknull();
-}
-
-// colorwheel_get_angle(colorwheelHandle) => returns angle
-static jsval_t js_lv_colorwheel_get_angle(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 1) {
-        Serial.println("lv_colorwheel_get_angle: expects colorwheelHandle");
-        return js_mknum(-1);
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_get_angle: invalid colorwheel handle");
-        return js_mknum(-1);
-    }
-
-    int angle = lv_colorwheel_get_angle(colorwheel);
-    Serial.printf("lv_colorwheel_get_angle: handle=%d, angle=%d\n", cwHandle, angle);
-    return js_mknum((double)angle);
-}
-
-// colorwheel_set_style(colorwheelHandle, styleHandle, partOrState)
-static jsval_t js_lv_colorwheel_set_style(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 3) {
-        Serial.println("lv_colorwheel_set_style: expects colorwheelHandle, styleHandle, partOrState");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int styleHandle = (int)js_getnum(args[1]);
-    int partOrState = (int)js_getnum(args[2]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    lv_style_t *style = get_lv_style(styleHandle);
-    if(!colorwheel || !style) {
-        Serial.println("lv_colorwheel_set_style: invalid handle(s)");
-        return js_mknull();
-    }
-
-    lv_obj_add_style(colorwheel, style, partOrState);
-    Serial.printf("lv_colorwheel_set_style: colorwheelHandle=%d, styleHandle=%d, partOrState=%d\n", cwHandle, styleHandle, partOrState);
-    return js_mknull();
-}
-
-// colorwheel_set_rgb_start(colorwheelHandle, r, g, b)
-static jsval_t js_lv_colorwheel_set_rgb_start(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 4) {
-        Serial.println("lv_colorwheel_set_rgb_start: expects colorwheelHandle, r, g, b");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int r = (int)js_getnum(args[1]);
-    int g = (int)js_getnum(args[2]);
-    int b = (int)js_getnum(args[3]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_rgb_start: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_color_t color = lv_color_make(r, g, b);
-    lv_colorwheel_set_rgb_start(colorwheel, color);
-    Serial.printf("lv_colorwheel_set_rgb_start: handle=%d, r=%d, g=%d, b=%d\n", cwHandle, r, g, b);
-    return js_mknull();
-}
-
-// colorwheel_set_mode(colorwheelHandle, modeEnum)
-static jsval_t js_lv_colorwheel_set_mode(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_colorwheel_set_mode: expects colorwheelHandle, mode");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int mode = (int)js_getnum(args[1]); // e.g., LV_COLORWHEEL_MODE_NORMAL, LV_COLORWHEEL_MODE_PICKER
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_mode: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_colorwheel_set_mode(colorwheel, (lv_colorwheel_mode_t)mode);
-    Serial.printf("lv_colorwheel_set_mode: handle=%d, mode=%d\n", cwHandle, mode);
-    return js_mknull();
-}
-
-// colorwheel_set_rgb(colorwheelHandle, r, g, b)
+// lv_colorwheel_set_rgb(colorwheelHandle, r, g, b) => returns boolean
 static jsval_t js_lv_colorwheel_set_rgb(struct js *js, jsval_t *args, int nargs) {
     if(nargs < 4) {
         Serial.println("lv_colorwheel_set_rgb: expects colorwheelHandle, r, g, b");
@@ -3003,12 +2925,14 @@ static jsval_t js_lv_colorwheel_set_rgb(struct js *js, jsval_t *args, int nargs)
     }
 
     lv_color_t color = lv_color_make(r, g, b);
-    lv_colorwheel_set_rgb(colorwheel, color);
-    Serial.printf("lv_colorwheel_set_rgb: handle=%d, r=%d, g=%d, b=%d\n", cwHandle, r, g, b);
-    return js_mknull();
+    bool changed = lv_colorwheel_set_rgb(colorwheel, color);
+    Serial.printf("lv_colorwheel_set_rgb: handle=%d, r=%d, g=%d, b=%d, changed=%s\n", cwHandle, r, g, b, changed ? "true" : "false");
+
+    // Return JavaScript boolean value
+    return changed ? js_mktrue() : js_mkfalse();
 }
 
-// colorwheel_get_rgb(colorwheelHandle) => returns {r, g, b}
+// lv_colorwheel_get_rgb(colorwheelHandle) => returns {r, g, b}
 static jsval_t js_lv_colorwheel_get_rgb(struct js *js, jsval_t *args, int nargs) {
     if(nargs < 1) {
         Serial.println("lv_colorwheel_get_rgb: expects colorwheelHandle");
@@ -3023,16 +2947,46 @@ static jsval_t js_lv_colorwheel_get_rgb(struct js *js, jsval_t *args, int nargs)
     }
 
     lv_color_t color = lv_colorwheel_get_rgb(colorwheel);
+    // Extract RGB components
+    uint8_t r = (color.full >> 11) & 0x1F; // 5 bits
+    uint8_t g = (color.full >> 5) & 0x3F;  // 6 bits
+    uint8_t b = color.full & 0x1F;         // 5 bits
+
+    // Scale to 0-255
+    r = (r * 255) / 31;
+    g = (g * 255) / 63;
+    b = (b * 255) / 31;
+
     // Create a JS object to return {r, g, b}
     jsval_t obj = js_mkobj(js);
-    js_set(js, obj, "r", js_mknum((double)color.red));
-    js_set(js, obj, "g", js_mknum((double)color.green));
-    js_set(js, obj, "b", js_mknum((double)color.blue));
-    Serial.printf("lv_colorwheel_get_rgb: handle=%d, r=%d, g=%d, b=%d\n", cwHandle, color.red, color.green, color.blue);
+    js_set(js, obj, "r", js_mknum((double)r));
+    js_set(js, obj, "g", js_mknum((double)g));
+    js_set(js, obj, "b", js_mknum((double)b));
+    Serial.printf("lv_colorwheel_get_rgb: handle=%d, r=%d, g=%d, b=%d\n", cwHandle, r, g, b);
     return obj;
 }
 
-// colorwheel_get_mode(colorwheelHandle) => returns modeEnum
+// lv_colorwheel_set_mode(colorwheelHandle, modeEnum) => returns void
+static jsval_t js_lv_colorwheel_set_mode(struct js *js, jsval_t *args, int nargs) {
+    if(nargs < 2) {
+        Serial.println("lv_colorwheel_set_mode: expects colorwheelHandle, mode");
+        return js_mknull();
+    }
+    int cwHandle = (int)js_getnum(args[0]);
+    int mode = (int)js_getnum(args[1]); // e.g., LV_COLORWHEEL_MODE_HUE, LV_COLORWHEEL_MODE_SATURATION, LV_COLORWHEEL_MODE_VALUE
+
+    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
+    if(!colorwheel) {
+        Serial.println("lv_colorwheel_set_mode: invalid colorwheel handle");
+        return js_mknull();
+    }
+
+    lv_colorwheel_set_mode(colorwheel, (lv_colorwheel_mode_t)mode);
+    Serial.printf("lv_colorwheel_set_mode: handle=%d, mode=%d\n", cwHandle, mode);
+    return js_mknull();
+}
+
+// lv_colorwheel_get_mode(colorwheelHandle) => returns modeEnum
 static jsval_t js_lv_colorwheel_get_mode(struct js *js, jsval_t *args, int nargs) {
     if(nargs < 1) {
         Serial.println("lv_colorwheel_get_mode: expects colorwheelHandle");
@@ -3046,92 +3000,9 @@ static jsval_t js_lv_colorwheel_get_mode(struct js *js, jsval_t *args, int nargs
         return js_mknum(-1);
     }
 
-    lv_colorwheel_mode_t mode = lv_colorwheel_get_mode(colorwheel);
+    lv_colorwheel_mode_t mode = lv_colorwheel_get_color_mode(colorwheel);
     Serial.printf("lv_colorwheel_get_mode: handle=%d, mode=%d\n", cwHandle, mode);
     return js_mknum((double)mode);
-}
-
-// colorwheel_set_rgb_end(colorwheelHandle, r, g, b)
-static jsval_t js_lv_colorwheel_set_rgb_end(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 4) {
-        Serial.println("lv_colorwheel_set_rgb_end: expects colorwheelHandle, r, g, b");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int r = (int)js_getnum(args[1]);
-    int g = (int)js_getnum(args[2]);
-    int b = (int)js_getnum(args[3]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_rgb_end: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_color_t color = lv_color_make(r, g, b);
-    lv_colorwheel_set_rgb_end(colorwheel, color);
-    Serial.printf("lv_colorwheel_set_rgb_end: handle=%d, r=%d, g=%d, b=%d\n", cwHandle, r, g, b);
-    return js_mknull();
-}
-
-// colorwheel_set_show_bg(colorwheelHandle, show_bool)
-static jsval_t js_lv_colorwheel_set_show_bg(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_colorwheel_set_show_bg: expects colorwheelHandle, show_bool");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    bool show = (bool)js_getnum(args[1]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_show_bg: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_colorwheel_set_show_bg(colorwheel, show);
-    Serial.printf("lv_colorwheel_set_show_bg: handle=%d, show=%s\n", cwHandle, show ? "true" : "false");
-    return js_mknull();
-}
-
-// colorwheel_set_show_rgb(colorwheelHandle, show_bool)
-static jsval_t js_lv_colorwheel_set_show_rgb(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_colorwheel_set_show_rgb: expects colorwheelHandle, show_bool");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    bool show = (bool)js_getnum(args[1]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_show_rgb: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_colorwheel_set_show_rgb(colorwheel, show);
-    Serial.printf("lv_colorwheel_set_show_rgb: handle=%d, show=%s\n", cwHandle, show ? "true" : "false");
-    return js_mknull();
-}
-
-// colorwheel_set_hue(colorwheelHandle, hue)
-static jsval_t js_lv_colorwheel_set_hue(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_colorwheel_set_hue: expects colorwheelHandle, hue");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int hue = (int)js_getnum(args[1]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_hue: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_colorwheel_set_hue(colorwheel, hue);
-    Serial.printf("lv_colorwheel_set_hue: handle=%d, hue=%d\n", cwHandle, hue);
-    return js_mknull();
 }
 
 /******************************************************************************
@@ -3349,22 +3220,15 @@ void register_js_functions() {
 
   // ---------- COLORWHEEL bridging
   js_set(js, global, "lv_colorwheel_create",          js_mkfun(js_lv_colorwheel_create));
-  js_set(js, global, "lv_colorwheel_set_hue",         js_mkfun(js_lv_colorwheel_set_hue));
-  js_set(js, global, "lv_colorwheel_get_hue",         js_mkfun(js_lv_colorwheel_get_hue));
-  js_set(js, global, "lv_colorwheel_set_angle",       js_mkfun(js_lv_colorwheel_set_angle));
-  js_set(js, global, "lv_colorwheel_get_angle",       js_mkfun(js_lv_colorwheel_get_angle));
-  js_set(js, global, "lv_colorwheel_set_style",       js_mkfun(js_lv_colorwheel_set_style));
+  js_set(js, global, "lv_colorwheel_set_hsv",         js_mkfun(js_lv_colorwheel_set_hsv));
+  js_set(js, global, "lv_colorwheel_get_hsv",         js_mkfun(js_lv_colorwheel_get_hsv));
   js_set(js, global, "lv_colorwheel_set_rgb",         js_mkfun(js_lv_colorwheel_set_rgb));
   js_set(js, global, "lv_colorwheel_get_rgb",         js_mkfun(js_lv_colorwheel_get_rgb));
   js_set(js, global, "lv_colorwheel_set_mode",        js_mkfun(js_lv_colorwheel_set_mode));
   js_set(js, global, "lv_colorwheel_get_mode",        js_mkfun(js_lv_colorwheel_get_mode));
-  js_set(js, global, "lv_colorwheel_set_rgb_start",   js_mkfun(js_lv_colorwheel_set_rgb_start));
-  js_set(js, global, "lv_colorwheel_set_rgb_end",     js_mkfun(js_lv_colorwheel_set_rgb_end));
-  js_set(js, global, "lv_colorwheel_set_show_bg",     js_mkfun(js_lv_colorwheel_set_show_bg));
-  js_set(js, global, "lv_colorwheel_set_show_rgb",    js_mkfun(js_lv_colorwheel_set_show_rgb));
 
   // ---------- BUTTON bridging
-  js_set(js, global, "lv_button_create", js_mkfun(js_lv_button_create));
+  js_set(js, global, "lv_btn_create", js_mkfun(js_lv_btn_create));
   js_set(js, global, "lv_button_set_text", js_mkfun(js_lv_button_set_text));
 }
 

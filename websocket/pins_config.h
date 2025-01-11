@@ -15,7 +15,7 @@
 
 #define TFT_WIDTH 240
 #define TFT_HEIGHT 536
-#define SEND_BUF_SIZE (0x4000)  //(LCD_WIDTH * LCD_HEIGHT + 8) / 10
+#define SEND_BUF_SIZE (0x4000)
 
 #define TFT_TE 9
 #define TFT_SDO 8 
@@ -39,3 +39,8 @@
 
 #define PIN_BUTTON_1 0
 #define PIN_BUTTON_2 21
+
+// Define SD card pins.
+#define PIN_SD_CMD 13  // CMD
+#define PIN_SD_CLK 11  // CLK
+#define PIN_SD_D0  12  // Data0

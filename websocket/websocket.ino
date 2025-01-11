@@ -1,63 +1,56 @@
 #include <Arduino.h>
+#include <lvgl.h>
 #include <WiFi.h>
 #include <FS.h>
 #include <SD_MMC.h>
 #include <stdio.h>
-
-// 1) Pin definitions + config
 #include "pins_config.h"
 
-// 2) LVGL + display driver
-#include "rm67162.h"  // Your custom display driver
-#include "lvgl_elk.h"
+// Include fallback & dynamic
+extern void fallback_setup();
+extern void fallback_loop();
+extern void dynamic_js_setup();
+extern void dynamic_js_loop();
 
+// We'll share these with fallback.cpp
+lv_disp_draw_buf_t draw_buf;
+lv_color_t *buf = nullptr;
+bool fallbackActive = false;
 
-/******************************************************************************
- * K) Arduino setup() & loop()
- ******************************************************************************/
 void setup() {
   Serial.begin(115200);
   delay(2000);
 
-  // 1) Mount SD card
+  // Try mounting SD
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
-  if(!SD_MMC.begin("/sdcard", true, false, 1000000)) {
-    Serial.println("Card Mount Failed");
+  bool cardMounted = SD_MMC.begin("/sdcard", true, false, 1000000);
+
+  if (!cardMounted) {
+    // Fallback
+    fallbackActive = true;
+    fallback_setup();
     return;
   }
 
-  // 2) Wi-Fi (station mode)
-  WiFi.mode(WIFI_STA);
-
-  // 3) Initialize LVGL display
-  init_lvgl_display();
-
-  // 4) 'S' driver for normal SD usage
-  init_lv_fs();
-
-  // 4b) 'M' driver for memory usage (GIF)
-  init_mem_fs();
-
-  // 4c) Init Memory storage
-  for (int i = 0; i < MAX_RAM_IMAGES; i++) {
-    g_ram_images[i].used   = false;
-    g_ram_images[i].buffer = NULL;
-    g_ram_images[i].size   = 0;
+  // Check if /script.js exists
+  File f = SD_MMC.open("/script.js");
+  if (!f) {
+    // Fallback
+    fallbackActive = true;
+    f.close();
+    fallback_setup();
+  } else {
+    // Use dynamic JS
+    fallbackActive = false;
+    f.close();
+    dynamic_js_setup();
   }
-
-  // ***** Instead of calling Elk creation + script here,
-  // ***** we spawn a new FreeRTOS task with a larger stack:
-  xTaskCreatePinnedToCore(
-      elk_task,          // function pointer
-      "ElkTask",         // name of the task
-      16384,             // stack size in bytes (16KB)
-      NULL,              // parameter
-      1,                 // priority
-      NULL,              // task handle
-      1                  // pin to core 1 (or 0 if you want)
-  );
 }
 
 void loop() {
-  delay(1000);
+  if (fallbackActive) {
+    fallback_loop();
+  } else {
+    dynamic_js_loop();
+  }
 }

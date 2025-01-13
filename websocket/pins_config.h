@@ -44,3 +44,7 @@
 #define PIN_SD_CMD 13  // CMD
 #define PIN_SD_CLK 11  // CLK
 #define PIN_SD_D0  12  // Data0
+
+// Latching pins.
+#define LATCH_INPUT_PIN  33    // The hold-button pin
+#define LATCH_OUTPUT_PIN 1     // The latch output pin

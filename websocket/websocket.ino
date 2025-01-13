@@ -7,15 +7,18 @@
 #include "fallback.h"        // Fallback header
 #include "dynamic_js.h"      // Dynamic (Elk + JS) header
 
-// Optionally, if you want to read webscreen.yml for Wi-Fi info
-#include <ArduinoJson.h>
-#include <YAMLDuino.h>
-#include <time.h>
+#include <ArduinoJson.h>     // For reading YAML -> JSON
+#include <YAMLDuino.h>       // For deserializeYml()
+#include <time.h>            // For time() if we want to update last_read in the webscreen.yml file
 
-// Global flag to decide fallback vs dynamic
+static bool latchState = false;
+static unsigned long buttonPressStart = 0;
+static const unsigned long holdTime = 1000; // 1 second hold required
+
+// Flag to decide fallback vs. dynamic
 static bool useFallback = false;
 
-// Example function to read /webscreen.yml (like your prior code):
+// Example function to read /webscreen.yml
 static bool readWiFiConfigYAML(const char* path, String &outSSID, String &outPASS) {
   File f = SD_MMC.open(path);
   if(!f) {
@@ -43,10 +46,10 @@ static bool readWiFiConfigYAML(const char* path, String &outSSID, String &outPAS
   time_t now;
   time(&now);
   doc["last_read"] = String((unsigned long)now);
-  
-  // Write updated
+
+  // Write updated YAML
   String updated;
-  if(serializeYml(doc.as<JsonVariant>(), updated)==0) {
+  if(serializeYml(doc.as<JsonVariant>(), updated) == 0) {
     Serial.println("Failed to serialize updated YAML");
     return false;
   }
@@ -65,7 +68,16 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
 
-  // Attempt to mount SD
+  // ---------------------
+  // 1) Latching pin setup
+  // ---------------------
+  pinMode(LATCH_INPUT_PIN, INPUT_PULLUP);
+  pinMode(LATCH_OUTPUT_PIN, OUTPUT);
+  digitalWrite(LATCH_OUTPUT_PIN, LOW); // Start latched off
+
+  // ---------------------
+  // 2) SD + Wi-Fi + fallback/dynamic logic
+  // ---------------------
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
   if(!SD_MMC.begin("/sdcard", true, false, 1000000)) {
     Serial.println("SD card mount fail => fallback");
@@ -87,12 +99,13 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(s.c_str(), p.c_str());
   unsigned long startMs = millis();
-  while(WiFi.status()!=WL_CONNECTED && (millis()-startMs)<15000) {
+  while(WiFi.status() != WL_CONNECTED && (millis() - startMs) < 15000) {
     delay(250);
     Serial.print(".");
   }
   Serial.println();
-  if(WiFi.status()!=WL_CONNECTED) {
+
+  if(WiFi.status() != WL_CONNECTED) {
     Serial.println("Wi-Fi fail => fallback");
     useFallback = true;
     fallback_setup();
@@ -112,12 +125,32 @@ void setup() {
     checkF.close();
   }
 
-  // We have script.js => run dynamic
+  // We have /script.js => run dynamic
   useFallback = false;
   dynamic_js_setup();
 }
 
 void loop() {
+  // ------------------------------------------------------
+  // 3) Latching logic: hold button for 1s => toggle OUTPUT
+  // ------------------------------------------------------
+  bool buttonState = digitalRead(LATCH_INPUT_PIN);
+  if (buttonState == LOW) { // Button pressed
+    if (buttonPressStart == 0) {
+      buttonPressStart = millis();
+    } else if (millis() - buttonPressStart >= holdTime) {
+      latchState = !latchState;
+      digitalWrite(LATCH_OUTPUT_PIN, latchState ? HIGH : LOW);
+      buttonPressStart = 0; // Reset so next hold can occur
+    }
+  } else {
+    // Button not pressed; reset timer
+    buttonPressStart = 0;
+  }
+
+  // ----------------------------
+  // 4) Fallback or Dynamic logic
+  // ----------------------------
   if(useFallback) {
     fallback_loop();
   } else {

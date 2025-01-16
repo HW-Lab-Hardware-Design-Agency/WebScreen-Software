@@ -57,8 +57,8 @@ void fallback_setup() {
   lv_init();
 
   // 2) Power on the screen, set backlight
-  pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, HIGH);
+  //pinMode(PIN_LED, OUTPUT);
+  //digitalWrite(PIN_LED, HIGH);
 
   // 3) Init your display driver
   rm67162_init();

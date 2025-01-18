@@ -5,6 +5,8 @@
 #include <WiFi.h>             // (If you need Wi-Fi info in fallback)
 #include <FS.h>               // Possibly for file ops
 #include <SD_MMC.h>           // If needed for fallback?
+#include "esp_task_wdt.h"
+
 
 // We'll store references to the fallback label + gif
 static lv_obj_t* fb_label = nullptr;
@@ -120,10 +122,11 @@ void fallback_setup() {
 }
 
 void fallback_loop() {
-  // Let LVGL run
-  lv_timer_handler();
+  esp_task_wdt_reset(); // Reset the watchdog periodically
+  lv_timer_handler(); // Ensure LVGL processes its tasks
+  delay(10);          // Small delay for smoother operation
 
-  // If serial data arrives, treat that as an input to update label
+  // Process serial input for dynamic label updates
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     lv_label_set_text(fb_label, line.c_str());
@@ -131,7 +134,8 @@ void fallback_loop() {
     lv_obj_clear_flag(fb_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
 
-    // re-run animation
+    // Restart scrolling animation
     create_scroll_animation(fb_label, 240, -lv_obj_get_height(fb_label), 10000);
   }
+  
 }

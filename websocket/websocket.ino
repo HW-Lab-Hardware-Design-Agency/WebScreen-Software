@@ -7,18 +7,30 @@
 #include "fallback.h"        // Fallback header
 #include "dynamic_js.h"      // Dynamic (Elk + JS) header
 
-#include <ArduinoJson.h>     // For reading YAML -> JSON
-#include <YAMLDuino.h>       // For deserializeYml()
-#include <time.h>            // For time() if we want to update last_read in the webscreen.yml file
+// Optionally, if you want to read webscreen.yml for Wi-Fi info
+#include <ArduinoJson.h>
+#include <YAMLDuino.h>
+#include <time.h>
 
-static bool latchState = false;
-static unsigned long buttonPressStart = 0;
-static const unsigned long holdTime = 1000; // 1 second hold required
+#include <esp_heap_caps.h>
+#include <esp_system.h>
+#include "esp_task_wdt.h"
 
-// Flag to decide fallback vs. dynamic
+// Global flag to decide fallback vs dynamic
 static bool useFallback = false;
 
-// Example function to read /webscreen.yml
+// Latching pin definitions
+#define LATCH_INPUT_PIN 33
+#define LATCH_OUTPUT_PIN 1
+
+// Power control variables
+static unsigned long buttonPressStart = 0;
+static const unsigned long holdTime = 1000; // 1-second hold for power-off
+static const unsigned long debounceDelay = 50; // 50ms debounce time
+static unsigned long lastButtonCheck = 0;
+static bool buttonState = HIGH; // Assume unpressed (HIGH due to INPUT_PULLUP)
+
+// Example function to read /webscreen.yml (like your prior code):
 static bool readWiFiConfigYAML(const char* path, String &outSSID, String &outPASS) {
   File f = SD_MMC.open(path);
   if(!f) {
@@ -47,9 +59,9 @@ static bool readWiFiConfigYAML(const char* path, String &outSSID, String &outPAS
   time(&now);
   doc["last_read"] = String((unsigned long)now);
 
-  // Write updated YAML
+  // Write updated
   String updated;
-  if(serializeYml(doc.as<JsonVariant>(), updated) == 0) {
+  if(serializeYml(doc.as<JsonVariant>(), updated)==0) {
     Serial.println("Failed to serialize updated YAML");
     return false;
   }
@@ -64,48 +76,89 @@ static bool readWiFiConfigYAML(const char* path, String &outSSID, String &outPAS
   return true;
 }
 
+// Function to enter deep sleep
+void enterDeepSleep() {
+  Serial.println("Entering deep sleep...");
+  // Configure the latch button as the wake-up source
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)LATCH_INPUT_PIN, LOW);
+  // Set latch output low (optional visual indication of power off)
+  digitalWrite(LATCH_OUTPUT_PIN, LOW);
+  // Enter deep sleep
+  esp_deep_sleep_start();
+}
+
+// Function to initialize power state
+void initializePowerState() {
+  pinMode(LATCH_INPUT_PIN, INPUT_PULLUP); // Button with pull-up
+  pinMode(LATCH_OUTPUT_PIN, OUTPUT);     // Latching output
+  digitalWrite(LATCH_OUTPUT_PIN, HIGH);  // Start with power on
+}
+
+// Function to handle button press logic
+void handlePowerButton() {
+  unsigned long currentMillis = millis();
+
+  // Debounce check
+  if ((currentMillis - lastButtonCheck) < debounceDelay) {
+    return;
+  }
+  lastButtonCheck = currentMillis;
+
+  // Read button state
+  bool currentButtonState = digitalRead(LATCH_INPUT_PIN);
+
+  if (currentButtonState == LOW) { // Button is pressed
+    if (buttonPressStart == 0) {
+      buttonPressStart = currentMillis; // Start timing
+    } else if ((currentMillis - buttonPressStart) >= holdTime) {
+      Serial.println("Button held long enough. Powering off...");
+      enterDeepSleep();
+    }
+  } else {
+    buttonPressStart = 0; // Reset timing if button is released
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
 
-  // ---------------------
-  // 1) Latching pin setup
-  // ---------------------
-  pinMode(LATCH_INPUT_PIN, INPUT_PULLUP);
-  pinMode(LATCH_OUTPUT_PIN, OUTPUT);
-  digitalWrite(LATCH_OUTPUT_PIN, LOW); // Start latched off
+  // Print last reset reason for debugging
+  esp_reset_reason_t reset_reason = esp_reset_reason();
+  Serial.printf("Last reset reason: %d\n", reset_reason);
 
-  // ---------------------
-  // 2) SD + Wi-Fi + fallback/dynamic logic
-  // ---------------------
+  // Disable watchdog for debugging
+  esp_task_wdt_delete(NULL);
+
+  // SD card initialization
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
-  if(!SD_MMC.begin("/sdcard", true, false, 1000000)) {
+  if (!SD_MMC.begin("/sdcard", true, false, 1000000)) {
     Serial.println("SD card mount fail => fallback");
     useFallback = true;
     fallback_setup();
     return;
   }
 
-  // Optionally read /webscreen.yml for Wi-Fi
+  // Wi-Fi configuration and setup
   String s, p;
-  if(!readWiFiConfigYAML("/webscreen.yml", s, p)) {
+  if (!readWiFiConfigYAML("/webscreen.yml", s, p)) {
     Serial.println("Failed to read /webscreen.yml => fallback");
     useFallback = true;
     fallback_setup();
     return;
   }
 
-  // Connect Wi-Fi
   WiFi.mode(WIFI_STA);
   WiFi.begin(s.c_str(), p.c_str());
   unsigned long startMs = millis();
-  while(WiFi.status() != WL_CONNECTED && (millis() - startMs) < 15000) {
+  while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < 15000) {
     delay(250);
     Serial.print(".");
+    esp_task_wdt_reset(); // Feed watchdog during connection attempts
   }
   Serial.println();
 
-  if(WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Wi-Fi fail => fallback");
     useFallback = true;
     fallback_setup();
@@ -113,44 +166,27 @@ void setup() {
   }
   Serial.println("Wi-Fi connected => " + WiFi.localIP().toString());
 
-  // Check if /script.js exists
-  {
-    File checkF = SD_MMC.open("/script.js");
-    if(!checkF) {
-      Serial.println("No script.js => fallback");
-      useFallback = true;
-      fallback_setup();
-      return;
-    }
-    checkF.close();
+  // Check for /script.js
+  File checkF = SD_MMC.open("/script.js");
+  if (!checkF) {
+    Serial.println("No script.js => fallback");
+    useFallback = true;
+    fallback_setup();
+    return;
   }
+  checkF.close();
 
-  // We have /script.js => run dynamic
+  // Dynamic JS setup
   useFallback = false;
   dynamic_js_setup();
 }
 
-void loop() {
-  // ------------------------------------------------------
-  // 3) Latching logic: hold button for 1s => toggle OUTPUT
-  // ------------------------------------------------------
-  bool buttonState = digitalRead(LATCH_INPUT_PIN);
-  if (buttonState == LOW) { // Button pressed
-    if (buttonPressStart == 0) {
-      buttonPressStart = millis();
-    } else if (millis() - buttonPressStart >= holdTime) {
-      latchState = !latchState;
-      digitalWrite(LATCH_OUTPUT_PIN, latchState ? HIGH : LOW);
-      buttonPressStart = 0; // Reset so next hold can occur
-    }
-  } else {
-    // Button not pressed; reset timer
-    buttonPressStart = 0;
-  }
 
-  // ----------------------------
-  // 4) Fallback or Dynamic logic
-  // ----------------------------
+void loop() {
+  // Handle power button logic
+  handlePowerButton();
+
+  // Run appropriate logic
   if(useFallback) {
     fallback_loop();
   } else {

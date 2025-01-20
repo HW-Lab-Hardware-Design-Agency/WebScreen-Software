@@ -1,6 +1,15 @@
 #pragma once
 
 #include <lvgl.h>
+#include <HTTPClient.h>
+
+// For BLE
+#include <NimBLEDevice.h>
+
+// NimBLE globals
+static NimBLEServer*         g_bleServer    = nullptr;
+static NimBLECharacteristic* g_bleChar      = nullptr;
+static bool                  g_bleConnected = false;
 
 // 4) Elk
 extern "C" {
@@ -33,12 +42,6 @@ void init_ram_images() {
     // g_ram_images[i].dsc can remain zeroed
   }
 }
-
-
-
-
-
-
 
 /******************************************************************************
  * C) "S" Driver for Reading Files from SD
@@ -1576,183 +1579,6 @@ static jsval_t js_lv_chart_get_y_array(struct js *js, jsval_t *args, int nargs) 
 // if your examples require them.
 
 
-/*******************************************************
- * CHECKBOX BRIDGING
- *******************************************************/
-
-static jsval_t js_lv_checkbox_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *cb = lv_checkbox_create(lv_scr_act());
-    // Return handle
-    int handle = store_lv_obj(cb);
-    Serial.printf("lv_checkbox_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_checkbox_set_text(struct js *js, jsval_t *args, int nargs) {
-    // (checkboxHandle, text)
-    if(nargs < 2) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    const char* txt = js_str(js, args[1]);
-    if(!txt) return js_mknull();
-
-    lv_obj_t *cb = get_lv_obj(h);
-    if(!cb) return js_mknull();
-
-    lv_checkbox_set_text(cb, txt);
-    return js_mknull();
-}
-
-
-/*******************************************************
- * MENU BRIDGING
- *******************************************************/
-
-static jsval_t js_lv_menu_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *menu = lv_menu_create(lv_scr_act());
-    // Return handle
-    int handle = store_lv_obj(menu);
-    Serial.printf("lv_menu_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_menu_page_create(struct js *js, jsval_t *args, int nargs) {
-    // (menuHandle)
-    if(nargs < 1) return js_mknull();
-    int mh = (int)js_getnum(args[0]);
-
-    lv_obj_t *menu = get_lv_obj(mh);
-    if(!menu) return js_mknull();
-
-    lv_obj_t *page = lv_menu_page_create(menu, NULL);
-    int handle = store_lv_obj(page);
-    Serial.printf("lv_menu_page_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_menu_set_page(struct js *js, jsval_t *args, int nargs) {
-    // (menuH, pageH)
-    if(nargs < 2) return js_mknull();
-    int mh = (int)js_getnum(args[0]);
-    int ph = (int)js_getnum(args[1]);
-
-    lv_obj_t *menu = get_lv_obj(mh);
-    lv_obj_t *page = get_lv_obj(ph);
-    if(!menu || !page) return js_mknull();
-
-    lv_menu_set_page(menu, page);
-    return js_mknull();
-}
-
-static jsval_t js_lv_menu_cont_create(struct js *js, jsval_t *args, int nargs) {
-    // (pageH)
-    if(nargs < 1) return js_mknull();
-    int ph = (int)js_getnum(args[0]);
-    lv_obj_t *page = get_lv_obj(ph);
-    if(!page) return js_mknull();
-
-    lv_obj_t *cont = lv_menu_cont_create(page);
-    int handle = store_lv_obj(cont);
-    Serial.printf("lv_menu_cont_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_menu_set_load_page_event(struct js *js, jsval_t *args, int nargs) {
-    // (menuH, containerH, pageH)
-    if(nargs < 3) return js_mknull();
-    int mh = (int)js_getnum(args[0]);
-    int ch = (int)js_getnum(args[1]);
-    int ph = (int)js_getnum(args[2]);
-
-    lv_obj_t *menu = get_lv_obj(mh);
-    lv_obj_t *cont = get_lv_obj(ch);
-    lv_obj_t *page = get_lv_obj(ph);
-    if(!menu || !cont || !page) return js_mknull();
-
-    // Ties an event to load "page" when user clicks "cont" item
-    lv_menu_set_load_page_event(menu, cont, page);
-    return js_mknull();
-}
-
-static jsval_t js_lv_menu_set_mode_root_back_btn(struct js *js, jsval_t *args, int nargs) {
-    // (menuHandle, modeEnabled)
-    if(nargs < 2) return js_mknull();
-    int h       = (int)js_getnum(args[0]);
-    bool enable = (bool)js_getnum(args[1]);
-
-    lv_obj_t *menu = get_lv_obj(h);
-    if(!menu) return js_mknull();
-
-    lv_menu_set_mode_root_back_btn(menu, enable ? LV_MENU_ROOT_BACK_BTN_ENABLED
-                                                : LV_MENU_ROOT_BACK_BTN_DISABLED);
-    return js_mknull();
-}
-
-static jsval_t js_lv_menu_back_btn_is_root(struct js *js, jsval_t *args, int nargs) {
-    // (menuHandle, btnHandle) -> returns bool
-    if(nargs < 2) return js_mkfalse();
-    int mh = (int)js_getnum(args[0]);
-    int bh = (int)js_getnum(args[1]);
-
-    lv_obj_t *menu = get_lv_obj(mh);
-    lv_obj_t *btn  = get_lv_obj(bh);
-    if(!menu || !btn) return js_mkfalse();
-
-    bool isRoot = lv_menu_back_btn_is_root(menu, btn);
-    return isRoot ? js_mktrue() : js_mkfalse();
-}
-
-static jsval_t js_lv_menu_separator_create(struct js *js, jsval_t *args, int nargs) {
-    // (pageHandle) -> returns handle
-    if(nargs < 1) return js_mknum(-1);
-    int ph = (int)js_getnum(args[0]);
-
-    lv_obj_t *page = get_lv_obj(ph);
-    if(!page) return js_mknum(-1);
-
-    lv_obj_t *sep = lv_menu_separator_create(page);
-    int handle = store_lv_obj(sep);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_menu_section_create(struct js *js, jsval_t *args, int nargs) {
-    // (pageHandle) -> returns handle
-    if(nargs < 1) return js_mknum(-1);
-    int ph = (int)js_getnum(args[0]);
-
-    lv_obj_t *page = get_lv_obj(ph);
-    if(!page) return js_mknum(-1);
-
-    lv_obj_t *sec = lv_menu_section_create(page);
-    int handle = store_lv_obj(sec);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_menu_set_sidebar_page(struct js *js, jsval_t *args, int nargs) {
-    // (menuHandle, pageHandleOrNull)
-    if(nargs<2) return js_mknull();
-    int mh = (int)js_getnum(args[0]);
-    int ph = (int)js_getnum(args[1]); // might be -1 if we pass null from JS
-
-    lv_obj_t *menu = get_lv_obj(mh);
-    if(!menu) return js_mknull();
-
-    lv_obj_t *page = get_lv_obj(ph); // if ph == -1 => null
-    lv_menu_set_sidebar_page(menu, page);
-    return js_mknull();
-}
-
-static jsval_t js_lv_menu_clear_history(struct js *js, jsval_t *args, int nargs) {
-    // (menuHandle)
-    if(nargs<1) return js_mknull();
-    int mh = (int)js_getnum(args[0]);
-
-    lv_obj_t *menu = get_lv_obj(mh);
-    if(!menu) return js_mknull();
-
-    lv_menu_clear_history(menu);
-    return js_mknull();
-}
-
 /********************************************************************************
  * METER
  ********************************************************************************/
@@ -2392,231 +2218,6 @@ static jsval_t js_lv_spangroup_refr_mode(struct js *js, jsval_t *args, int nargs
 }
 
 /********************************************************************************
- * TEXTAREA
- ********************************************************************************/
-
-static jsval_t js_lv_textarea_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t * ta = lv_textarea_create(lv_scr_act());
-    int handle = store_lv_obj(ta);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_textarea_set_password_mode(struct js *js, jsval_t *args, int nargs) {
-    // (taH, bool)
-    if(nargs<2) return js_mknull();
-    int h  = (int)js_getnum(args[0]);
-    bool b = (bool)js_getnum(args[1]);
-
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    lv_textarea_set_password_mode(ta, b);
-    return js_mknull();
-}
-
-static jsval_t js_lv_textarea_set_one_line(struct js *js, jsval_t *args, int nargs) {
-    // (taH, bool)
-    if(nargs<2) return js_mknull();
-    int h  = (int)js_getnum(args[0]);
-    bool b = (bool)js_getnum(args[1]);
-
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    lv_textarea_set_one_line(ta, b);
-    return js_mknull();
-}
-
-static jsval_t js_lv_textarea_set_accepted_chars(struct js *js, jsval_t *args, int nargs) {
-    // (taH, "0123456789:")
-    if(nargs<2) return js_mknull();
-    int h      = (int)js_getnum(args[0]);
-    const char* c = js_str(js, args[1]);
-    if(!c) return js_mknull();
-
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    lv_textarea_set_accepted_chars(ta, c);
-    return js_mknull();
-}
-
-static jsval_t js_lv_textarea_set_max_length(struct js *js, jsval_t *args, int nargs) {
-    // (taH, len)
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int len = (int)js_getnum(args[1]);
-
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    lv_textarea_set_max_length(ta, len);
-    return js_mknull();
-}
-
-static jsval_t js_lv_textarea_set_text(struct js *js, jsval_t *args, int nargs) {
-    // (taH, text)
-    if(nargs<2) return js_mknull();
-    int h  = (int)js_getnum(args[0]);
-    const char* t = js_str(js, args[1]);
-    if(!t) return js_mknull();
-
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    lv_textarea_set_text(ta, t);
-    return js_mknull();
-}
-
-static jsval_t js_lv_textarea_get_text(struct js *js, jsval_t *args, int nargs) {
-    // (taH) -> string
-    if(nargs<1) return js_mkstr(js,"",0);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mkstr(js,"",0);
-
-    const char* txt = lv_textarea_get_text(ta);
-    if(!txt) txt="";
-    return js_mkstr(js, txt, strlen(txt));
-}
-
-static jsval_t js_lv_textarea_set_cursor_pos(struct js *js, jsval_t *args, int nargs) {
-    // (taH, pos)
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int pos = (int)js_getnum(args[1]);
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    lv_textarea_set_cursor_pos(ta, pos);
-    return js_mknull();
-}
-
-static jsval_t js_lv_textarea_add_char(struct js *js, jsval_t *args, int nargs) {
-    // (taH, char)
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    const char* c = js_str(js, args[1]);
-    if(!c) return js_mknull();
-
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    // Just add first char of the string
-    if(strlen(c)>0) {
-        lv_textarea_add_char(ta, c[0]);
-    }
-    return js_mknull();
-}
-
-static jsval_t js_lv_textarea_del_char(struct js *js, jsval_t *args, int nargs) {
-    // (taH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *ta = get_lv_obj(h);
-    if(!ta) return js_mknull();
-
-    lv_textarea_del_char(ta);
-    return js_mknull();
-}
-
-/********************************************************************************
- * KEYBOARD
- ********************************************************************************/
-static jsval_t js_lv_keyboard_create(struct js *js, jsval_t *args, int nargs) {
-    // no param
-    lv_obj_t *kb = lv_keyboard_create(lv_scr_act());
-    int handle = store_lv_obj(kb);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_keyboard_set_textarea(struct js *js, jsval_t *args, int nargs) {
-    // (kbH, taH)
-    if(nargs<2) return js_mknull();
-    int kbH = (int)js_getnum(args[0]);
-    int taH = (int)js_getnum(args[1]);
-
-    lv_obj_t *kb = get_lv_obj(kbH);
-    if(!kb) return js_mknull();
-    lv_obj_t *ta = get_lv_obj(taH);
-    // If taH is -1 => pass NULL
-    lv_keyboard_set_textarea(kb, ta);
-    return js_mknull();
-}
-
-static jsval_t js_lv_keyboard_set_mode(struct js *js, jsval_t *args, int nargs) {
-    // (kbH, mode) e.g. LV_KEYBOARD_MODE_TEXT, LV_KEYBOARD_MODE_NUMBER, etc.
-    if(nargs<2) return js_mknull();
-    int kbH  = (int)js_getnum(args[0]);
-    int mode = (int)js_getnum(args[1]);
-    lv_obj_t *kb = get_lv_obj(kbH);
-    if(!kb) return js_mknull();
-
-    lv_keyboard_set_mode(kb, (lv_keyboard_mode_t)mode);
-    return js_mknull();
-}
-
-/********************************************************************************
- * TABVIEW
- ********************************************************************************/
-static jsval_t js_lv_tabview_create(struct js *js, jsval_t *args, int nargs) {
-    // (parent or -1 => scr), dirEnum, tabBtnSize
-    // For simplicity, ignore the optional or pass -1 => default
-    int parentH = -1;
-    int dir     = LV_DIR_TOP;
-    int size    = 50;
-    if(nargs>0) parentH = (int)js_getnum(args[0]);
-    if(nargs>1) dir     = (int)js_getnum(args[1]);
-    if(nargs>2) size    = (int)js_getnum(args[2]);
-
-    lv_obj_t *parent = parentH<0? lv_scr_act() : get_lv_obj(parentH);
-    if(!parent) parent = lv_scr_act();
-
-    lv_obj_t *tv = lv_tabview_create(parent, (lv_dir_t)dir, size);
-    int handle = store_lv_obj(tv);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_tabview_add_tab(struct js *js, jsval_t *args, int nargs) {
-    // (tabviewH, "Tab name") => returns handle of the newly created tab page
-    if(nargs<2) return js_mknum(-1);
-    int tvH = (int)js_getnum(args[0]);
-    const char* tname = js_str(js, args[1]);
-    if(!tname) return js_mknum(-1);
-
-    lv_obj_t *tv = get_lv_obj(tvH);
-    if(!tv) return js_mknum(-1);
-
-    lv_obj_t * tabpage = lv_tabview_add_tab(tv, tname);
-    int handle = store_lv_obj(tabpage);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_tabview_get_tab_btns(struct js *js, jsval_t *args, int nargs) {
-    // (tabviewH) => handle to the button matrix
-    if(nargs<1) return js_mknum(-1);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *tv = get_lv_obj(h);
-    if(!tv) return js_mknum(-1);
-
-    lv_obj_t * tabBtns = lv_tabview_get_tab_btns(tv);
-    int handle = store_lv_obj(tabBtns);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_tabview_get_content(struct js *js, jsval_t *args, int nargs) {
-    // (tabviewH) => handle to the content container
-    if(nargs<1) return js_mknum(-1);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *tv = get_lv_obj(h);
-    if(!tv) return js_mknum(-1);
-
-    lv_obj_t * cont = lv_tabview_get_content(tv);
-    int handle = store_lv_obj(cont);
-    return js_mknum(handle);
-}
-
-/********************************************************************************
  * WIN (Window)
  ********************************************************************************/
 static jsval_t js_lv_win_create(struct js *js, jsval_t *args, int nargs) {
@@ -2861,223 +2462,157 @@ static jsval_t js_lv_led_set_color(struct js *js, jsval_t *args, int nargs) {
     return js_mknull();
 }
 
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~ 1) HTTP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// http_get(url)
+static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<1) return js_mkstr(js,"",0);
+  const char* url = js_str(js, args[0]);
+  if(!url) return js_mkstr(js,"",0);
 
-/*******************************************************
- * DROPDOWN BRIDGING
- *******************************************************/
-
-static jsval_t js_lv_dropdown_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *dd = lv_dropdown_create(lv_scr_act());
-    int handle = store_lv_obj(dd);
-    Serial.printf("lv_dropdown_create => handle %d\n", handle);
-    return js_mknum(handle);
+  HTTPClient http;
+  http.begin(url);
+  int httpCode = http.GET();
+  if(httpCode<=0) {
+    http.end();
+    return js_mkstr(js,"",0);
+  }
+  String payload = http.getString();
+  http.end();
+  return js_mkstr(js, payload.c_str(), payload.length());
 }
 
-static jsval_t js_lv_dropdown_set_options(struct js *js, jsval_t *args, int nargs) {
-    // (ddH, "Apple\nBanana\n...")
-    if(nargs < 2) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    const char* opts = js_str(js, args[1]);
-    if(!opts) return js_mknull();
+// http_post(url, body)
+static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<2) return js_mkstr(js,"",0);
+  const char* url  = js_str(js, args[0]);
+  const char* body = js_str(js, args[1]);
+  if(!url || !body) return js_mkstr(js,"",0);
 
-    lv_obj_t *dd = get_lv_obj(h);
-    if(!dd) return js_mknull();
-
-    lv_dropdown_set_options(dd, opts);
-    return js_mknull();
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  int httpCode = http.POST((uint8_t*)body, strlen(body));
+  if(httpCode<=0) {
+    http.end();
+    return js_mkstr(js,"",0);
+  }
+  String payload = http.getString();
+  http.end();
+  return js_mkstr(js, payload.c_str(), payload.length());
 }
 
-static jsval_t js_lv_dropdown_get_selected_str(struct js *js, jsval_t *args, int nargs) {
-    // (ddH)
-    if(nargs < 1) return js_mkstr(js, "", 0);
-    int h = (int)js_getnum(args[0]);
+// Similarly for PUT, PATCH, DELETE (example: http_delete)
+static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<1) return js_mkstr(js,"",0);
+  const char* url = js_str(js, args[0]);
+  if(!url) return js_mkstr(js,"",0);
 
-    lv_obj_t *dd = get_lv_obj(h);
-    if(!dd) return js_mkstr(js, "", 0);
-
-    char buf[64];
-    lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
-    return js_mkstr(js, buf, strlen(buf));
+  HTTPClient http;
+  http.begin(url);
+  int httpCode = http.sendRequest("DELETE");
+  if(httpCode<=0) {
+    http.end();
+    return js_mkstr(js,"",0);
+  }
+  String payload = http.getString();
+  http.end();
+  return js_mkstr(js, payload.c_str(), payload.length());
 }
 
-// Bridging function: lv_colorwheel_create
-// lv_colorwheel_create(parentHandle, knob_recolor, x, y, diameter) => returns handle
-static jsval_t js_lv_colorwheel_create(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 5) {
-        Serial.println("lv_colorwheel_create: expects parentHandle, knob_recolor, x, y, diameter");
-        return js_mknull();
-    }
-    int parentHandle = (int)js_getnum(args[0]);
-    bool knob_recolor = (bool)js_getbool(args[1]);
-    int x = (int)js_getnum(args[2]);
-    int y = (int)js_getnum(args[3]);
-    int diameter = (int)js_getnum(args[4]);
 
-    lv_obj_t *parent = get_lv_obj(parentHandle);
-    if(!parent) {
-        Serial.println("lv_colorwheel_create: invalid parent handle");
-        return js_mknull();
-    }
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~ 4) Extended SD ops ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// We already have sd_list_dir, sd_read_file, sd_write_file. Add file delete:
+static jsval_t js_sd_delete_file(struct js *js, jsval_t *args, int nargs) {
+  if(nargs<1) return js_mkfalse();
+  const char* path = js_str(js, args[0]);
+  if(!path) return js_mkfalse();
 
-    lv_obj_t *colorwheel = lv_colorwheel_create(parent, knob_recolor);
-    lv_obj_set_pos(colorwheel, x, y);
-    lv_obj_set_size(colorwheel, diameter, diameter); // Diameter
-
-    int handle = store_lv_obj(colorwheel);
-    Serial.printf("lv_colorwheel_create => handle %d\n", handle);
-    return js_mknum(handle);
+  String fullPath = String(path);
+  if(SD_MMC.exists(fullPath)) {
+    bool ok = SD_MMC.remove(fullPath);
+    return ok ? js_mktrue() : js_mkfalse();
+  }
+  return js_mkfalse();
 }
 
-// lv_colorwheel_set_hsv(colorwheelHandle, hue, saturation, value) => returns boolean
-static jsval_t js_lv_colorwheel_set_hsv(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 4) {
-        Serial.println("lv_colorwheel_set_hsv: expects colorwheelHandle, hue, saturation, value");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int hue = (int)js_getnum(args[1]);
-    int saturation = (int)js_getnum(args[2]);
-    int value = (int)js_getnum(args[3]);
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~ 5) Basic BLE bridging ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Example usage from JS:
+//   ble_init("ESP32-S3 Demo", "4fafc201-1fb5-459e-8fcc-c5c9c331914b", "beb5483e-36e1-4688-b7f5-ea07361b26a8");
+//   ble_write("Hello from JS!");
+//   if( ble_is_connected() ) { ... }
 
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_hsv: invalid colorwheel handle");
-        return js_mknull();
-    }
+// Callbacks for NimBLE
+class MyServerCallbacks : public NimBLEServerCallbacks {
+ public:
+  void onConnect(NimBLEServer* pServer) {
+    g_bleConnected = true;
+    Serial.println("BLE device connected");
+  }
 
-    lv_color_hsv_t hsv;
-    hsv.h = hue;
-    hsv.s = saturation;
-    hsv.v = value;
+  void onDisconnect(NimBLEServer* pServer) {
+    g_bleConnected = false;
+    Serial.println("BLE device disconnected");
+    pServer->startAdvertising();
+  }
+};
 
-    bool changed = lv_colorwheel_set_hsv(colorwheel, hsv);
-    Serial.printf("lv_colorwheel_set_hsv: handle=%d, hue=%d, sat=%d, val=%d, changed=%s\n", cwHandle, hue, saturation, value, changed ? "true" : "false");
-    
-    // Return JavaScript boolean value
-    return changed ? js_mktrue() : js_mkfalse();
+class MyCharCallbacks : public NimBLECharacteristicCallbacks {
+ public:
+  void onWrite(NimBLECharacteristic* pCharacteristic) {
+    std::string rxData = pCharacteristic->getValue();
+    Serial.printf("BLE Received: %s\n", rxData.c_str());
+  }
+};
+
+// ble_init(devName, serviceUUID, charUUID)
+static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 3) return js_mkfalse();
+  const char* devName  = js_str(js, args[0]);
+  const char* svcUUID  = js_str(js, args[1]);
+  const char* charUUID = js_str(js, args[2]);
+  if(!devName || !svcUUID || !charUUID) return js_mkfalse();
+
+  // Initialize NimBLE
+  NimBLEDevice::init(devName);
+
+  // Create server
+  g_bleServer = NimBLEDevice::createServer();
+  g_bleServer->setCallbacks(new MyServerCallbacks());
+
+  // Create a BLE service
+  NimBLEService* pService = g_bleServer->createService(svcUUID);
+
+  // Create a BLE Characteristic
+  g_bleChar = pService->createCharacteristic(
+      charUUID,
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+  );
+  g_bleChar->setCallbacks(new MyCharCallbacks());
+
+  // Start the service
+  pService->start();
+
+  // Start advertising
+  g_bleServer->getAdvertising()->start();
+  Serial.println("NimBLE advertising started");
+  return js_mktrue();
 }
 
-// lv_colorwheel_get_hsv(colorwheelHandle) => returns {hue, saturation, value}
-static jsval_t js_lv_colorwheel_get_hsv(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 1) {
-        Serial.println("lv_colorwheel_get_hsv: expects colorwheelHandle");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_get_hsv: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_color_hsv_t hsv = lv_colorwheel_get_hsv(colorwheel);
-
-    // Create a JS object to return {hue, saturation, value}
-    jsval_t obj = js_mkobj(js);
-    js_set(js, obj, "hue",        js_mknum((double)hsv.h));
-    js_set(js, obj, "saturation", js_mknum((double)hsv.s));
-    js_set(js, obj, "value",      js_mknum((double)hsv.v));
-    Serial.printf("lv_colorwheel_get_hsv: handle=%d, hue=%d, sat=%d, val=%d\n", cwHandle, hsv.h, hsv.s, hsv.v);
-    return obj;
+// ble_is_connected() => bool
+static jsval_t js_ble_is_connected(struct js *js, jsval_t *args, int nargs) {
+  return g_bleConnected ? js_mktrue() : js_mkfalse();
 }
 
-// lv_colorwheel_set_rgb(colorwheelHandle, r, g, b) => returns boolean
-static jsval_t js_lv_colorwheel_set_rgb(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 4) {
-        Serial.println("lv_colorwheel_set_rgb: expects colorwheelHandle, r, g, b");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int r = (int)js_getnum(args[1]);
-    int g = (int)js_getnum(args[2]);
-    int b = (int)js_getnum(args[3]);
+// ble_write(str)
+static jsval_t js_ble_write(struct js *js, jsval_t *args, int nargs) {
+  if(!g_bleChar) return js_mkfalse();
+  if(nargs < 1) return js_mkfalse();
+  const char* data = js_str(js, args[0]);
+  if(!data) return js_mkfalse();
 
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_rgb: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_color_t color = lv_color_make(r, g, b);
-    bool changed = lv_colorwheel_set_rgb(colorwheel, color);
-    Serial.printf("lv_colorwheel_set_rgb: handle=%d, r=%d, g=%d, b=%d, changed=%s\n", cwHandle, r, g, b, changed ? "true" : "false");
-
-    // Return JavaScript boolean value
-    return changed ? js_mktrue() : js_mkfalse();
-}
-
-// lv_colorwheel_get_rgb(colorwheelHandle) => returns {r, g, b}
-static jsval_t js_lv_colorwheel_get_rgb(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 1) {
-        Serial.println("lv_colorwheel_get_rgb: expects colorwheelHandle");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_get_rgb: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_color_t color = lv_colorwheel_get_rgb(colorwheel);
-    // Extract RGB components
-    uint8_t r = (color.full >> 11) & 0x1F; // 5 bits
-    uint8_t g = (color.full >> 5) & 0x3F;  // 6 bits
-    uint8_t b = color.full & 0x1F;         // 5 bits
-
-    // Scale to 0-255
-    r = (r * 255) / 31;
-    g = (g * 255) / 63;
-    b = (b * 255) / 31;
-
-    // Create a JS object to return {r, g, b}
-    jsval_t obj = js_mkobj(js);
-    js_set(js, obj, "r", js_mknum((double)r));
-    js_set(js, obj, "g", js_mknum((double)g));
-    js_set(js, obj, "b", js_mknum((double)b));
-    Serial.printf("lv_colorwheel_get_rgb: handle=%d, r=%d, g=%d, b=%d\n", cwHandle, r, g, b);
-    return obj;
-}
-
-// lv_colorwheel_set_mode(colorwheelHandle, modeEnum) => returns void
-static jsval_t js_lv_colorwheel_set_mode(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_colorwheel_set_mode: expects colorwheelHandle, mode");
-        return js_mknull();
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-    int mode = (int)js_getnum(args[1]); // e.g., LV_COLORWHEEL_MODE_HUE, LV_COLORWHEEL_MODE_SATURATION, LV_COLORWHEEL_MODE_VALUE
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_set_mode: invalid colorwheel handle");
-        return js_mknull();
-    }
-
-    lv_colorwheel_set_mode(colorwheel, (lv_colorwheel_mode_t)mode);
-    Serial.printf("lv_colorwheel_set_mode: handle=%d, mode=%d\n", cwHandle, mode);
-    return js_mknull();
-}
-
-// lv_colorwheel_get_mode(colorwheelHandle) => returns modeEnum
-static jsval_t js_lv_colorwheel_get_mode(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 1) {
-        Serial.println("lv_colorwheel_get_mode: expects colorwheelHandle");
-        return js_mknum(-1);
-    }
-    int cwHandle = (int)js_getnum(args[0]);
-
-    lv_obj_t *colorwheel = get_lv_obj(cwHandle);
-    if(!colorwheel) {
-        Serial.println("lv_colorwheel_get_mode: invalid colorwheel handle");
-        return js_mknum(-1);
-    }
-
-    lv_colorwheel_mode_t mode = lv_colorwheel_get_color_mode(colorwheel);
-    Serial.printf("lv_colorwheel_get_mode: handle=%d, mode=%d\n", cwHandle, mode);
-    return js_mknum((double)mode);
+  g_bleChar->setValue(data);
+  g_bleChar->notify();
+  return js_mktrue();
 }
 
 /******************************************************************************
@@ -3092,9 +2627,22 @@ void register_js_functions() {
   js_set(js, global, "wifi_status",  js_mkfun(js_wifi_status));
   js_set(js, global, "wifi_get_ip",  js_mkfun(js_wifi_get_ip));
   js_set(js, global, "delay",        js_mkfun(js_delay));
+
+  // HTTP
+  js_set(js, global, "http_get",    js_mkfun(js_http_get));
+  js_set(js, global, "http_post",   js_mkfun(js_http_post));
+  js_set(js, global, "http_delete", js_mkfun(js_http_delete));
+
+  // SD functions
   js_set(js, global, "sd_read_file", js_mkfun(js_sd_read_file));
   js_set(js, global, "sd_write_file",js_mkfun(js_sd_write_file));
   js_set(js, global, "sd_list_dir",  js_mkfun(js_sd_list_dir));
+  js_set(js, global, "sd_delete_file", js_mkfun(js_sd_delete_file));
+
+  // BLE
+  js_set(js, global, "ble_init",         js_mkfun(js_ble_init));
+  js_set(js, global, "ble_is_connected", js_mkfun(js_ble_is_connected));
+  js_set(js, global, "ble_write",        js_mkfun(js_ble_write));
 
   // GIF from memory
   js_set(js, global, "show_gif_from_sd", js_mkfun(js_show_gif_from_sd));
@@ -3167,23 +2715,6 @@ void register_js_functions() {
   js_set(js, global, "obj_set_style_clip_corner", js_mkfun(js_obj_set_style_clip_corner));
   js_set(js, global, "obj_set_style_base_dir",  js_mkfun(js_obj_set_style_base_dir));
 
-  // ---------- CHECKBOX bridging
-  js_set(js, global, "lv_checkbox_create",      js_mkfun(js_lv_checkbox_create));
-  js_set(js, global, "lv_checkbox_set_text",    js_mkfun(js_lv_checkbox_set_text));
-
-  // ---------- MENU bridging
-  js_set(js, global, "lv_menu_create",          js_mkfun(js_lv_menu_create));
-  js_set(js, global, "lv_menu_page_create",     js_mkfun(js_lv_menu_page_create));
-  js_set(js, global, "lv_menu_set_page",        js_mkfun(js_lv_menu_set_page));
-  js_set(js, global, "lv_menu_cont_create",     js_mkfun(js_lv_menu_cont_create));
-  js_set(js, global, "lv_menu_set_load_page_event", js_mkfun(js_lv_menu_set_load_page_event));
-  js_set(js, global, "lv_menu_set_mode_root_back_btn",  js_mkfun(js_lv_menu_set_mode_root_back_btn));
-  js_set(js, global, "lv_menu_back_btn_is_root",        js_mkfun(js_lv_menu_back_btn_is_root));
-  js_set(js, global, "lv_menu_separator_create",        js_mkfun(js_lv_menu_separator_create));
-  js_set(js, global, "lv_menu_section_create",          js_mkfun(js_lv_menu_section_create));
-  js_set(js, global, "lv_menu_set_sidebar_page",        js_mkfun(js_lv_menu_set_sidebar_page));
-  js_set(js, global, "lv_menu_clear_history",           js_mkfun(js_lv_menu_clear_history));
-
   //==================== METER ============================
   js_set(js, global, "lv_meter_create",                   js_mkfun(js_lv_meter_create));
   js_set(js, global, "lv_meter_add_scale",                js_mkfun(js_lv_meter_add_scale));
@@ -3237,29 +2768,6 @@ void register_js_functions() {
   js_set(js, global, "lv_span_set_text_static",  js_mkfun(js_lv_span_set_text_static));
   js_set(js, global, "lv_spangroup_refr_mode",   js_mkfun(js_lv_spangroup_refr_mode));
 
-  //==================== TEXTAREA (more) =================
-  js_set(js, global, "lv_textarea_create",           js_mkfun(js_lv_textarea_create));
-  js_set(js, global, "lv_textarea_set_password_mode",js_mkfun(js_lv_textarea_set_password_mode));
-  js_set(js, global, "lv_textarea_set_one_line",     js_mkfun(js_lv_textarea_set_one_line));
-  js_set(js, global, "lv_textarea_set_accepted_chars", js_mkfun(js_lv_textarea_set_accepted_chars));
-  js_set(js, global, "lv_textarea_set_max_length",   js_mkfun(js_lv_textarea_set_max_length));
-  js_set(js, global, "lv_textarea_set_text",         js_mkfun(js_lv_textarea_set_text));
-  js_set(js, global, "lv_textarea_get_text",         js_mkfun(js_lv_textarea_get_text));
-  js_set(js, global, "lv_textarea_set_cursor_pos",   js_mkfun(js_lv_textarea_set_cursor_pos));
-  js_set(js, global, "lv_textarea_add_char",         js_mkfun(js_lv_textarea_add_char));
-  js_set(js, global, "lv_textarea_del_char",         js_mkfun(js_lv_textarea_del_char));
-
-  //==================== KEYBOARD ========================
-  js_set(js, global, "lv_keyboard_create",        js_mkfun(js_lv_keyboard_create));
-  js_set(js, global, "lv_keyboard_set_textarea",  js_mkfun(js_lv_keyboard_set_textarea));
-  js_set(js, global, "lv_keyboard_set_mode",      js_mkfun(js_lv_keyboard_set_mode));
-
-  //==================== TABVIEW =========================
-  js_set(js, global, "lv_tabview_create",         js_mkfun(js_lv_tabview_create));
-  js_set(js, global, "lv_tabview_add_tab",        js_mkfun(js_lv_tabview_add_tab));
-  js_set(js, global, "lv_tabview_get_tab_btns",   js_mkfun(js_lv_tabview_get_tab_btns));
-  js_set(js, global, "lv_tabview_get_content",    js_mkfun(js_lv_tabview_get_content));
-
   //==================== WIN =============================
   js_set(js, global, "lv_win_create",             js_mkfun(js_lv_win_create));
   js_set(js, global, "lv_win_add_btn",            js_mkfun(js_lv_win_add_btn));
@@ -3269,7 +2777,6 @@ void register_js_functions() {
   //==================== TILEVIEW ========================
   js_set(js, global, "lv_tileview_create",        js_mkfun(js_lv_tileview_create));
   js_set(js, global, "lv_tileview_add_tile",      js_mkfun(js_lv_tileview_add_tile));
-
 
   // ---------- LIST bridging
   js_set(js, global, "lv_list_create",          js_mkfun(js_lv_list_create));
@@ -3287,20 +2794,6 @@ void register_js_functions() {
   js_set(js, global, "lv_led_off",              js_mkfun(js_lv_led_off));
   js_set(js, global, "lv_led_set_brightness",   js_mkfun(js_lv_led_set_brightness));
   js_set(js, global, "lv_led_set_color",        js_mkfun(js_lv_led_set_color));
-
-  // ---------- DROPDOWN bridging
-  js_set(js, global, "lv_dropdown_create",      js_mkfun(js_lv_dropdown_create));
-  js_set(js, global, "lv_dropdown_set_options", js_mkfun(js_lv_dropdown_set_options));
-  js_set(js, global, "lv_dropdown_get_selected_str", js_mkfun(js_lv_dropdown_get_selected_str));
-
-  // ---------- COLORWHEEL bridging
-  js_set(js, global, "lv_colorwheel_create",          js_mkfun(js_lv_colorwheel_create));
-  js_set(js, global, "lv_colorwheel_set_hsv",         js_mkfun(js_lv_colorwheel_set_hsv));
-  js_set(js, global, "lv_colorwheel_get_hsv",         js_mkfun(js_lv_colorwheel_get_hsv));
-  js_set(js, global, "lv_colorwheel_set_rgb",         js_mkfun(js_lv_colorwheel_set_rgb));
-  js_set(js, global, "lv_colorwheel_get_rgb",         js_mkfun(js_lv_colorwheel_get_rgb));
-  js_set(js, global, "lv_colorwheel_set_mode",        js_mkfun(js_lv_colorwheel_set_mode));
-  js_set(js, global, "lv_colorwheel_get_mode",        js_mkfun(js_lv_colorwheel_get_mode));
 
   // ---------- BUTTON bridging
   js_set(js, global, "lv_btn_create", js_mkfun(js_lv_btn_create));

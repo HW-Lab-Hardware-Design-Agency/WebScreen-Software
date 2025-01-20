@@ -7,52 +7,47 @@
 #include "fallback.h"        // Fallback header
 #include "dynamic_js.h"      // Dynamic (Elk + JS) header
 
-// Optionally, if you want to read webscreen.yml for Wi-Fi info
 #include <ArduinoJson.h>
-#include <YAMLDuino.h>
-#include <time.h>
 
 // Global flag to decide fallback vs dynamic
 static bool useFallback = false;
 
-// Example function to read /webscreen.yml (like your prior code):
-static bool readWiFiConfigYAML(const char* path, String &outSSID, String &outPASS) {
+static bool readWiFiConfigJSON(const char* path, String &outSSID, String &outPASS) {
   File f = SD_MMC.open(path);
-  if(!f) {
-    Serial.println("No YAML file");
+  if (!f) {
+    Serial.println("No JSON file");
     return false;
   }
-  String yamlStr = f.readString();
+  String jsonStr = f.readString();
   f.close();
 
   StaticJsonDocument<1024> doc;
-  DeserializationError error = deserializeYml(doc, yamlStr.c_str());
-  if(error) {
-    Serial.printf("Failed to parse YAML: %s\n", error.c_str());
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  if (error) {
+    Serial.printf("Failed to parse JSON: %s\n", error.c_str());
     return false;
   }
 
+  // Extract SSID/PASS from doc
   outSSID = doc["settings"]["wifi"]["ssid"] | "";
   outPASS = doc["settings"]["wifi"]["pass"] | "";
-  if(outSSID.isEmpty() || outPASS.isEmpty()) {
-    Serial.println("SSID or PASS empty in YAML");
+  if (outSSID.isEmpty() || outPASS.isEmpty()) {
+    Serial.println("SSID or PASS empty in JSON");
     return false;
   }
 
-  // Optionally update 'last_read'
+  // Optionally update 'last_read' with current time
   time_t now;
   time(&now);
-  doc["last_read"] = String((unsigned long)now);
-  
-  // Write updated
+  doc["last_read"] = (unsigned long)now;
+
+  // Re-serialize and write back to the same file (if you want to save changes)
   String updated;
-  if(serializeYml(doc.as<JsonVariant>(), updated)==0) {
-    Serial.println("Failed to serialize updated YAML");
-    return false;
-  }
+  serializeJson(doc, updated);
+
   f = SD_MMC.open(path, FILE_WRITE);
-  if(!f) {
-    Serial.println("Failed to open YAML for writing");
+  if (!f) {
+    Serial.println("Failed to open JSON for writing");
     return false;
   }
   f.print(updated);
@@ -74,10 +69,10 @@ void setup() {
     return;
   }
 
-  // Optionally read /webscreen.yml for Wi-Fi
+  // Optionally read /webscreen.json for Wi-Fi
   String s, p;
-  if(!readWiFiConfigYAML("/webscreen.yml", s, p)) {
-    Serial.println("Failed to read /webscreen.yml => fallback");
+  if(!readWiFiConfigJSON("/webscreen.json", s, p)) {
+    Serial.println("Failed to read /webscreen.json => fallback");
     useFallback = true;
     fallback_setup();
     return;

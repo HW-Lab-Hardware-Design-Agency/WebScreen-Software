@@ -1,10 +1,9 @@
+#include <Arduino.h>
 #include "fallback.h"
 #include "pins_config.h"
 #include "rm67162.h"          // LCD driver
 #include <lvgl.h>             // Ensure you have LVGL
-#include <WiFi.h>             // (If you need Wi-Fi info in fallback)
-#include <FS.h>               // Possibly for file ops
-#include <SD_MMC.h>           // If needed for fallback?
+#include "notification.h"      // For the GIF data
 
 // We'll store references to the fallback label + gif
 static lv_obj_t* fb_label = nullptr;

@@ -1,6 +1,5 @@
 #include "dynamic_js.h"
 #include <Arduino.h>
-#include <WiFi.h>
 #include <FS.h>
 #include <SD_MMC.h>
 

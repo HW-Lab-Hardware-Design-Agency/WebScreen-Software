@@ -6,6 +6,13 @@
 // For BLE
 #include <NimBLEDevice.h>
 
+#include <WiFi.h>           // WiFi library that also provides WiFiClient
+#include <PubSubClient.h>   // For MQTT
+
+// Global WiFiClient + PubSubClient
+static WiFiClient    g_wifiClient;
+static PubSubClient  g_mqttClient(g_wifiClient);
+
 // NimBLE globals
 static NimBLEServer*         g_bleServer    = nullptr;
 static NimBLECharacteristic* g_bleChar      = nullptr;
@@ -15,6 +22,11 @@ static bool                  g_bleConnected = false;
 extern "C" {
   #include "elk.h"
 }
+
+// For storing a JavaScript callback to handle incoming messages
+static char g_mqttCallbackName[32];  // Big enough for a function name
+static unsigned long lastMqttReconnectAttempt = 0;
+static unsigned long lastWiFiReconnectAttempt = 0;
 
 /******************************************************************************
  * A) Elk Memory + Global Instances
@@ -2615,6 +2627,210 @@ static jsval_t js_ble_write(struct js *js, jsval_t *args, int nargs) {
   return js_mktrue();
 }
 
+// MQTT message callback from PubSubClient
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  Serial.printf("[MQTT] Message arrived on topic '%s'\n", topic);
+
+  // If we have a non-empty callback name, build a snippet and eval
+  if (g_mqttCallbackName[0] != '\0') {
+    // Convert char* topic and payload to a C++ string
+    String topicStr(topic);
+    String msgStr;
+    msgStr.reserve(length);
+    for (unsigned int i = 0; i < length; i++) {
+      msgStr += (char) payload[i];
+    }
+
+    // Build snippet: myCallback('topicString','payloadString')
+    char snippet[512];
+    // Use %s for the function name, plus single quotes around the data
+    snprintf(snippet, sizeof(snippet),
+             "%s('%s','%s');",
+             g_mqttCallbackName,
+             topicStr.c_str(),
+             msgStr.c_str());
+
+    Serial.printf("[MQTT] Evaluating snippet: %s\n", snippet);
+
+    // Evaluate snippet
+    jsval_t res = js_eval(js, snippet, strlen(snippet));
+    // Optionally check if res is error
+    if (js_type(res) == JS_ERR) {
+      Serial.print("[MQTT] Callback error: ");
+      Serial.println(js_str(js, res));
+    }
+  }
+}
+
+//------------------------------------------
+// JavaScript-exposed bridging functions
+//------------------------------------------
+
+// mqtt_init(broker, port)
+static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 2) return js_mkfalse();
+  const char* broker = js_str(js, args[0]);
+  int port           = (int)js_getnum(args[1]);
+
+  if(!broker || port <= 0) return js_mkfalse();
+
+  g_mqttClient.setServer(broker, port);
+  g_mqttClient.setCallback(onMqttMessage);
+  Serial.printf("[MQTT] init => broker=%s port=%d\n", broker, port);
+
+  return js_mktrue();
+}
+
+// mqtt_connect(clientID, user, pass)
+static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 1) return js_mkfalse();
+  const char* clientID = js_str(js, args[0]);
+  const char* user     = (nargs >= 2) ? js_str(js, args[1]) : nullptr;
+  const char* pass     = (nargs >= 3) ? js_str(js, args[2]) : nullptr;
+
+  bool ok = false;
+  if(user && pass && strlen(user) && strlen(pass)) {
+    ok = g_mqttClient.connect(clientID, user, pass);
+  } else {
+    ok = g_mqttClient.connect(clientID);
+  }
+
+  if(ok) {
+    Serial.println("[MQTT] Connected successfully");
+    return js_mktrue();
+  } else {
+    Serial.printf("[MQTT] Connect failed, rc=%d\n", g_mqttClient.state());
+    return js_mkfalse();
+  }
+}
+
+// mqtt_publish(topic, message)
+static jsval_t js_mqtt_publish(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 2) return js_mkfalse();
+  const char* topic   = js_str(js, args[0]);
+  const char* message = js_str(js, args[1]);
+  if(!topic || !message) return js_mkfalse();
+
+  bool ok = g_mqttClient.publish(topic, message);
+  return ok ? js_mktrue() : js_mkfalse();
+}
+
+// mqtt_subscribe(topic)
+static jsval_t js_mqtt_subscribe(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 1) return js_mkfalse();
+  const char* topic = js_str(js, args[0]);
+  if(!topic) return js_mkfalse();
+
+  bool ok = g_mqttClient.subscribe(topic);
+  Serial.printf("[MQTT] Subscribed to '%s'? => %s\n", topic, ok ? "OK" : "FAIL");
+  return ok ? js_mktrue() : js_mkfalse();
+}
+
+// mqtt_loop()
+static jsval_t js_mqtt_loop(struct js *js, jsval_t *args, int nargs) {
+  g_mqttClient.loop();
+  return js_mknull();
+}
+
+// mqtt_on_message("myCallback")
+static jsval_t js_mqtt_on_message(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 1) return js_mkfalse();
+
+  // Check if user passed a string naming the function
+  size_t len = 0;
+  char *str = js_getstr(js, args[0], &len);
+  if(!str || len == 0 || len >= sizeof(g_mqttCallbackName)) {
+    return js_mkfalse();
+  }
+
+  // Copy that name to our global
+  memset(g_mqttCallbackName, 0, sizeof(g_mqttCallbackName));
+  memcpy(g_mqttCallbackName, str, len);  // not zero-terminated by default
+  g_mqttCallbackName[len] = '\0';
+
+  Serial.print("[MQTT] JS callback name set to: ");
+  Serial.println(g_mqttCallbackName);
+  return js_mktrue();
+}
+
+// This function tries to connect to your MQTT broker
+bool doMqttConnect() {
+  // Example: If you stored broker/port in global variables or from prior init:
+  // extern const char* g_mqttBroker;
+  // extern int         g_mqttPort;
+  // g_mqttClient.setServer(g_mqttBroker, g_mqttPort);
+
+  Serial.println("[MQTT] Checking broker connection...");
+
+  // Attempt to connect with e.g. a default clientID (or user/pass if needed)
+  bool ok = g_mqttClient.connect("WebScreenClient");
+  if(!ok) {
+    // Print the reason code: g_mqttClient.state()
+    Serial.printf("[MQTT] Connect fail, rc=%d\n", g_mqttClient.state());
+    return false;
+  }
+
+  // If connected, subscribe to any default topic if you want:
+  // g_mqttClient.subscribe("some/topic");
+
+  Serial.println("[MQTT] Connected successfully");
+  return true;
+}
+
+// This function tries to reconnect Wi-Fi if Wi-Fi is down
+bool doWiFiReconnect() {
+  Serial.println("[WiFi] Checking connection...");
+
+  // If you have an SSID/pass stored
+  // extern String g_ssid;
+  // extern String g_pass;
+  // WiFi.begin(g_ssid.c_str(), g_pass.c_str());
+
+  // We'll do a quick wait for up to ~3 seconds, just for example:
+  // (Tune to your needs)
+  for (int i = 0; i < 15; i++) {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("[WiFi] Reconnected. IP=");
+      Serial.println(WiFi.localIP());
+      return true;
+    }
+    delay(200);
+  }
+  Serial.println("[WiFi] Still not connected");
+  return false;
+}
+
+// Call this regularly to maintain Wi-Fi + MQTT
+void wifiMqttMaintainLoop() {
+  // 1) Check if Wi-Fi is alive
+  if (WiFi.status() != WL_CONNECTED) {
+    unsigned long now = millis();
+    // Try reconnect every 10 seconds
+    if(now - lastWiFiReconnectAttempt > 10000) {
+      lastWiFiReconnectAttempt = now;
+      Serial.println("[WiFi] Connection lost, attempting recon...");
+      doWiFiReconnect();
+    }
+    // If Wi-Fi is still down, we skip MQTT
+    return;
+  }
+
+  // 2) If Wi-Fi is up, handle MQTT
+  if(!g_mqttClient.connected()) {
+    unsigned long now = millis();
+    if(now - lastMqttReconnectAttempt > 10000) {
+      lastMqttReconnectAttempt = now;
+      Serial.println("[MQTT] Lost MQTT, trying reconnect...");
+      if(doMqttConnect()) {
+        lastMqttReconnectAttempt = 0; 
+      }
+    }
+  }
+
+  // If connected, let PubSubClient process inbound/outbound messages
+  g_mqttClient.loop();
+}
+
 /******************************************************************************
  * I) Register All JS Functions
  ******************************************************************************/
@@ -2798,6 +3014,14 @@ void register_js_functions() {
   // ---------- BUTTON bridging
   js_set(js, global, "lv_btn_create", js_mkfun(js_lv_btn_create));
   js_set(js, global, "lv_button_set_text", js_mkfun(js_lv_button_set_text));
+
+  // MQTT bridging
+  js_set(js, global, "mqtt_init",       js_mkfun(js_mqtt_init));
+  js_set(js, global, "mqtt_connect",    js_mkfun(js_mqtt_connect));
+  js_set(js, global, "mqtt_publish",    js_mkfun(js_mqtt_publish));
+  js_set(js, global, "mqtt_subscribe",  js_mkfun(js_mqtt_subscribe));
+  js_set(js, global, "mqtt_loop",       js_mkfun(js_mqtt_loop));
+  js_set(js, global, "mqtt_on_message", js_mkfun(js_mqtt_on_message));
 }
 
 //------------------------------------------------------------------------------
@@ -2826,6 +3050,8 @@ static void elk_task(void *pvParam) {
   // 4) Now keep running lv_timer_handler() or your lvgl_loop
   // so that the UI remains active
   for(;;) {
+    // Check Wi-Fi and MQTT, handle reconnections
+    wifiMqttMaintainLoop();
     lv_timer_handler();
     delay(5);
     // or lvgl_loop() if you prefer

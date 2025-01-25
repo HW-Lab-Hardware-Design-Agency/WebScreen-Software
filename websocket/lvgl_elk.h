@@ -13,6 +13,115 @@
 static WiFiClient    g_wifiClient;
 static PubSubClient  g_mqttClient(g_wifiClient);
 
+// HTTP client certificate.
+static char* g_httpCAcert = nullptr;  // Will hold entire PEM cert from SD
+static const char timeapi_io_chain[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIGLDCCBRSgAwIBAgIRAOL4eUFHuBfqpfKneEdZSuAwDQYJKoZIhvcNAQELBQAw
+gY8xCzAJBgNVBAYTAkdCMRswGQYDVQQIExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAO
+BgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDE3MDUGA1UE
+AxMuU2VjdGlnbyBSU0EgRG9tYWluIFZhbGlkYXRpb24gU2VjdXJlIFNlcnZlciBD
+QTAeFw0yNDA4MTMwMDAwMDBaFw0yNTA4MTQyMzU5NTlaMBUxEzARBgNVBAMTCnRp
+bWVhcGkuaW8wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDUgSmEZSYp
+vqtl5ftqP7qNDL675AHiYa2cPsxr1yoNbOBWdY5p8fYzvza4AP3STJIYcQaLc26A
+fxzqZ/fiwxCagPkW3s+r53UbosMZQERcMF/gmZgBRAuLWvTC3WaaJO+f39aSQkPh
+nAEE+3MYfzMHSt5lllVCsV/bURlUKPQfza4yuYEhFP6Z3ym0E5PhAmcqog0Rdxjq
+DlT0KcNsuDvF7RdyjceCN4dbgTZg/6Xmh2zE4PCFYyafsDo+ZHSxOg7pHX9bIrX6
+QBbutocAC6A97m+bd/8UJ936boIC3E+WYgSj/ZrkSdNiwn86kfWduYuNhdPZc5jx
+mwpD1bLZ4v7zAgMBAAGjggL6MIIC9jAfBgNVHSMEGDAWgBSNjF7EVK2K4Xfpm/mb
+BeG4AY1h4TAdBgNVHQ4EFgQUAMQghPN+UzO0bStKW/8TveUM2H8wDgYDVR0PAQH/
+BAQDAgWgMAwGA1UdEwEB/wQCMAAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUF
+BwMCMEkGA1UdIARCMEAwNAYLKwYBBAGyMQECAgcwJTAjBggrBgEFBQcCARYXaHR0
+cHM6Ly9zZWN0aWdvLmNvbS9DUFMwCAYGZ4EMAQIBMIGEBggrBgEFBQcBAQR4MHYw
+TwYIKwYBBQUHMAKGQ2h0dHA6Ly9jcnQuc2VjdGlnby5jb20vU2VjdGlnb1JTQURv
+bWFpblZhbGlkYXRpb25TZWN1cmVTZXJ2ZXJDQS5jcnQwIwYIKwYBBQUHMAGGF2h0
+dHA6Ly9vY3NwLnNlY3RpZ28uY29tMCUGA1UdEQQeMByCCnRpbWVhcGkuaW+CDnd3
+dy50aW1lYXBpLmlvMIIBfAYKKwYBBAHWeQIEAgSCAWwEggFoAWYAdgDd3Mo0ldfh
+FgXnlTL6x5/4PRxQ39sAOhQSdgosrLvIKgAAAZFNjZpgAAAEAwBHMEUCIQD7jqsr
+ikbGH2/skM9fRGJWa28oruNnnpOwRvE6n7c/pQIgbl1kqd2GV8h30dZBtkms1NHM
+rooWkdipB7i3JOM6SJMAdgAN4fIwK9MNwUBiEgnqVS78R3R8sdfpMO8OQh60fk6q
+NAAAAZFNjZnuAAAEAwBHMEUCIGobHqoa8DEzJ5dZwR8zse6XI5jxY0yUTdr0U4G+
+KyRlAiEAtzrz9nKiSlmeWmO2c8mNkqjTObJDMxkOpIoqGEdMrLkAdAAS8U40vVNy
+TIQGGcOPP3oT+Oe1YoeInG0wBYTr5YYmOgAAAZFNjZnuAAAEAwBFMEMCIFE/PaDI
+ELDkKsn2e92/nwwAEm/pzc0SZtr6nXvBVh8sAh9rpZN7ljjVKfseZV961TDnxt2x
+bknPILdWW7x1/HMkMA0GCSqGSIb3DQEBCwUAA4IBAQCZ9UYKZ+nByfrpQxHyHH2/
+DanBInghefdjTQ9++8dFJ+3ywrkeZSXT7an+4bCEPdNtmdOQqBkOcdiYXhE1FXlV
+1NAHerxA8YnsE8QloaZn7Gy+cC7ixOxxwVlutjVCAMjZmMQbvf2EjRQC5cwWAcO5
+a9cNFHaliY6K47SWybVkZjF17U/klvnrqT7fY8lT5wOnkww0tiSvemmH/CXrKiEs
+23SCrOKKFmjF6umaH73e89asBNrKRv/5NdSYYhZ2fW7bRBkHWaRdfqKSzWQsTNq+
+u22XkO39nAjAcrYX1dIbYPWS6L4aWZxjgPt1I2KrjtBRtfOQXCq0oysj5Ph9mu+O
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIGEzCCA/ugAwIBAgIQfVtRJrR2uhHbdBYLvFMNpzANBgkqhkiG9w0BAQwFADCB
+iDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0pl
+cnNleSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNV
+BAMTJVVTRVJUcnVzdCBSU0EgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTgx
+MTAyMDAwMDAwWhcNMzAxMjMxMjM1OTU5WjCBjzELMAkGA1UEBhMCR0IxGzAZBgNV
+BAgTEkdyZWF0ZXIgTWFuY2hlc3RlcjEQMA4GA1UEBxMHU2FsZm9yZDEYMBYGA1UE
+ChMPU2VjdGlnbyBMaW1pdGVkMTcwNQYDVQQDEy5TZWN0aWdvIFJTQSBEb21haW4g
+VmFsaWRhdGlvbiBTZWN1cmUgU2VydmVyIENBMIIBIjANBgkqhkiG9w0BAQEFAAOC
+AQ8AMIIBCgKCAQEA1nMz1tc8INAA0hdFuNY+B6I/x0HuMjDJsGz99J/LEpgPLT+N
+TQEMgg8Xf2Iu6bhIefsWg06t1zIlk7cHv7lQP6lMw0Aq6Tn/2YHKHxYyQdqAJrkj
+eocgHuP/IJo8lURvh3UGkEC0MpMWCRAIIz7S3YcPb11RFGoKacVPAXJpz9OTTG0E
+oKMbgn6xmrntxZ7FN3ifmgg0+1YuWMQJDgZkW7w33PGfKGioVrCSo1yfu4iYCBsk
+Haswha6vsC6eep3BwEIc4gLw6uBK0u+QDrTBQBbwb4VCSmT3pDCg/r8uoydajotY
+uK3DGReEY+1vVv2Dy2A0xHS+5p3b4eTlygxfFQIDAQABo4IBbjCCAWowHwYDVR0j
+BBgwFoAUU3m/WqorSs9UgOHYm8Cd8rIDZsswHQYDVR0OBBYEFI2MXsRUrYrhd+mb
++ZsF4bgBjWHhMA4GA1UdDwEB/wQEAwIBhjASBgNVHRMBAf8ECDAGAQH/AgEAMB0G
+A1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAbBgNVHSAEFDASMAYGBFUdIAAw
+CAYGZ4EMAQIBMFAGA1UdHwRJMEcwRaBDoEGGP2h0dHA6Ly9jcmwudXNlcnRydXN0
+LmNvbS9VU0VSVHJ1c3RSU0FDZXJ0aWZpY2F0aW9uQXV0aG9yaXR5LmNybDB2Bggr
+BgEFBQcBAQRqMGgwPwYIKwYBBQUHMAKGM2h0dHA6Ly9jcnQudXNlcnRydXN0LmNv
+bS9VU0VSVHJ1c3RSU0FBZGRUcnVzdENBLmNydDAlBggrBgEFBQcwAYYZaHR0cDov
+L29jc3AudXNlcnRydXN0LmNvbTANBgkqhkiG9w0BAQwFAAOCAgEAMr9hvQ5Iw0/H
+ukdN+Jx4GQHcEx2Ab/zDcLRSmjEzmldS+zGea6TvVKqJjUAXaPgREHzSyrHxVYbH
+7rM2kYb2OVG/Rr8PoLq0935JxCo2F57kaDl6r5ROVm+yezu/Coa9zcV3HAO4OLGi
+H19+24rcRki2aArPsrW04jTkZ6k4Zgle0rj8nSg6F0AnwnJOKf0hPHzPE/uWLMUx
+RP0T7dWbqWlod3zu4f+k+TY4CFM5ooQ0nBnzvg6s1SQ36yOoeNDT5++SR2RiOSLv
+xvcRviKFxmZEJCaOEDKNyJOuB56DPi/Z+fVGjmO+wea03KbNIaiGCpXZLoUmGv38
+sbZXQm2V0TP2ORQGgkE49Y9Y3IBbpNV9lXj9p5v//cWoaasm56ekBYdbqbe4oyAL
+l6lFhd2zi+WJN44pDfwGF/Y4QA5C5BIG+3vzxhFoYt/jmPQT2BVPi7Fp2RBgvGQq
+6jG35LWjOhSbJuMLe/0CjraZwTiXWTb2qHSihrZe68Zk6s+go/lunrotEbaGmAhY
+LcmsJWTyXnW0OMGuf1pGg+pRyrbxmRE1a6Vqe8YAsOf4vmSyrcjC8azjUeqkk+B5
+yOGBQMkKW+ESPMFgKuOXwIlCypTPRpgSabuY0MLTDXJLR27lk8QyKGOHQ+SwMj4K
+00u/I5sUKUErmgQfky3xxzlIPK1aEn8=
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIF3jCCA8agAwIBAgIQAf1tMPyjylGoG7xkDjUDLTANBgkqhkiG9w0BAQwFADCB
+iDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0pl
+cnNleSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNV
+BAMTJVVTRVJUcnVzdCBSU0EgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTAw
+MjAxMDAwMDAwWhcNMzgwMTE4MjM1OTU5WjCBiDELMAkGA1UEBhMCVVMxEzARBgNV
+BAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQKExVU
+aGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBSU0EgQ2Vy
+dGlmaWNhdGlvbiBBdXRob3JpdHkwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIK
+AoICAQCAEmUXNg7D2wiz0KxXDXbtzSfTTK1Qg2HiqiBNCS1kCdzOiZ/MPans9s/B
+3PHTsdZ7NygRK0faOca8Ohm0X6a9fZ2jY0K2dvKpOyuR+OJv0OwWIJAJPuLodMkY
+tJHUYmTbf6MG8YgYapAiPLz+E/CHFHv25B+O1ORRxhFnRghRy4YUVD+8M/5+bJz/
+Fp0YvVGONaanZshyZ9shZrHUm3gDwFA66Mzw3LyeTP6vBZY1H1dat//O+T23LLb2
+VN3I5xI6Ta5MirdcmrS3ID3KfyI0rn47aGYBROcBTkZTmzNg95S+UzeQc0PzMsNT
+79uq/nROacdrjGCT3sTHDN/hMq7MkztReJVni+49Vv4M0GkPGw/zJSZrM233bkf6
+c0Plfg6lZrEpfDKEY1WJxA3Bk1QwGROs0303p+tdOmw1XNtB1xLaqUkL39iAigmT
+Yo61Zs8liM2EuLE/pDkP2QKe6xJMlXzzawWpXhaDzLhn4ugTncxbgtNMs+1b/97l
+c6wjOy0AvzVVdAlJ2ElYGn+SNuZRkg7zJn0cTRe8yexDJtC/QV9AqURE9JnnV4ee
+UB9XVKg+/XRjL7FQZQnmWEIuQxpMtPAlR1n6BB6T1CZGSlCBst6+eLf8ZxXhyVeE
+Hg9j1uliutZfVS7qXMYoCAQlObgOK6nyTJccBz8NUvXt7y+CDwIDAQABo0IwQDAd
+BgNVHQ4EFgQUU3m/WqorSs9UgOHYm8Cd8rIDZsswDgYDVR0PAQH/BAQDAgEGMA8G
+A1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEMBQADggIBAFzUfA3P9wF9QZllDHPF
+Up/L+M+ZBn8b2kMVn54CVVeWFPFSPCeHlCjtHzoBN6J2/FNQwISbxmtOuowhT6KO
+VWKR82kV2LyI48SqC/3vqOlLVSoGIG1VeCkZ7l8wXEskEVX/JJpuXior7gtNn3/3
+ATiUFJVDBwn7YKnuHKsSjKCaXqeYalltiz8I+8jRRa8YFWSQEg9zKC7F4iRO/Fjs
+8PRF/iKz6y+O0tlFYQXBl2+odnKPi4w2r78NBc5xjeambx9spnFixdjQg3IM8WcR
+iQycE0xyNN+81XHfqnHd4blsjDwSXWXavVcStkNr/+XeTWYRUc+ZruwXtuhxkYze
+Sf7dNXGiFSeUHM9h4ya7b6NnJSFd5t0dCy5oGzuCr+yDZ4XUmFF0sbmZgIn/f3gZ
+XHlKYC6SQK5MNyosycdiyA5d9zZbyuAlJQG03RoHnHcAP9Dc1ew91Pq7P8yF1m9/
+qS3fuQL39ZeatTXaw2ewh0qpKJ4jjv9cJ2vhsE/zB+4ALtRZh8tSQZXq9EfX7mRB
+VXyNWQKV3WKdwrnuWih0hKWbt5DHDAff9Yk2dDLWKMGwsAvgnEzDHNb842m1R0aB
+L6KCq9NjRHDEjf8tM7qtj3u1cIiuPhnPQCjY/MiQu12ZIvVS5ljFH4gxQ+6IHdfG
+jjxDah2nGN59PRbxYvnKkKj9
+-----END CERTIFICATE-----
+)EOF";
+
 // NimBLE globals
 static NimBLEServer*         g_bleServer    = nullptr;
 static NimBLECharacteristic* g_bleChar      = nullptr;
@@ -1809,80 +1918,6 @@ static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int
 }
 
 /********************************************************************************
- * SPINBOX
- ********************************************************************************/
-static jsval_t js_lv_spinbox_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *sb = lv_spinbox_create(lv_scr_act());
-    int handle = store_lv_obj(sb);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_spinbox_set_range(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH, min, max)
-    if(nargs<3) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int mn  = (int)js_getnum(args[1]);
-    int mx  = (int)js_getnum(args[2]);
-
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_set_range(sb, mn, mx);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_set_digit_format(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH, digit_count, separator_pos)
-    if(nargs<3) return js_mknull();
-    int h        = (int)js_getnum(args[0]);
-    int digCount = (int)js_getnum(args[1]);
-    int sepPos   = (int)js_getnum(args[2]);
-
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_set_digit_format(sb, digCount, sepPos);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_step_prev(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_step_prev(sb);
-    return js_mknull();
-}
-static jsval_t js_lv_spinbox_step_next(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_step_next(sb);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_increment(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_increment(sb);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_decrement(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_decrement(sb);
-    return js_mknull();
-}
-
-/********************************************************************************
  * MSGBOX
  ********************************************************************************/
 static jsval_t js_lv_msgbox_create(struct js *js, jsval_t *args, int nargs) {
@@ -1931,67 +1966,6 @@ static jsval_t js_lv_msgbox_get_active_btn_text(struct js *js, jsval_t *args, in
     const char* t = lv_msgbox_get_active_btn_text(mb);
     if(!t) t = "";
     return js_mkstr(js, t, strlen(t));
-}
-
-/********************************************************************************
- * ROLLER
- ********************************************************************************/
-static jsval_t js_lv_roller_create(struct js *js, jsval_t *args, int nargs) {
-    // no param
-    lv_obj_t *roll = lv_roller_create(lv_scr_act());
-    int handle = store_lv_obj(roll);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_roller_set_options(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH, "str with \n", modeEnum)
-    if(nargs<3) return js_mknull();
-    int h  = (int)js_getnum(args[0]);
-    const char* opts = js_str(js, args[1]);
-    int mode = (int)js_getnum(args[2]); // e.g. LV_ROLLER_MODE_NORMAL or LV_ROLLER_MODE_INFINITE
-
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mknull();
-
-    lv_roller_set_options(roll, opts ? opts : "", (lv_roller_mode_t)mode);
-    return js_mknull();
-}
-
-static jsval_t js_lv_roller_set_visible_row_count(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH, rowCount)
-    if(nargs<2) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int r = (int)js_getnum(args[1]);
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mknull();
-    lv_roller_set_visible_row_count(roll, r);
-    return js_mknull();
-}
-
-static jsval_t js_lv_roller_get_selected_str(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH) -> string
-    if(nargs<1) return js_mkstr(js,"",0);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mkstr(js,"",0);
-
-    char buf[64];
-    lv_roller_get_selected_str(roll, buf, sizeof(buf));
-    return js_mkstr(js, buf, strlen(buf));
-}
-
-static jsval_t js_lv_roller_set_selected(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH, sel, animOff0or1)
-    if(nargs<3) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int sel = (int)js_getnum(args[1]);
-    int anim = (int)js_getnum(args[2]);
-
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mknull();
-
-    lv_roller_set_selected(roll, sel, anim ? LV_ANIM_ON : LV_ANIM_OFF);
-    return js_mknull();
 }
 
 /*******************************************************
@@ -2047,83 +2021,6 @@ static jsval_t js_lv_button_set_text(struct js *js, jsval_t *args, int nargs) {
     Serial.printf("lv_button_set_text: handle=%d, text=%s\n", btnHandle, text ? text : "");
     return js_mknull();
 }
-
-
-/********************************************************************************
- * SLIDER: Possibly we already have basic bridging? 
- * Additional calls: 
- *   lv_slider_set_mode, lv_slider_set_value, lv_slider_set_left_value, lv_slider_get_value, lv_slider_get_left_value
- ********************************************************************************/
-
-static jsval_t js_lv_slider_create(struct js *js, jsval_t *args, int nargs) {
-    // no params
-    lv_obj_t *sld = lv_slider_create(lv_scr_act());
-    int handle = store_lv_obj(sld);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_slider_set_mode(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH, modeEnum) -> e.g. LV_SLIDER_MODE_NORMAL, LV_SLIDER_MODE_RANGE
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int md  = (int)js_getnum(args[1]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknull();
-    lv_slider_set_mode(sld, (lv_slider_mode_t)md);
-    return js_mknull();
-}
-
-static jsval_t js_lv_slider_set_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH, val, animOff0or1)
-    if(nargs<3) return js_mknull();
-    int h      = (int)js_getnum(args[0]);
-    int val    = (int)js_getnum(args[1]);
-    bool anim  = (bool)js_getnum(args[2]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknull();
-    lv_slider_set_value(sld, val, anim ? LV_ANIM_ON : LV_ANIM_OFF);
-    return js_mknull();
-}
-
-static jsval_t js_lv_slider_set_left_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH, val, animOff0or1)
-    if(nargs<3) return js_mknull();
-    int h      = (int)js_getnum(args[0]);
-    int val    = (int)js_getnum(args[1]);
-    bool anim  = (bool)js_getnum(args[2]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknull();
-    lv_slider_set_left_value(sld, val, anim ? LV_ANIM_ON : LV_ANIM_OFF);
-    return js_mknull();
-}
-
-static jsval_t js_lv_slider_get_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH) -> int
-    if(nargs<1) return js_mknum(0);
-    int h = (int)js_getnum(args[0]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknum(0);
-
-    int v = lv_slider_get_value(sld);
-    return js_mknum((double)v);
-}
-
-static jsval_t js_lv_slider_get_left_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH) -> int
-    if(nargs<1) return js_mknum(0);
-    int h = (int)js_getnum(args[0]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknum(0);
-
-    int v = lv_slider_get_left_value(sld);
-    return js_mknum((double)v);
-}
-
 
 /********************************************************************************
  * SPAN
@@ -2420,117 +2317,193 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) {
     return js_mknull();
 }
 
-
-/*******************************************************
- * LED BRIDGING
- *******************************************************/
-
-static jsval_t js_lv_led_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *led = lv_led_create(lv_scr_act());
-    int handle = store_lv_obj(led);
-    Serial.printf("lv_led_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_led_on(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_on(led);
-    return js_mknull();
-}
-
-static jsval_t js_lv_led_off(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_off(led);
-    return js_mknull();
-}
-
-static jsval_t js_lv_led_set_brightness(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<2) return js_mknull();
-    int h    = (int)js_getnum(args[0]);
-    int bright = (int)js_getnum(args[1]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_set_brightness(led, bright);
-    return js_mknull();
-}
-
-static jsval_t js_lv_led_set_color(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<2) return js_mknull();
-    int h    = (int)js_getnum(args[0]);
-    double col = js_getnum(args[1]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_set_color(led, lv_color_hex((uint32_t)col));
-    return js_mknull();
-}
-
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~ 1) HTTP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// http_get(url)
 static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<1) return js_mkstr(js,"",0);
-  const char* url = js_str(js, args[0]);
-  if(!url) return js_mkstr(js,"",0);
+  if(nargs < 1) return js_mkstr(js,"",0);
+  const char* rawUrl = js_str(js, args[0]);
+  if(!rawUrl) return js_mkstr(js,"",0);
 
-  HTTPClient http;
-  http.begin(url);
-  int httpCode = http.GET();
-  if(httpCode<=0) {
-    http.end();
-    return js_mkstr(js,"",0);
+  // Convert to Arduino String
+  String url(rawUrl);
+
+  // 1) Strip leading/trailing quotes if they exist
+  if(url.startsWith("\"") && url.endsWith("\"")) {
+    url.remove(0, 1);                  // remove first char
+    url.remove(url.length()-1, 1);     // remove last char
   }
-  String payload = http.getString();
-  http.end();
-  return js_mkstr(js, payload.c_str(), payload.length());
+
+  Serial.println("js_http_get => Using SSL for: " + url);
+
+  // 2) We'll assume 'https://' scheme
+  const String HTTPS_PREFIX = "https://";
+  if(url.startsWith(HTTPS_PREFIX)) {
+    url.remove(0, HTTPS_PREFIX.length()); // remove "https://"
+  }
+
+  // 3) Split into host + path
+  int slashPos = url.indexOf('/');
+  String host, path;
+  if(slashPos < 0) {
+    host = url;
+    path = "/";
+  } else {
+    host = url.substring(0, slashPos);
+    path = url.substring(slashPos);
+  }
+
+  Serial.println("Parsed host='" + host + "', path='" + path + "'");
+
+  // 4) Always WiFiClientSecure => setInsecure for a generic approach
+  WiFiClientSecure client;
+  client.setInsecure();   // or client.setCACert(...) if you have a CA
+  
+  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  if(!client.connect(host.c_str(), 443)) {
+    Serial.println("Connection failed!");
+    return js_mkstr(js, "", 0);
+  }
+  Serial.println("Connected => sending GET request");
+  
+  client.print(String("GET ") + path + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+  client.print("Connection: close\r\n\r\n");
+  
+  // 5) Read everything until closed
+  String response;
+  while(client.connected() || client.available()) {
+    if(client.available()) {
+      char c = client.read();
+      response += c;
+    } else {
+      delay(5);
+    }
+  }
+  client.stop();
+  
+  Serial.printf("Done reading. response size=%d\n", response.length());
+  
+  // Return full raw HTTP response
+  return js_mkstr(js, response.c_str(), response.length());
 }
 
-// http_post(url, body)
 static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mkstr(js,"",0);
+  if(nargs < 2) return js_mkstr(js, "", 0);
   const char* url  = js_str(js, args[0]);
   const char* body = js_str(js, args[1]);
-  if(!url || !body) return js_mkstr(js,"",0);
+  if(!url || !body) return js_mkstr(js, "", 0);
 
   HTTPClient http;
-  http.begin(url);
+  if(strncmp(url, "https://", 8) == 0) {
+    WiFiClientSecure secureClient;
+    if(g_httpCAcert) {
+      secureClient.setCACert(g_httpCAcert);
+      Serial.println("Using CA cert from SD (POST)");
+    } else {
+      secureClient.setInsecure();
+      Serial.println("No CA cert => using setInsecure() (POST)");
+    }
+    http.begin(secureClient, url);
+  } else {
+    http.begin(url); // Plain HTTP
+  }
+
   http.addHeader("Content-Type", "application/json");
   int httpCode = http.POST((uint8_t*)body, strlen(body));
-  if(httpCode<=0) {
+  Serial.printf("HTTP Code (POST): %d\n", httpCode);
+  if(httpCode <= 0) {
+    Serial.print("HTTP Error (POST): ");
+    Serial.println(http.errorToString(httpCode));
     http.end();
-    return js_mkstr(js,"",0);
+    return js_mkstr(js, "", 0);
   }
+
   String payload = http.getString();
   http.end();
   return js_mkstr(js, payload.c_str(), payload.length());
 }
 
-// Similarly for PUT, PATCH, DELETE (example: http_delete)
 static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<1) return js_mkstr(js,"",0);
+  if(nargs < 1) return js_mkstr(js, "", 0);
   const char* url = js_str(js, args[0]);
-  if(!url) return js_mkstr(js,"",0);
+  if(!url) return js_mkstr(js, "", 0);
 
   HTTPClient http;
-  http.begin(url);
-  int httpCode = http.sendRequest("DELETE");
-  if(httpCode<=0) {
-    http.end();
-    return js_mkstr(js,"",0);
+  if(strncmp(url, "https://", 8) == 0) {
+    WiFiClientSecure secureClient;
+    if(g_httpCAcert) {
+      secureClient.setCACert(g_httpCAcert);
+      Serial.println("Using CA cert from SD (DELETE)");
+    } else {
+      secureClient.setInsecure();
+      Serial.println("No CA cert => using setInsecure() (DELETE)");
+    }
+    http.begin(secureClient, url);
+  } else {
+    http.begin(url);
   }
+
+  int httpCode = http.sendRequest("DELETE");
+  Serial.printf("HTTP Code (DELETE): %d\n", httpCode);
+  if(httpCode <= 0) {
+    Serial.print("HTTP Error (DELETE): ");
+    Serial.println(http.errorToString(httpCode));
+    http.end();
+    return js_mkstr(js, "", 0);
+  }
+
   String payload = http.getString();
   http.end();
   return js_mkstr(js, payload.c_str(), payload.length());
 }
 
+
+static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 1) return js_mkfalse();  
+  const char* rawPath = js_str(js, args[0]);
+  if(!rawPath) return js_mkfalse();
+
+  // Strip quotes if present
+  String path(rawPath);
+  if(path.startsWith("\"") && path.endsWith("\"")) {
+    path = path.substring(1, path.length()-1);
+  }
+
+  // Open file from SD
+  File f = SD_MMC.open(path, FILE_READ);
+  if(!f) {
+    Serial.printf("Failed to open CA cert file: %s\n", path.c_str());
+    return js_mkfalse();
+  }
+
+  size_t size = f.size();
+  if(size == 0) {
+    Serial.printf("CA file is empty: %s\n", path.c_str());
+    f.close();
+    return js_mkfalse();
+  }
+
+  // Reallocate or free old buffer
+  if(g_httpCAcert) {
+    free(g_httpCAcert);
+    g_httpCAcert = nullptr;
+  }
+
+  // Allocate enough bytes (include space for trailing '\0')
+  g_httpCAcert = (char*)malloc(size + 1);
+  if(!g_httpCAcert) {
+    Serial.println("Not enough RAM to store CA cert!");
+    f.close();
+    return js_mkfalse();
+  }
+
+  // Read the file
+  size_t bytesRead = f.readBytes(g_httpCAcert, size);
+  f.close();
+  g_httpCAcert[bytesRead] = '\0';  // Null-terminate
+
+  Serial.printf("Loaded CA cert (%u bytes) from SD file: %s\n", (unsigned)bytesRead, path.c_str());
+  return js_mktrue();
+}
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~ 4) Extended SD ops ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // We already have sd_list_dir, sd_read_file, sd_write_file. Add file delete:
@@ -2848,6 +2821,7 @@ void register_js_functions() {
   js_set(js, global, "http_get",    js_mkfun(js_http_get));
   js_set(js, global, "http_post",   js_mkfun(js_http_post));
   js_set(js, global, "http_delete", js_mkfun(js_http_delete));
+  js_set(js, global, "http_set_ca_cert_from_sd", js_mkfun(js_http_set_ca_cert_from_sd));
 
   // SD functions
   js_set(js, global, "sd_read_file", js_mkfun(js_sd_read_file));
@@ -2945,33 +2919,9 @@ void register_js_functions() {
   js_set(js, global, "lv_meter_set_indicator_end_value",  js_mkfun(js_lv_meter_set_indicator_end_value));
   js_set(js, global, "lv_meter_set_indicator_value",      js_mkfun(js_lv_meter_set_indicator_value));
 
-  //==================== SPINBOX =========================
-  js_set(js, global, "lv_spinbox_create",           js_mkfun(js_lv_spinbox_create));
-  js_set(js, global, "lv_spinbox_set_range",        js_mkfun(js_lv_spinbox_set_range));
-  js_set(js, global, "lv_spinbox_set_digit_format", js_mkfun(js_lv_spinbox_set_digit_format));
-  js_set(js, global, "lv_spinbox_step_prev",        js_mkfun(js_lv_spinbox_step_prev));
-  js_set(js, global, "lv_spinbox_step_next",        js_mkfun(js_lv_spinbox_step_next));
-  js_set(js, global, "lv_spinbox_increment",        js_mkfun(js_lv_spinbox_increment));
-  js_set(js, global, "lv_spinbox_decrement",        js_mkfun(js_lv_spinbox_decrement));
-
   //==================== MSGBOX ==========================
   js_set(js, global, "lv_msgbox_create",            js_mkfun(js_lv_msgbox_create));
   js_set(js, global, "lv_msgbox_get_active_btn_text", js_mkfun(js_lv_msgbox_get_active_btn_text));
-
-  //==================== ROLLER =========================
-  js_set(js, global, "lv_roller_create",         js_mkfun(js_lv_roller_create));
-  js_set(js, global, "lv_roller_set_options",    js_mkfun(js_lv_roller_set_options));
-  js_set(js, global, "lv_roller_set_visible_row_count", js_mkfun(js_lv_roller_set_visible_row_count));
-  js_set(js, global, "lv_roller_get_selected_str", js_mkfun(js_lv_roller_get_selected_str));
-  js_set(js, global, "lv_roller_set_selected",   js_mkfun(js_lv_roller_set_selected));
-
-  //==================== SLIDER (additional) =============
-  js_set(js, global, "lv_slider_create",         js_mkfun(js_lv_slider_create));
-  js_set(js, global, "lv_slider_set_mode",       js_mkfun(js_lv_slider_set_mode));
-  js_set(js, global, "lv_slider_set_value",      js_mkfun(js_lv_slider_set_value));
-  js_set(js, global, "lv_slider_set_left_value", js_mkfun(js_lv_slider_set_left_value));
-  js_set(js, global, "lv_slider_get_value",      js_mkfun(js_lv_slider_get_value));
-  js_set(js, global, "lv_slider_get_left_value", js_mkfun(js_lv_slider_get_left_value));
 
   //==================== SPAN ============================
   js_set(js, global, "lv_spangroup_create",      js_mkfun(js_lv_spangroup_create));
@@ -3003,13 +2953,6 @@ void register_js_functions() {
   // ---------- LINE bridging
   js_set(js, global, "lv_line_create",          js_mkfun(js_lv_line_create));
   js_set(js, global, "lv_line_set_points",      js_mkfun(js_lv_line_set_points));
-
-  // ---------- LED bridging
-  js_set(js, global, "lv_led_create",           js_mkfun(js_lv_led_create));
-  js_set(js, global, "lv_led_on",               js_mkfun(js_lv_led_on));
-  js_set(js, global, "lv_led_off",              js_mkfun(js_lv_led_off));
-  js_set(js, global, "lv_led_set_brightness",   js_mkfun(js_lv_led_set_brightness));
-  js_set(js, global, "lv_led_set_color",        js_mkfun(js_lv_led_set_color));
 
   // ---------- BUTTON bridging
   js_set(js, global, "lv_btn_create", js_mkfun(js_lv_btn_create));

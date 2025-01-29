@@ -895,10 +895,22 @@ static jsval_t js_label_set_text(struct js* js, jsval_t* args, int nargs) {
   const char* rawText = js_str(js, args[1]);
   if(!rawText) return js_mknull();
 
+  // Convert to an Arduino String so we can trim quotes.
+  String txt(rawText);
+
+  // If the string starts and ends with " and is longer than 1 char,
+  // remove those outer quotes.
+  if(txt.startsWith("\"") && txt.endsWith("\"") && txt.length() > 1) {
+      txt.remove(0, 1);                 // remove leading "
+      txt.remove(txt.length() - 1, 1);  // remove trailing "
+  }
+
+  // Retrieve the lv_obj_t* from the handle
   lv_obj_t* label = get_lv_obj(lblHandle);
   if(!label) return js_mknull();
 
-  lv_label_set_text(label, rawText);
+  // Finally set the text (now without extra quotes)
+  lv_label_set_text(label, txt.c_str());
   return js_mknull();
 }
 

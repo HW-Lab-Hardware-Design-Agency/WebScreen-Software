@@ -7,11 +7,19 @@
 #include <NimBLEDevice.h>
 
 #include <WiFi.h>           // WiFi library that also provides WiFiClient
+#include <ArduinoJson.h>
 #include <PubSubClient.h>   // For MQTT
+
+#include <vector>
+#include <utility>  // for std::pair
 
 // Global WiFiClient + PubSubClient
 static WiFiClient    g_wifiClient;
 static PubSubClient  g_mqttClient(g_wifiClient);
+
+// HTTP client certificate.
+static char* g_httpCAcert = nullptr;  // Will hold entire PEM cert from SD
+static std::vector<std::pair<String, String>> g_http_headers;
 
 // NimBLE globals
 static NimBLEServer*         g_bleServer    = nullptr;
@@ -556,21 +564,48 @@ bool load_and_execute_js_script(const char* path) {
 /******************************************************************************
  * G) Basic draw_label, draw_rect, show_image from SD
  ******************************************************************************/
-static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) {
-    Serial.println("draw_label: expects text, x, y");
+static const lv_font_t* get_font_for_size(int size) {
+    // Map the integer size to specific built-in Montserrat fonts
+    if(size == 14)  return &lv_font_montserrat_14;
+    if(size == 28)  return &lv_font_montserrat_28;
+    if(size == 40)  return &lv_font_montserrat_40;
+    // Fallback:
+    return &lv_font_montserrat_14;
+}
+
+static jsval_t js_lvgl_draw_label(struct js* js, jsval_t* args, int nargs) {
+    // We expect at least 3 args: text, x, y. 4th arg is optional fontSize
+    if(nargs < 3) {
+        Serial.println("draw_label: expects text, x, y, [fontSize]");
+        return js_mknull();
+    }
+
+    // 1) Extract text and strip quotes if any
+    const char* rawText = js_str(js, args[0]);
+    if(!rawText) return js_mknull();
+    String txt(rawText);
+    if(txt.startsWith("\"") && txt.endsWith("\"")) {
+        txt.remove(0, 1);
+        txt.remove(txt.length() - 1, 1);
+    }
+
+    // 2) X, Y
+    int x = (int)js_getnum(args[1]);
+    int y = (int)js_getnum(args[2]);
+
+    // 3) Create label and set text
+    lv_obj_t* label = lv_label_create(lv_scr_act());
+    lv_label_set_text(label, txt.c_str());
+    lv_obj_set_pos(label, x, y);
+
+    // 4) If fontSize argument is provided, apply that font
+    if(nargs >= 4) {
+        int fontSize = (int)js_getnum(args[3]);
+        const lv_font_t* font = get_font_for_size(fontSize);
+        lv_obj_set_style_text_font(label, font, 0);
+    }
+
     return js_mknull();
-  }
-  const char* labelText = js_str(js, args[0]);
-  int x = (int)js_getnum(args[1]);
-  int y = (int)js_getnum(args[2]);
-
-  lv_obj_t *label = lv_label_create(lv_scr_act());
-  if(labelText) lv_label_set_text(label, labelText);
-  lv_obj_set_pos(label, x, y);
-
-  Serial.printf("draw_label: '%s' at (%d,%d)\n", labelText, x, y);
-  return js_mknull();
 }
 
 static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
@@ -839,6 +874,78 @@ static lv_style_t *g_style_map[MAX_STYLES] = { nullptr };
 static lv_style_t* get_lv_style(int handle) {
   if(handle<0 || handle>=MAX_STYLES) return nullptr;
   return g_style_map[handle];
+}
+
+
+static jsval_t js_create_label(struct js* js, jsval_t* args, int nargs) {
+  if(nargs < 2) return js_mknum(-1);  // need x,y
+  int x = (int)js_getnum(args[0]);
+  int y = (int)js_getnum(args[1]);
+
+  lv_obj_t* label = lv_label_create(lv_scr_act());
+  lv_obj_set_pos(label, x, y);
+
+  int handle = store_lv_obj(label);
+  return js_mknum(handle);
+}
+
+static jsval_t js_label_set_text(struct js* js, jsval_t* args, int nargs) {
+  if(nargs < 2) return js_mknull();
+  int lblHandle = (int)js_getnum(args[0]);
+  const char* rawText = js_str(js, args[1]);
+  if(!rawText) return js_mknull();
+
+  // Convert to an Arduino String so we can trim quotes.
+  String txt(rawText);
+
+  // If the string starts and ends with " and is longer than 1 char,
+  // remove those outer quotes.
+  if(txt.startsWith("\"") && txt.endsWith("\"") && txt.length() > 1) {
+      txt.remove(0, 1);                 // remove leading "
+      txt.remove(txt.length() - 1, 1);  // remove trailing "
+  }
+
+  // Retrieve the lv_obj_t* from the handle
+  lv_obj_t* label = get_lv_obj(lblHandle);
+  if(!label) return js_mknull();
+
+  // Finally set the text (now without extra quotes)
+  lv_label_set_text(label, txt.c_str());
+  return js_mknull();
+}
+
+// style_set_text_font(styleHandle, fontSize)
+static jsval_t js_style_set_text_font(struct js* js, jsval_t* args, int nargs) {
+    if (nargs < 2) return js_mknull();
+    int styleH = (int)js_getnum(args[0]);
+    int fontSize = (int)js_getnum(args[1]);
+
+    // Convert the style handle to an lv_style_t*
+    lv_style_t* st = get_lv_style(styleH);
+    if (!st) return js_mknull();
+
+    // Pick a built-in font
+    const lv_font_t* font = get_font_for_size(fontSize);
+
+    // Apply it
+    lv_style_set_text_font(st, font);
+
+    return js_mknull();
+}
+
+// style_set_text_align(styleHandle, align)
+static jsval_t js_style_set_text_align(struct js* js, jsval_t* args, int nargs) {
+    if (nargs < 2) return js_mknull();
+    int styleH = (int)js_getnum(args[0]);
+    int alignVal = (int)js_getnum(args[1]); // e.g. 0 for LEFT, 1 for CENTER, etc.
+
+    lv_style_t* st = get_lv_style(styleH);
+    if (!st) return js_mknull();
+
+    // In LVGL 8.x: LV_TEXT_ALIGN_LEFT=0, _CENTER=1, _RIGHT=2, _AUTO=3
+    lv_style_set_text_align(st, (lv_text_align_t)alignVal);
+
+    return js_mknull();
 }
 
 // create_style()
@@ -1809,80 +1916,6 @@ static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int
 }
 
 /********************************************************************************
- * SPINBOX
- ********************************************************************************/
-static jsval_t js_lv_spinbox_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *sb = lv_spinbox_create(lv_scr_act());
-    int handle = store_lv_obj(sb);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_spinbox_set_range(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH, min, max)
-    if(nargs<3) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int mn  = (int)js_getnum(args[1]);
-    int mx  = (int)js_getnum(args[2]);
-
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_set_range(sb, mn, mx);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_set_digit_format(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH, digit_count, separator_pos)
-    if(nargs<3) return js_mknull();
-    int h        = (int)js_getnum(args[0]);
-    int digCount = (int)js_getnum(args[1]);
-    int sepPos   = (int)js_getnum(args[2]);
-
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_set_digit_format(sb, digCount, sepPos);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_step_prev(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_step_prev(sb);
-    return js_mknull();
-}
-static jsval_t js_lv_spinbox_step_next(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_step_next(sb);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_increment(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_increment(sb);
-    return js_mknull();
-}
-
-static jsval_t js_lv_spinbox_decrement(struct js *js, jsval_t *args, int nargs) {
-    // (spinboxH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *sb = get_lv_obj(h);
-    if(!sb) return js_mknull();
-    lv_spinbox_decrement(sb);
-    return js_mknull();
-}
-
-/********************************************************************************
  * MSGBOX
  ********************************************************************************/
 static jsval_t js_lv_msgbox_create(struct js *js, jsval_t *args, int nargs) {
@@ -1932,198 +1965,6 @@ static jsval_t js_lv_msgbox_get_active_btn_text(struct js *js, jsval_t *args, in
     if(!t) t = "";
     return js_mkstr(js, t, strlen(t));
 }
-
-/********************************************************************************
- * ROLLER
- ********************************************************************************/
-static jsval_t js_lv_roller_create(struct js *js, jsval_t *args, int nargs) {
-    // no param
-    lv_obj_t *roll = lv_roller_create(lv_scr_act());
-    int handle = store_lv_obj(roll);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_roller_set_options(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH, "str with \n", modeEnum)
-    if(nargs<3) return js_mknull();
-    int h  = (int)js_getnum(args[0]);
-    const char* opts = js_str(js, args[1]);
-    int mode = (int)js_getnum(args[2]); // e.g. LV_ROLLER_MODE_NORMAL or LV_ROLLER_MODE_INFINITE
-
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mknull();
-
-    lv_roller_set_options(roll, opts ? opts : "", (lv_roller_mode_t)mode);
-    return js_mknull();
-}
-
-static jsval_t js_lv_roller_set_visible_row_count(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH, rowCount)
-    if(nargs<2) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int r = (int)js_getnum(args[1]);
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mknull();
-    lv_roller_set_visible_row_count(roll, r);
-    return js_mknull();
-}
-
-static jsval_t js_lv_roller_get_selected_str(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH) -> string
-    if(nargs<1) return js_mkstr(js,"",0);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mkstr(js,"",0);
-
-    char buf[64];
-    lv_roller_get_selected_str(roll, buf, sizeof(buf));
-    return js_mkstr(js, buf, strlen(buf));
-}
-
-static jsval_t js_lv_roller_set_selected(struct js *js, jsval_t *args, int nargs) {
-    // (rollerH, sel, animOff0or1)
-    if(nargs<3) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int sel = (int)js_getnum(args[1]);
-    int anim = (int)js_getnum(args[2]);
-
-    lv_obj_t *roll = get_lv_obj(h);
-    if(!roll) return js_mknull();
-
-    lv_roller_set_selected(roll, sel, anim ? LV_ANIM_ON : LV_ANIM_OFF);
-    return js_mknull();
-}
-
-/*******************************************************
- * BUTTON BRIDGING
- *******************************************************/
-
-// create_button(parentHandle, x, y, width, height) => returns handle
-static jsval_t js_lv_btn_create(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 5) {
-        Serial.println("lv_btn_create: expects parentHandle, x, y, width, height");
-        return js_mknull();
-    }
-    int parentHandle = (int)js_getnum(args[0]);
-    int x = (int)js_getnum(args[1]);
-    int y = (int)js_getnum(args[2]);
-    int width = (int)js_getnum(args[3]);
-    int height = (int)js_getnum(args[4]);
-
-    lv_obj_t *parent = get_lv_obj(parentHandle);
-    if(!parent) {
-        Serial.println("lv_btn_create: invalid parent handle");
-        return js_mknull();
-    }
-
-    lv_obj_t *button = lv_btn_create(parent);
-    lv_obj_set_pos(button, x, y);
-    lv_obj_set_size(button, width, height);
-
-    int handle = store_lv_obj(button);
-    Serial.printf("lv_btn_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-// button_set_text(buttonHandle, "Button Text")
-static jsval_t js_lv_button_set_text(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_button_set_text: expects buttonHandle, text");
-        return js_mknull();
-    }
-    int btnHandle = (int)js_getnum(args[0]);
-    const char* text = js_str(js, args[1]);
-
-    lv_obj_t *button = get_lv_obj(btnHandle);
-    if(!button) {
-        Serial.println("lv_button_set_text: invalid button handle");
-        return js_mknull();
-    }
-
-    lv_obj_t *label = lv_label_create(button);
-    lv_label_set_text(label, text ? text : "");
-    lv_obj_center(label); // Center the label within the button
-
-    Serial.printf("lv_button_set_text: handle=%d, text=%s\n", btnHandle, text ? text : "");
-    return js_mknull();
-}
-
-
-/********************************************************************************
- * SLIDER: Possibly we already have basic bridging? 
- * Additional calls: 
- *   lv_slider_set_mode, lv_slider_set_value, lv_slider_set_left_value, lv_slider_get_value, lv_slider_get_left_value
- ********************************************************************************/
-
-static jsval_t js_lv_slider_create(struct js *js, jsval_t *args, int nargs) {
-    // no params
-    lv_obj_t *sld = lv_slider_create(lv_scr_act());
-    int handle = store_lv_obj(sld);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_slider_set_mode(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH, modeEnum) -> e.g. LV_SLIDER_MODE_NORMAL, LV_SLIDER_MODE_RANGE
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int md  = (int)js_getnum(args[1]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknull();
-    lv_slider_set_mode(sld, (lv_slider_mode_t)md);
-    return js_mknull();
-}
-
-static jsval_t js_lv_slider_set_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH, val, animOff0or1)
-    if(nargs<3) return js_mknull();
-    int h      = (int)js_getnum(args[0]);
-    int val    = (int)js_getnum(args[1]);
-    bool anim  = (bool)js_getnum(args[2]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknull();
-    lv_slider_set_value(sld, val, anim ? LV_ANIM_ON : LV_ANIM_OFF);
-    return js_mknull();
-}
-
-static jsval_t js_lv_slider_set_left_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH, val, animOff0or1)
-    if(nargs<3) return js_mknull();
-    int h      = (int)js_getnum(args[0]);
-    int val    = (int)js_getnum(args[1]);
-    bool anim  = (bool)js_getnum(args[2]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknull();
-    lv_slider_set_left_value(sld, val, anim ? LV_ANIM_ON : LV_ANIM_OFF);
-    return js_mknull();
-}
-
-static jsval_t js_lv_slider_get_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH) -> int
-    if(nargs<1) return js_mknum(0);
-    int h = (int)js_getnum(args[0]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknum(0);
-
-    int v = lv_slider_get_value(sld);
-    return js_mknum((double)v);
-}
-
-static jsval_t js_lv_slider_get_left_value(struct js *js, jsval_t *args, int nargs) {
-    // (sliderH) -> int
-    if(nargs<1) return js_mknum(0);
-    int h = (int)js_getnum(args[0]);
-
-    lv_obj_t *sld = get_lv_obj(h);
-    if(!sld) return js_mknum(0);
-
-    int v = lv_slider_get_left_value(sld);
-    return js_mknum((double)v);
-}
-
 
 /********************************************************************************
  * SPAN
@@ -2314,72 +2155,6 @@ static jsval_t js_lv_tileview_add_tile(struct js *js, jsval_t *args, int nargs) 
     return js_mknum(handle);
 }
 
-
-/*******************************************************
- * LIST BRIDGING
- *******************************************************/
-
-static jsval_t js_lv_list_create(struct js *js, jsval_t *args, int nargs) {
-    // create a list
-    lv_obj_t *list = lv_list_create(lv_scr_act());
-    int handle = store_lv_obj(list);
-    Serial.printf("lv_list_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_list_add_btn(struct js *js, jsval_t *args, int nargs) {
-    // (listH, iconSymbolOrNULL, txt)
-    if(nargs < 3) return js_mknull();
-    int lh = (int)js_getnum(args[0]);
-    const char* icon = js_str(js, args[1]);
-    const char* txt  = js_str(js, args[2]);
-
-    lv_obj_t *list = get_lv_obj(lh);
-    if(!list) return js_mknull();
-
-    // If icon is "NULL" or "", pass NULL
-    const char* useIcon = NULL;
-    if(icon && strlen(icon) > 0) {
-        useIcon = icon; // e.g. LV_SYMBOL_OK
-    }
-
-    lv_obj_t *btn = lv_list_add_btn(list, useIcon, txt ? txt : "");
-    int handle = store_lv_obj(btn);
-    Serial.printf("lv_list_add_btn => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_list_add_text(struct js *js, jsval_t *args, int nargs) {
-    // (listH, txt)
-    if(nargs < 2) return js_mknull();
-    int lh = (int)js_getnum(args[0]);
-    const char* txt = js_str(js, args[1]);
-
-    lv_obj_t *list = get_lv_obj(lh);
-    if(!list) return js_mknull();
-
-    lv_obj_t *obj = lv_list_add_text(list, txt ? txt : "");
-    int handle = store_lv_obj(obj);
-    Serial.printf("lv_list_add_text => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_list_get_btn_text(struct js *js, jsval_t *args, int nargs) {
-    // (listH, btnH) => returns text string
-    if(nargs < 2) return js_mkstr(js, "", 0);
-    int listH = (int)js_getnum(args[0]);
-    int btnH  = (int)js_getnum(args[1]);
-
-    lv_obj_t *list = get_lv_obj(listH);
-    lv_obj_t *btn  = get_lv_obj(btnH);
-    if(!list || !btn) return js_mkstr(js, "", 0);
-
-    const char* txt = lv_list_get_btn_text(list, btn);
-    if(!txt) txt = "";
-    return js_mkstr(js, txt, strlen(txt));
-}
-
-
 /*******************************************************
  * LINE BRIDGING
  *******************************************************/
@@ -2420,117 +2195,581 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) {
     return js_mknull();
 }
 
-
-/*******************************************************
- * LED BRIDGING
- *******************************************************/
-
-static jsval_t js_lv_led_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *led = lv_led_create(lv_scr_act());
-    int handle = store_lv_obj(led);
-    Serial.printf("lv_led_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_led_on(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_on(led);
-    return js_mknull();
-}
-
-static jsval_t js_lv_led_off(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_off(led);
-    return js_mknull();
-}
-
-static jsval_t js_lv_led_set_brightness(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<2) return js_mknull();
-    int h    = (int)js_getnum(args[0]);
-    int bright = (int)js_getnum(args[1]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_set_brightness(led, bright);
-    return js_mknull();
-}
-
-static jsval_t js_lv_led_set_color(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<2) return js_mknull();
-    int h    = (int)js_getnum(args[0]);
-    double col = js_getnum(args[1]);
-    lv_obj_t *led = get_lv_obj(h);
-    if(!led) return js_mknull();
-
-    lv_led_set_color(led, lv_color_hex((uint32_t)col));
-    return js_mknull();
-}
-
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~ 1) HTTP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// http_get(url)
+// Helper function to read the HTTP response body
+String readHttpResponseBody(WiFiClient &client) {
+    String headers;
+    String body;
+    bool chunked = false;
+
+    // 1) Read headers line by line until a blank line
+    while (client.connected()) {
+        String line = client.readStringUntil('\n');
+        if (line == "\r") {
+            // End of headers
+            break;
+        }
+        headers += line + "\n";
+        if (line.indexOf("Transfer-Encoding: chunked") >= 0) {
+            chunked = true;
+        }
+    }
+
+    // 2) Read the body
+    if (chunked) {
+        while (true) {
+            // Read chunk size
+            String sizeLine = client.readStringUntil('\n');
+            sizeLine.trim();
+            int chunkSize = strtol(sizeLine.c_str(), NULL, 16);
+            if (chunkSize <= 0) {
+                // No more chunks
+                client.readStringUntil('\n'); // Read trailing \r\n
+                break;
+            }
+
+            // Read the chunk data
+            char buf[256];
+            int bytesRead = 0;
+            while (bytesRead < chunkSize) {
+                int toRead = chunkSize - bytesRead;
+                if (toRead > sizeof(buf)) toRead = sizeof(buf);
+                int n = client.readBytes(buf, toRead);
+                if (n <= 0) break; // Timeout or error
+                body += String(buf).substring(0, n);
+                bytesRead += n;
+            }
+
+            client.readStringUntil('\n'); // Read trailing \r\n
+        }
+    } else {
+        // Read until the connection is closed
+        while (client.connected() || client.available()) {
+            if (client.available()) {
+                char c = client.read();
+                body += c;
+            } else {
+                delay(1);
+            }
+        }
+    }
+
+    return body;
+}
+
+// Bridging function to parse JSON and extract a value for a given key
+static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) {
+      Serial.println("js_parse_json_value: Not enough arguments");
+      return js_mkstr(js, "", 0);
+  }
+
+  // Retrieve JSON string
+  size_t json_len;
+  char* jsonStr_cstr = js_getstr(js, args[0], &json_len);
+  if (!jsonStr_cstr) {
+      Serial.println("js_parse_json_value: Argument 1 is not a string");
+      return js_mkstr(js, "", 0);
+  }
+  String jsonStr(jsonStr_cstr, json_len);
+
+  Serial.printf("js_parse_json_value: Retrieved JSON string (%d bytes): %s\n", json_len, jsonStr.c_str());
+
+  // Retrieve key string
+  size_t key_len;
+  char* key_cstr = js_getstr(js, args[1], &key_len);
+  if (!key_cstr) {
+      Serial.println("js_parse_json_value: Argument 2 is not a string");
+      return js_mkstr(js, "", 0);
+  }
+  String keyStr(key_cstr, key_len);
+
+  Serial.printf("js_parse_json_value: Retrieved key string (%d bytes): %s\n", key_len, keyStr.c_str());
+
+  // Strip surrounding quotes if present
+  if (keyStr.startsWith("\"") && keyStr.endsWith("\"") && keyStr.length() >= 2) {
+      keyStr = keyStr.substring(1, keyStr.length() - 1);
+      Serial.printf("js_parse_json_value: Stripped quotes from key. New key: '%s'\n", keyStr.c_str());
+  }
+
+  // Parse JSON using ArduinoJson
+  StaticJsonDocument<1024> doc; // Adjust size as needed
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  if (error) {
+      Serial.print("js_parse_json_value: JSON parse failed: ");
+      Serial.println(error.c_str());
+      return js_mkstr(js, "", 0);
+  }
+
+  // Check if JSON is an object
+  if (!doc.is<JsonObject>()) {
+      Serial.println("js_parse_json_value: Parsed JSON is not an object");
+      return js_mkstr(js, "", 0);
+  }
+
+  // Debugging: Print all key-value pairs
+  Serial.println("js_parse_json_value: Parsed JSON keys and values:");
+  JsonObject obj = doc.as<JsonObject>();
+  for (JsonPair kv : obj) {
+    String valStr = kv.value().as<String>();
+    Serial.printf("Key: %s, Value: %s\n", kv.key().c_str(), valStr.c_str());
+  }
+
+  // Extract the value
+  JsonVariant value = obj[keyStr.c_str()];
+
+  // Check if the key exists
+  if (value.isNull()) {
+      Serial.printf("js_parse_json_value: Key '%s' not found or null\n", keyStr.c_str());
+      return js_mkstr(js, "", 0);
+  }
+
+  // Convert the value to string, regardless of its type
+  String resultStr;
+  if (value.is<const char*>()) {
+      resultStr = String(value.as<const char*>());
+  } else if (value.is<double>()) {
+      resultStr = String(value.as<double>());
+  } else if (value.is<bool>()) {
+      resultStr = value.as<bool>() ? "true" : "false";
+  } else {
+      // For other types, attempt to stringify
+      resultStr = String(value.as<String>());
+  }
+
+  Serial.printf("js_parse_json_value: Extracted '%s': %s\n", keyStr.c_str(), resultStr.c_str());
+
+  // Return the extracted value to JavaScript
+  return js_mkstr(js, resultStr.c_str(), resultStr.length());
+}
+
+// Bridging function to perform string index search
+static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs) {
+    if (nargs < 2) {
+        Serial.println("str_index_of: Not enough arguments");
+        return js_mknum(-1);
+    }
+
+    // Retrieve haystack string
+    size_t haystack_len;
+    char* haystack_cstr = js_getstr(js, args[0], &haystack_len);
+    if (!haystack_cstr) {
+        Serial.println("str_index_of: Argument 1 is not a string");
+        return js_mknum(-1);
+    }
+    String haystackStr(haystack_cstr, haystack_len);
+
+    // Retrieve needle string
+    size_t needle_len;
+    char* needle_cstr = js_getstr(js, args[1], &needle_len);
+    if (!needle_cstr) {
+        Serial.println("str_index_of: Argument 2 is not a string");
+        return js_mknum(-1);
+    }
+    String needleStr(needle_cstr, needle_len);
+
+    Serial.printf("str_index_of: Retrieved haystack ('%s') and needle ('%s')\n", haystackStr.c_str(), needleStr.c_str());
+
+    // Optional: Strip surrounding quotes if present
+    if (haystackStr.startsWith("\"") && haystackStr.endsWith("\"") && haystackStr.length() >= 2) {
+        haystackStr = haystackStr.substring(1, haystackStr.length() - 1);
+        Serial.printf("str_index_of: Stripped quotes from haystack. New haystack: '%s'\n", haystackStr.c_str());
+    }
+
+    if (needleStr.startsWith("\"") && needleStr.endsWith("\"") && needleStr.length() >= 2) {
+        needleStr = needleStr.substring(1, needleStr.length() - 1);
+        Serial.printf("str_index_of: Stripped quotes from needle. New needle: '%s'\n", needleStr.c_str());
+    }
+
+    Serial.printf("str_index_of: Searching for '%s' in '%s'\n", needleStr.c_str(), haystackStr.c_str());
+
+    int index = haystackStr.indexOf(needleStr);
+    if (index == -1) {
+        Serial.println("str_index_of: Needle not found");
+        return js_mknum(-1);
+    }
+
+    Serial.printf("str_index_of: Found at index %d\n", index);
+    return js_mknum(index);
+}
+
+// Bridging function to perform string substring extraction
+static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
+    if (nargs < 3) {
+        Serial.println("str_substring: Not enough arguments");
+        return js_mkstr(js, "", 0);
+    }
+
+    // Retrieve string
+    size_t str_len;
+    char* str_cstr = js_getstr(js, args[0], &str_len);
+    if (!str_cstr) {
+        Serial.println("str_substring: Argument 1 is not a string");
+        return js_mkstr(js, "", 0);
+    }
+    String strStr(str_cstr, str_len);
+
+    // Check if arguments 2 and 3 are numbers
+    if (js_type(args[1]) != JS_NUM || js_type(args[2]) != JS_NUM) {
+        Serial.println("str_substring: Arguments 2 and 3 must be numbers");
+        return js_mkstr(js, "", 0);
+    }
+
+    // Extract numerical values
+    int start  = (int)js_getnum(args[1]);
+    int length = (int)js_getnum(args[2]);
+
+    Serial.printf("str_substring: Retrieved string ('%s'), start (%d), length (%d)\n", strStr.c_str(), start, length);
+
+    // Optional: Strip surrounding quotes if present
+    if (strStr.startsWith("\"") && strStr.endsWith("\"") && strStr.length() >= 2) {
+        strStr = strStr.substring(1, strStr.length() - 1);
+        Serial.printf("str_substring: Stripped quotes from string. New string: '%s'\n", strStr.c_str());
+    }
+
+    // Handle negative length (extract until end)
+    if (length < 0) {
+        strStr = strStr.substring(start);
+    } else {
+        // Ensure that start + length does not exceed string length
+        int end = start + length;
+        if (end > strStr.length()) {
+            end = strStr.length();
+        }
+        strStr = strStr.substring(start, end);
+    }
+
+    Serial.printf("str_substring: Extracted substring '%s' with length %d\n", strStr.c_str(), length);
+    return js_mkstr(js, strStr.c_str(), strStr.length());
+}
+
+
 static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
   if(nargs<1) return js_mkstr(js,"",0);
-  const char* url = js_str(js, args[0]);
-  if(!url) return js_mkstr(js,"",0);
+  const char* rawUrl = js_str(js, args[0]);
+  if(!rawUrl) return js_mkstr(js, "", 0);
 
-  HTTPClient http;
-  http.begin(url);
-  int httpCode = http.GET();
-  if(httpCode<=0) {
-    http.end();
-    return js_mkstr(js,"",0);
+  // Convert to Arduino String
+  String url(rawUrl);
+
+  // Strip quotes if needed
+  if(url.startsWith("\"") && url.endsWith("\"")) {
+    url.remove(0,1);
+    url.remove(url.length()-1,1);
   }
-  String payload = http.getString();
-  http.end();
-  return js_mkstr(js, payload.c_str(), payload.length());
+
+  Serial.println("js_http_get => Using SSL for: " + url);
+
+  // 1) Remove "https://" prefix (assuming always https)
+  const String HTTPS_PREFIX = "https://";
+  if(url.startsWith(HTTPS_PREFIX)) {
+    url.remove(0, HTTPS_PREFIX.length());
+  }
+
+  // 2) Extract host + path
+  int slashPos = url.indexOf('/');
+  String host, path;
+  if(slashPos < 0) {
+    host = url;
+    path = "/";
+  } else {
+    host = url.substring(0, slashPos);
+    path = url.substring(slashPos);
+  }
+  
+  Serial.println("Parsed host='" + host + "', path='" + path + "'");
+
+  // 3) WiFiClientSecure
+  WiFiClientSecure client;
+  if (g_httpCAcert) {
+    // If user loaded a cert from SD, use it
+    client.setCACert(g_httpCAcert);
+    Serial.println("Using user-supplied CA cert (secure)");
+  } else {
+    // Otherwise, skip validation
+    client.setInsecure();
+    Serial.println("No CA cert => setInsecure() (unsecure)");
+  }
+
+  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  if(!client.connect(host.c_str(), 443)) {
+    Serial.println("Connection failed!");
+    return js_mkstr(js, "", 0);
+  }
+  Serial.println("Connected => sending GET request");
+  
+  // 4) Construct the GET request + custom headers
+  client.print(String("GET ") + path + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+  
+  // Send any stored headers from g_http_headers
+  for (auto &hdr : g_http_headers) {
+    // e.g. "Authorization: Bearer 12345\r\n"
+    client.print(hdr.first);
+    client.print(": ");
+    client.print(hdr.second);
+    client.print("\r\n");
+  }
+
+  client.print("Connection: close\r\n\r\n");
+
+  // 5) Read full response
+  String response = readHttpResponseBody(client);
+  client.stop();
+  
+  Serial.printf("Done reading. response size=%d\n", response.length());
+  Serial.println("Full response content:\n<<<");
+  Serial.println(response);  // <--- add this!
+  Serial.println(">>> End of response");
+  
+  // Return entire raw HTTP response
+  return js_mkstr(js, response.c_str(), response.length());
 }
 
-// http_post(url, body)
 static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mkstr(js,"",0);
-  const char* url  = js_str(js, args[0]);
-  const char* body = js_str(js, args[1]);
-  if(!url || !body) return js_mkstr(js,"",0);
+  if(nargs < 2) return js_mkstr(js,"",0);
+  const char* rawUrl = js_str(js, args[0]);
+  const char* body   = js_str(js, args[1]);
+  if(!rawUrl || !body) return js_mkstr(js, "", 0);
 
-  HTTPClient http;
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-  int httpCode = http.POST((uint8_t*)body, strlen(body));
-  if(httpCode<=0) {
-    http.end();
-    return js_mkstr(js,"",0);
+  // Convert to Arduino Strings for easy manipulation
+  String url(rawUrl);
+  String jsonBody(body);
+
+  // Strip quotes if any
+  if(url.startsWith("\"") && url.endsWith("\"")) {
+    url.remove(0,1);
+    url.remove(url.length()-1,1);
   }
-  String payload = http.getString();
-  http.end();
-  return js_mkstr(js, payload.c_str(), payload.length());
+  if(jsonBody.startsWith("\"") && jsonBody.endsWith("\"")) {
+    jsonBody.remove(0,1);
+    jsonBody.remove(jsonBody.length()-1,1);
+  }
+
+  // We'll assume "https://"
+  const String HTTPS_PREFIX = "https://";
+  if(url.startsWith(HTTPS_PREFIX)) {
+    url.remove(0, HTTPS_PREFIX.length());
+  }
+
+  // Find first slash => host + path
+  int slashPos = url.indexOf('/');
+  String host, path;
+  if(slashPos < 0) {
+    host = url;
+    path = "/";
+  } else {
+    host = url.substring(0, slashPos);
+    path = url.substring(slashPos);
+  }
+
+  Serial.println("\njs_http_post => manual approach");
+  Serial.println("Host: " + host);
+  Serial.println("Path: " + path);
+  Serial.printf("Body length=%d\n", jsonBody.length());
+
+  // WiFiClientSecure
+  WiFiClientSecure client;
+  if (g_httpCAcert) {
+    client.setCACert(g_httpCAcert);
+    Serial.println("Using user-supplied CA cert (POST)");
+  } else {
+    client.setInsecure();
+    Serial.println("No CA => setInsecure() (POST)");
+  }
+
+  // Connect on port 443
+  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  if(!client.connect(host.c_str(), 443)) {
+    Serial.println("Connection failed (POST)!");
+    return js_mkstr(js, "", 0);
+  }
+  Serial.println("Connected => sending POST request");
+
+  // Construct POST request
+  // e.g.:
+  // POST /path HTTP/1.1
+  // Host: host
+  // Content-Type: application/json
+  // Content-Length: ...
+  // Connection: close
+  //
+  // {body}
+  client.print(String("POST ") + path + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+
+  // If you want custom headers from g_http_headers, do:
+  // for(auto &hdr : g_http_headers) { ... }
+
+  client.print("Content-Type: application/json\r\n");
+  client.printf("Content-Length: %d\r\n", jsonBody.length());
+  client.print("Connection: close\r\n\r\n");
+
+  // Send body
+  client.print(jsonBody);
+
+  // Read entire response
+  String response = readHttpResponseBody(client);
+  client.stop();
+  
+  Serial.printf("Done POST. response size=%d\n", response.length());
+  
+  // Return entire raw HTTP response
+  return js_mkstr(js, response.c_str(), response.length());
 }
 
-// Similarly for PUT, PATCH, DELETE (example: http_delete)
 static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<1) return js_mkstr(js,"",0);
-  const char* url = js_str(js, args[0]);
-  if(!url) return js_mkstr(js,"",0);
+  if(nargs < 1) return js_mkstr(js,"",0);
+  const char* rawUrl = js_str(js, args[0]);
+  if(!rawUrl) return js_mkstr(js, "", 0);
 
-  HTTPClient http;
-  http.begin(url);
-  int httpCode = http.sendRequest("DELETE");
-  if(httpCode<=0) {
-    http.end();
-    return js_mkstr(js,"",0);
+  String url(rawUrl);
+
+  // Remove quotes if any
+  if(url.startsWith("\"") && url.endsWith("\"")) {
+    url.remove(0,1);
+    url.remove(url.length()-1,1);
   }
-  String payload = http.getString();
-  http.end();
-  return js_mkstr(js, payload.c_str(), payload.length());
+
+  // Assume https://
+  const String HTTPS_PREFIX = "https://";
+  if(url.startsWith(HTTPS_PREFIX)) {
+    url.remove(0, HTTPS_PREFIX.length());
+  }
+
+  // Split host/path
+  int slashPos = url.indexOf('/');
+  String host, path;
+  if(slashPos < 0) {
+    host = url;
+    path = "/";
+  } else {
+    host = url.substring(0, slashPos);
+    path = url.substring(slashPos);
+  }
+
+  Serial.println("\njs_http_delete => manual approach");
+  Serial.println("Host: " + host);
+  Serial.println("Path: " + path);
+
+  // WiFiClientSecure
+  WiFiClientSecure client;
+  if (g_httpCAcert) {
+    client.setCACert(g_httpCAcert);
+    Serial.println("Using user-supplied CA cert (DELETE)");
+  } else {
+    client.setInsecure();
+    Serial.println("No CA => setInsecure() (DELETE)");
+  }
+
+  // Connect
+  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  if(!client.connect(host.c_str(), 443)) {
+    Serial.println("Connection failed (DELETE)!");
+    return js_mkstr(js, "", 0);
+  }
+  Serial.println("Connected => sending DELETE request");
+
+  // e.g.:
+  // DELETE /path HTTP/1.1
+  // Host: host
+  // Connection: close
+  client.print(String("DELETE ") + path + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+
+  // If you want custom headers from g_http_headers, do:
+  // for(auto &hdr : g_http_headers) { ... }
+
+  client.print("Connection: close\r\n\r\n");
+
+  // read entire response
+  String body = readHttpResponseBody(client);
+  client.stop();
+  
+  Serial.printf("Done DELETE. response size=%d\n", body.length());
+  
+  // Return entire raw HTTP response
+  return js_mkstr(js, body.c_str(), body.length());
 }
 
+static jsval_t js_http_set_header(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkfalse();
+
+  const char* key   = js_str(js, args[0]);
+  const char* value = js_str(js, args[1]);
+  if (!key || !value) return js_mkfalse();
+
+  // Convert to Arduino Strings for easy storage
+  String k(key), v(value);
+
+  // Optionally strip leading/trailing quotes if needed
+  if(k.startsWith("\"") && k.endsWith("\"")) {
+    k.remove(0,1);
+    k.remove(k.length()-1,1);
+  }
+  if(v.startsWith("\"") && v.endsWith("\"")) {
+    v.remove(0,1);
+    v.remove(v.length()-1,1);
+  }
+
+  // Append to our global vector
+  g_http_headers.push_back(std::make_pair(k, v));
+  Serial.printf("Added header: %s: %s\n", k.c_str(), v.c_str());
+  return js_mktrue();
+}
+
+static jsval_t js_http_clear_headers(struct js *js, jsval_t *args, int nargs) {
+  g_http_headers.clear();
+  return js_mktrue();
+}
+
+static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 1) return js_mkfalse();  
+  const char* rawPath = js_str(js, args[0]);
+  if(!rawPath) return js_mkfalse();
+
+  // Strip quotes if present
+  String path(rawPath);
+  if(path.startsWith("\"") && path.endsWith("\"")) {
+    path = path.substring(1, path.length()-1);
+  }
+
+  // Open file from SD
+  File f = SD_MMC.open(path, FILE_READ);
+  if(!f) {
+    Serial.printf("Failed to open CA cert file: %s\n", path.c_str());
+    return js_mkfalse();
+  }
+
+  size_t size = f.size();
+  if(size == 0) {
+    Serial.printf("CA file is empty: %s\n", path.c_str());
+    f.close();
+    return js_mkfalse();
+  }
+
+  // Reallocate or free old buffer
+  if(g_httpCAcert) {
+    free(g_httpCAcert);
+    g_httpCAcert = nullptr;
+  }
+
+  // Allocate enough bytes (include space for trailing '\0')
+  g_httpCAcert = (char*)malloc(size + 1);
+  if(!g_httpCAcert) {
+    Serial.println("Not enough RAM to store CA cert!");
+    f.close();
+    return js_mkfalse();
+  }
+
+  // Read the file
+  size_t bytesRead = f.readBytes(g_httpCAcert, size);
+  f.close();
+  g_httpCAcert[bytesRead] = '\0';  // Null-terminate
+
+  Serial.printf("Loaded CA cert (%u bytes) from SD file: %s\n", (unsigned)bytesRead, path.c_str());
+  return js_mktrue();
+}
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~ 4) Extended SD ops ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // We already have sd_list_dir, sd_read_file, sd_write_file. Add file delete:
@@ -2844,10 +3083,18 @@ void register_js_functions() {
   js_set(js, global, "wifi_get_ip",  js_mkfun(js_wifi_get_ip));
   js_set(js, global, "delay",        js_mkfun(js_delay));
 
+  // bridging for indexOf / substring
+  js_set(js, global, "str_index_of",   js_mkfun(js_str_index_of));
+  js_set(js, global, "str_substring",  js_mkfun(js_str_substring));
+
   // HTTP
   js_set(js, global, "http_get",    js_mkfun(js_http_get));
   js_set(js, global, "http_post",   js_mkfun(js_http_post));
   js_set(js, global, "http_delete", js_mkfun(js_http_delete));
+  js_set(js, global, "http_set_ca_cert_from_sd", js_mkfun(js_http_set_ca_cert_from_sd));
+  js_set(js, global, "parse_json_value", js_mkfun(js_parse_json_value));
+  js_set(js, global, "http_set_header", js_mkfun(js_http_set_header));
+  js_set(js, global, "http_clear_headers", js_mkfun(js_http_clear_headers));
 
   // SD functions
   js_set(js, global, "sd_read_file", js_mkfun(js_sd_read_file));
@@ -2863,10 +3110,12 @@ void register_js_functions() {
   // GIF from memory
   js_set(js, global, "show_gif_from_sd", js_mkfun(js_show_gif_from_sd));
 
-  // Basic shapes
+  // Basic shapes and labels.
   js_set(js, global, "draw_label",   js_mkfun(js_lvgl_draw_label));
   js_set(js, global, "draw_rect",    js_mkfun(js_lvgl_draw_rect));
   js_set(js, global, "show_image",   js_mkfun(js_lvgl_show_image));
+  js_set(js, global, "create_label", js_mkfun(js_create_label));
+  js_set(js, global, "label_set_text", js_mkfun(js_label_set_text));
 
   // Handle-based image creation + transforms
   js_set(js, global, "create_image",          js_mkfun(js_create_image));
@@ -2899,6 +3148,8 @@ void register_js_functions() {
   js_set(js, global, "style_set_text_color",      js_mkfun(js_style_set_text_color));
   js_set(js, global, "style_set_text_letter_space", js_mkfun(js_style_set_text_letter_space));
   js_set(js, global, "style_set_text_line_space", js_mkfun(js_style_set_text_line_space));
+  js_set(js, global, "style_set_text_font",       js_mkfun(js_style_set_text_font));
+  js_set(js, global, "style_set_text_align",      js_mkfun(js_style_set_text_align));
   js_set(js, global, "style_set_text_decor",      js_mkfun(js_style_set_text_decor));
   js_set(js, global, "style_set_line_color",      js_mkfun(js_style_set_line_color));
   js_set(js, global, "style_set_line_width",      js_mkfun(js_style_set_line_width));
@@ -2945,33 +3196,9 @@ void register_js_functions() {
   js_set(js, global, "lv_meter_set_indicator_end_value",  js_mkfun(js_lv_meter_set_indicator_end_value));
   js_set(js, global, "lv_meter_set_indicator_value",      js_mkfun(js_lv_meter_set_indicator_value));
 
-  //==================== SPINBOX =========================
-  js_set(js, global, "lv_spinbox_create",           js_mkfun(js_lv_spinbox_create));
-  js_set(js, global, "lv_spinbox_set_range",        js_mkfun(js_lv_spinbox_set_range));
-  js_set(js, global, "lv_spinbox_set_digit_format", js_mkfun(js_lv_spinbox_set_digit_format));
-  js_set(js, global, "lv_spinbox_step_prev",        js_mkfun(js_lv_spinbox_step_prev));
-  js_set(js, global, "lv_spinbox_step_next",        js_mkfun(js_lv_spinbox_step_next));
-  js_set(js, global, "lv_spinbox_increment",        js_mkfun(js_lv_spinbox_increment));
-  js_set(js, global, "lv_spinbox_decrement",        js_mkfun(js_lv_spinbox_decrement));
-
   //==================== MSGBOX ==========================
   js_set(js, global, "lv_msgbox_create",            js_mkfun(js_lv_msgbox_create));
   js_set(js, global, "lv_msgbox_get_active_btn_text", js_mkfun(js_lv_msgbox_get_active_btn_text));
-
-  //==================== ROLLER =========================
-  js_set(js, global, "lv_roller_create",         js_mkfun(js_lv_roller_create));
-  js_set(js, global, "lv_roller_set_options",    js_mkfun(js_lv_roller_set_options));
-  js_set(js, global, "lv_roller_set_visible_row_count", js_mkfun(js_lv_roller_set_visible_row_count));
-  js_set(js, global, "lv_roller_get_selected_str", js_mkfun(js_lv_roller_get_selected_str));
-  js_set(js, global, "lv_roller_set_selected",   js_mkfun(js_lv_roller_set_selected));
-
-  //==================== SLIDER (additional) =============
-  js_set(js, global, "lv_slider_create",         js_mkfun(js_lv_slider_create));
-  js_set(js, global, "lv_slider_set_mode",       js_mkfun(js_lv_slider_set_mode));
-  js_set(js, global, "lv_slider_set_value",      js_mkfun(js_lv_slider_set_value));
-  js_set(js, global, "lv_slider_set_left_value", js_mkfun(js_lv_slider_set_left_value));
-  js_set(js, global, "lv_slider_get_value",      js_mkfun(js_lv_slider_get_value));
-  js_set(js, global, "lv_slider_get_left_value", js_mkfun(js_lv_slider_get_left_value));
 
   //==================== SPAN ============================
   js_set(js, global, "lv_spangroup_create",      js_mkfun(js_lv_spangroup_create));
@@ -2994,26 +3221,9 @@ void register_js_functions() {
   js_set(js, global, "lv_tileview_create",        js_mkfun(js_lv_tileview_create));
   js_set(js, global, "lv_tileview_add_tile",      js_mkfun(js_lv_tileview_add_tile));
 
-  // ---------- LIST bridging
-  js_set(js, global, "lv_list_create",          js_mkfun(js_lv_list_create));
-  js_set(js, global, "lv_list_add_btn",         js_mkfun(js_lv_list_add_btn));
-  js_set(js, global, "lv_list_add_text",        js_mkfun(js_lv_list_add_text));
-  js_set(js, global, "lv_list_get_btn_text",    js_mkfun(js_lv_list_get_btn_text));
-
   // ---------- LINE bridging
   js_set(js, global, "lv_line_create",          js_mkfun(js_lv_line_create));
   js_set(js, global, "lv_line_set_points",      js_mkfun(js_lv_line_set_points));
-
-  // ---------- LED bridging
-  js_set(js, global, "lv_led_create",           js_mkfun(js_lv_led_create));
-  js_set(js, global, "lv_led_on",               js_mkfun(js_lv_led_on));
-  js_set(js, global, "lv_led_off",              js_mkfun(js_lv_led_off));
-  js_set(js, global, "lv_led_set_brightness",   js_mkfun(js_lv_led_set_brightness));
-  js_set(js, global, "lv_led_set_color",        js_mkfun(js_lv_led_set_color));
-
-  // ---------- BUTTON bridging
-  js_set(js, global, "lv_btn_create", js_mkfun(js_lv_btn_create));
-  js_set(js, global, "lv_button_set_text", js_mkfun(js_lv_button_set_text));
 
   // MQTT bridging
   js_set(js, global, "mqtt_init",       js_mkfun(js_mqtt_init));

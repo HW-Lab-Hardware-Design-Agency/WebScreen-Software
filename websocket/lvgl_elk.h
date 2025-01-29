@@ -7,7 +7,11 @@
 #include <NimBLEDevice.h>
 
 #include <WiFi.h>           // WiFi library that also provides WiFiClient
+#include <ArduinoJson.h>
 #include <PubSubClient.h>   // For MQTT
+
+#include <vector>
+#include <utility>  // for std::pair
 
 // Global WiFiClient + PubSubClient
 static WiFiClient    g_wifiClient;
@@ -15,112 +19,7 @@ static PubSubClient  g_mqttClient(g_wifiClient);
 
 // HTTP client certificate.
 static char* g_httpCAcert = nullptr;  // Will hold entire PEM cert from SD
-static const char timeapi_io_chain[] PROGMEM = R"EOF(
------BEGIN CERTIFICATE-----
-MIIGLDCCBRSgAwIBAgIRAOL4eUFHuBfqpfKneEdZSuAwDQYJKoZIhvcNAQELBQAw
-gY8xCzAJBgNVBAYTAkdCMRswGQYDVQQIExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAO
-BgNVBAcTB1NhbGZvcmQxGDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDE3MDUGA1UE
-AxMuU2VjdGlnbyBSU0EgRG9tYWluIFZhbGlkYXRpb24gU2VjdXJlIFNlcnZlciBD
-QTAeFw0yNDA4MTMwMDAwMDBaFw0yNTA4MTQyMzU5NTlaMBUxEzARBgNVBAMTCnRp
-bWVhcGkuaW8wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDUgSmEZSYp
-vqtl5ftqP7qNDL675AHiYa2cPsxr1yoNbOBWdY5p8fYzvza4AP3STJIYcQaLc26A
-fxzqZ/fiwxCagPkW3s+r53UbosMZQERcMF/gmZgBRAuLWvTC3WaaJO+f39aSQkPh
-nAEE+3MYfzMHSt5lllVCsV/bURlUKPQfza4yuYEhFP6Z3ym0E5PhAmcqog0Rdxjq
-DlT0KcNsuDvF7RdyjceCN4dbgTZg/6Xmh2zE4PCFYyafsDo+ZHSxOg7pHX9bIrX6
-QBbutocAC6A97m+bd/8UJ936boIC3E+WYgSj/ZrkSdNiwn86kfWduYuNhdPZc5jx
-mwpD1bLZ4v7zAgMBAAGjggL6MIIC9jAfBgNVHSMEGDAWgBSNjF7EVK2K4Xfpm/mb
-BeG4AY1h4TAdBgNVHQ4EFgQUAMQghPN+UzO0bStKW/8TveUM2H8wDgYDVR0PAQH/
-BAQDAgWgMAwGA1UdEwEB/wQCMAAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUF
-BwMCMEkGA1UdIARCMEAwNAYLKwYBBAGyMQECAgcwJTAjBggrBgEFBQcCARYXaHR0
-cHM6Ly9zZWN0aWdvLmNvbS9DUFMwCAYGZ4EMAQIBMIGEBggrBgEFBQcBAQR4MHYw
-TwYIKwYBBQUHMAKGQ2h0dHA6Ly9jcnQuc2VjdGlnby5jb20vU2VjdGlnb1JTQURv
-bWFpblZhbGlkYXRpb25TZWN1cmVTZXJ2ZXJDQS5jcnQwIwYIKwYBBQUHMAGGF2h0
-dHA6Ly9vY3NwLnNlY3RpZ28uY29tMCUGA1UdEQQeMByCCnRpbWVhcGkuaW+CDnd3
-dy50aW1lYXBpLmlvMIIBfAYKKwYBBAHWeQIEAgSCAWwEggFoAWYAdgDd3Mo0ldfh
-FgXnlTL6x5/4PRxQ39sAOhQSdgosrLvIKgAAAZFNjZpgAAAEAwBHMEUCIQD7jqsr
-ikbGH2/skM9fRGJWa28oruNnnpOwRvE6n7c/pQIgbl1kqd2GV8h30dZBtkms1NHM
-rooWkdipB7i3JOM6SJMAdgAN4fIwK9MNwUBiEgnqVS78R3R8sdfpMO8OQh60fk6q
-NAAAAZFNjZnuAAAEAwBHMEUCIGobHqoa8DEzJ5dZwR8zse6XI5jxY0yUTdr0U4G+
-KyRlAiEAtzrz9nKiSlmeWmO2c8mNkqjTObJDMxkOpIoqGEdMrLkAdAAS8U40vVNy
-TIQGGcOPP3oT+Oe1YoeInG0wBYTr5YYmOgAAAZFNjZnuAAAEAwBFMEMCIFE/PaDI
-ELDkKsn2e92/nwwAEm/pzc0SZtr6nXvBVh8sAh9rpZN7ljjVKfseZV961TDnxt2x
-bknPILdWW7x1/HMkMA0GCSqGSIb3DQEBCwUAA4IBAQCZ9UYKZ+nByfrpQxHyHH2/
-DanBInghefdjTQ9++8dFJ+3ywrkeZSXT7an+4bCEPdNtmdOQqBkOcdiYXhE1FXlV
-1NAHerxA8YnsE8QloaZn7Gy+cC7ixOxxwVlutjVCAMjZmMQbvf2EjRQC5cwWAcO5
-a9cNFHaliY6K47SWybVkZjF17U/klvnrqT7fY8lT5wOnkww0tiSvemmH/CXrKiEs
-23SCrOKKFmjF6umaH73e89asBNrKRv/5NdSYYhZ2fW7bRBkHWaRdfqKSzWQsTNq+
-u22XkO39nAjAcrYX1dIbYPWS6L4aWZxjgPt1I2KrjtBRtfOQXCq0oysj5Ph9mu+O
------END CERTIFICATE-----
------BEGIN CERTIFICATE-----
-MIIGEzCCA/ugAwIBAgIQfVtRJrR2uhHbdBYLvFMNpzANBgkqhkiG9w0BAQwFADCB
-iDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0pl
-cnNleSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNV
-BAMTJVVTRVJUcnVzdCBSU0EgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTgx
-MTAyMDAwMDAwWhcNMzAxMjMxMjM1OTU5WjCBjzELMAkGA1UEBhMCR0IxGzAZBgNV
-BAgTEkdyZWF0ZXIgTWFuY2hlc3RlcjEQMA4GA1UEBxMHU2FsZm9yZDEYMBYGA1UE
-ChMPU2VjdGlnbyBMaW1pdGVkMTcwNQYDVQQDEy5TZWN0aWdvIFJTQSBEb21haW4g
-VmFsaWRhdGlvbiBTZWN1cmUgU2VydmVyIENBMIIBIjANBgkqhkiG9w0BAQEFAAOC
-AQ8AMIIBCgKCAQEA1nMz1tc8INAA0hdFuNY+B6I/x0HuMjDJsGz99J/LEpgPLT+N
-TQEMgg8Xf2Iu6bhIefsWg06t1zIlk7cHv7lQP6lMw0Aq6Tn/2YHKHxYyQdqAJrkj
-eocgHuP/IJo8lURvh3UGkEC0MpMWCRAIIz7S3YcPb11RFGoKacVPAXJpz9OTTG0E
-oKMbgn6xmrntxZ7FN3ifmgg0+1YuWMQJDgZkW7w33PGfKGioVrCSo1yfu4iYCBsk
-Haswha6vsC6eep3BwEIc4gLw6uBK0u+QDrTBQBbwb4VCSmT3pDCg/r8uoydajotY
-uK3DGReEY+1vVv2Dy2A0xHS+5p3b4eTlygxfFQIDAQABo4IBbjCCAWowHwYDVR0j
-BBgwFoAUU3m/WqorSs9UgOHYm8Cd8rIDZsswHQYDVR0OBBYEFI2MXsRUrYrhd+mb
-+ZsF4bgBjWHhMA4GA1UdDwEB/wQEAwIBhjASBgNVHRMBAf8ECDAGAQH/AgEAMB0G
-A1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAbBgNVHSAEFDASMAYGBFUdIAAw
-CAYGZ4EMAQIBMFAGA1UdHwRJMEcwRaBDoEGGP2h0dHA6Ly9jcmwudXNlcnRydXN0
-LmNvbS9VU0VSVHJ1c3RSU0FDZXJ0aWZpY2F0aW9uQXV0aG9yaXR5LmNybDB2Bggr
-BgEFBQcBAQRqMGgwPwYIKwYBBQUHMAKGM2h0dHA6Ly9jcnQudXNlcnRydXN0LmNv
-bS9VU0VSVHJ1c3RSU0FBZGRUcnVzdENBLmNydDAlBggrBgEFBQcwAYYZaHR0cDov
-L29jc3AudXNlcnRydXN0LmNvbTANBgkqhkiG9w0BAQwFAAOCAgEAMr9hvQ5Iw0/H
-ukdN+Jx4GQHcEx2Ab/zDcLRSmjEzmldS+zGea6TvVKqJjUAXaPgREHzSyrHxVYbH
-7rM2kYb2OVG/Rr8PoLq0935JxCo2F57kaDl6r5ROVm+yezu/Coa9zcV3HAO4OLGi
-H19+24rcRki2aArPsrW04jTkZ6k4Zgle0rj8nSg6F0AnwnJOKf0hPHzPE/uWLMUx
-RP0T7dWbqWlod3zu4f+k+TY4CFM5ooQ0nBnzvg6s1SQ36yOoeNDT5++SR2RiOSLv
-xvcRviKFxmZEJCaOEDKNyJOuB56DPi/Z+fVGjmO+wea03KbNIaiGCpXZLoUmGv38
-sbZXQm2V0TP2ORQGgkE49Y9Y3IBbpNV9lXj9p5v//cWoaasm56ekBYdbqbe4oyAL
-l6lFhd2zi+WJN44pDfwGF/Y4QA5C5BIG+3vzxhFoYt/jmPQT2BVPi7Fp2RBgvGQq
-6jG35LWjOhSbJuMLe/0CjraZwTiXWTb2qHSihrZe68Zk6s+go/lunrotEbaGmAhY
-LcmsJWTyXnW0OMGuf1pGg+pRyrbxmRE1a6Vqe8YAsOf4vmSyrcjC8azjUeqkk+B5
-yOGBQMkKW+ESPMFgKuOXwIlCypTPRpgSabuY0MLTDXJLR27lk8QyKGOHQ+SwMj4K
-00u/I5sUKUErmgQfky3xxzlIPK1aEn8=
------END CERTIFICATE-----
------BEGIN CERTIFICATE-----
-MIIF3jCCA8agAwIBAgIQAf1tMPyjylGoG7xkDjUDLTANBgkqhkiG9w0BAQwFADCB
-iDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0pl
-cnNleSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNV
-BAMTJVVTRVJUcnVzdCBSU0EgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTAw
-MjAxMDAwMDAwWhcNMzgwMTE4MjM1OTU5WjCBiDELMAkGA1UEBhMCVVMxEzARBgNV
-BAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQKExVU
-aGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBSU0EgQ2Vy
-dGlmaWNhdGlvbiBBdXRob3JpdHkwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIK
-AoICAQCAEmUXNg7D2wiz0KxXDXbtzSfTTK1Qg2HiqiBNCS1kCdzOiZ/MPans9s/B
-3PHTsdZ7NygRK0faOca8Ohm0X6a9fZ2jY0K2dvKpOyuR+OJv0OwWIJAJPuLodMkY
-tJHUYmTbf6MG8YgYapAiPLz+E/CHFHv25B+O1ORRxhFnRghRy4YUVD+8M/5+bJz/
-Fp0YvVGONaanZshyZ9shZrHUm3gDwFA66Mzw3LyeTP6vBZY1H1dat//O+T23LLb2
-VN3I5xI6Ta5MirdcmrS3ID3KfyI0rn47aGYBROcBTkZTmzNg95S+UzeQc0PzMsNT
-79uq/nROacdrjGCT3sTHDN/hMq7MkztReJVni+49Vv4M0GkPGw/zJSZrM233bkf6
-c0Plfg6lZrEpfDKEY1WJxA3Bk1QwGROs0303p+tdOmw1XNtB1xLaqUkL39iAigmT
-Yo61Zs8liM2EuLE/pDkP2QKe6xJMlXzzawWpXhaDzLhn4ugTncxbgtNMs+1b/97l
-c6wjOy0AvzVVdAlJ2ElYGn+SNuZRkg7zJn0cTRe8yexDJtC/QV9AqURE9JnnV4ee
-UB9XVKg+/XRjL7FQZQnmWEIuQxpMtPAlR1n6BB6T1CZGSlCBst6+eLf8ZxXhyVeE
-Hg9j1uliutZfVS7qXMYoCAQlObgOK6nyTJccBz8NUvXt7y+CDwIDAQABo0IwQDAd
-BgNVHQ4EFgQUU3m/WqorSs9UgOHYm8Cd8rIDZsswDgYDVR0PAQH/BAQDAgEGMA8G
-A1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEMBQADggIBAFzUfA3P9wF9QZllDHPF
-Up/L+M+ZBn8b2kMVn54CVVeWFPFSPCeHlCjtHzoBN6J2/FNQwISbxmtOuowhT6KO
-VWKR82kV2LyI48SqC/3vqOlLVSoGIG1VeCkZ7l8wXEskEVX/JJpuXior7gtNn3/3
-ATiUFJVDBwn7YKnuHKsSjKCaXqeYalltiz8I+8jRRa8YFWSQEg9zKC7F4iRO/Fjs
-8PRF/iKz6y+O0tlFYQXBl2+odnKPi4w2r78NBc5xjeambx9spnFixdjQg3IM8WcR
-iQycE0xyNN+81XHfqnHd4blsjDwSXWXavVcStkNr/+XeTWYRUc+ZruwXtuhxkYze
-Sf7dNXGiFSeUHM9h4ya7b6NnJSFd5t0dCy5oGzuCr+yDZ4XUmFF0sbmZgIn/f3gZ
-XHlKYC6SQK5MNyosycdiyA5d9zZbyuAlJQG03RoHnHcAP9Dc1ew91Pq7P8yF1m9/
-qS3fuQL39ZeatTXaw2ewh0qpKJ4jjv9cJ2vhsE/zB+4ALtRZh8tSQZXq9EfX7mRB
-VXyNWQKV3WKdwrnuWih0hKWbt5DHDAff9Yk2dDLWKMGwsAvgnEzDHNb842m1R0aB
-L6KCq9NjRHDEjf8tM7qtj3u1cIiuPhnPQCjY/MiQu12ZIvVS5ljFH4gxQ+6IHdfG
-jjxDah2nGN59PRbxYvnKkKj9
------END CERTIFICATE-----
-)EOF";
+static std::vector<std::pair<String, String>> g_http_headers;
 
 // NimBLE globals
 static NimBLEServer*         g_bleServer    = nullptr;
@@ -665,21 +564,48 @@ bool load_and_execute_js_script(const char* path) {
 /******************************************************************************
  * G) Basic draw_label, draw_rect, show_image from SD
  ******************************************************************************/
-static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) {
-    Serial.println("draw_label: expects text, x, y");
+static const lv_font_t* get_font_for_size(int size) {
+    // Map the integer size to specific built-in Montserrat fonts
+    if(size == 14)  return &lv_font_montserrat_14;
+    if(size == 28)  return &lv_font_montserrat_28;
+    if(size == 40)  return &lv_font_montserrat_40;
+    // Fallback:
+    return &lv_font_montserrat_14;
+}
+
+static jsval_t js_lvgl_draw_label(struct js* js, jsval_t* args, int nargs) {
+    // We expect at least 3 args: text, x, y. 4th arg is optional fontSize
+    if(nargs < 3) {
+        Serial.println("draw_label: expects text, x, y, [fontSize]");
+        return js_mknull();
+    }
+
+    // 1) Extract text and strip quotes if any
+    const char* rawText = js_str(js, args[0]);
+    if(!rawText) return js_mknull();
+    String txt(rawText);
+    if(txt.startsWith("\"") && txt.endsWith("\"")) {
+        txt.remove(0, 1);
+        txt.remove(txt.length() - 1, 1);
+    }
+
+    // 2) X, Y
+    int x = (int)js_getnum(args[1]);
+    int y = (int)js_getnum(args[2]);
+
+    // 3) Create label and set text
+    lv_obj_t* label = lv_label_create(lv_scr_act());
+    lv_label_set_text(label, txt.c_str());
+    lv_obj_set_pos(label, x, y);
+
+    // 4) If fontSize argument is provided, apply that font
+    if(nargs >= 4) {
+        int fontSize = (int)js_getnum(args[3]);
+        const lv_font_t* font = get_font_for_size(fontSize);
+        lv_obj_set_style_text_font(label, font, 0);
+    }
+
     return js_mknull();
-  }
-  const char* labelText = js_str(js, args[0]);
-  int x = (int)js_getnum(args[1]);
-  int y = (int)js_getnum(args[2]);
-
-  lv_obj_t *label = lv_label_create(lv_scr_act());
-  if(labelText) lv_label_set_text(label, labelText);
-  lv_obj_set_pos(label, x, y);
-
-  Serial.printf("draw_label: '%s' at (%d,%d)\n", labelText, x, y);
-  return js_mknull();
 }
 
 static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
@@ -948,6 +874,66 @@ static lv_style_t *g_style_map[MAX_STYLES] = { nullptr };
 static lv_style_t* get_lv_style(int handle) {
   if(handle<0 || handle>=MAX_STYLES) return nullptr;
   return g_style_map[handle];
+}
+
+
+static jsval_t js_create_label(struct js* js, jsval_t* args, int nargs) {
+  if(nargs < 2) return js_mknum(-1);  // need x,y
+  int x = (int)js_getnum(args[0]);
+  int y = (int)js_getnum(args[1]);
+
+  lv_obj_t* label = lv_label_create(lv_scr_act());
+  lv_obj_set_pos(label, x, y);
+
+  int handle = store_lv_obj(label);
+  return js_mknum(handle);
+}
+
+static jsval_t js_label_set_text(struct js* js, jsval_t* args, int nargs) {
+  if(nargs < 2) return js_mknull();
+  int lblHandle = (int)js_getnum(args[0]);
+  const char* rawText = js_str(js, args[1]);
+  if(!rawText) return js_mknull();
+
+  lv_obj_t* label = get_lv_obj(lblHandle);
+  if(!label) return js_mknull();
+
+  lv_label_set_text(label, rawText);
+  return js_mknull();
+}
+
+// style_set_text_font(styleHandle, fontSize)
+static jsval_t js_style_set_text_font(struct js* js, jsval_t* args, int nargs) {
+    if (nargs < 2) return js_mknull();
+    int styleH = (int)js_getnum(args[0]);
+    int fontSize = (int)js_getnum(args[1]);
+
+    // Convert the style handle to an lv_style_t*
+    lv_style_t* st = get_lv_style(styleH);
+    if (!st) return js_mknull();
+
+    // Pick a built-in font
+    const lv_font_t* font = get_font_for_size(fontSize);
+
+    // Apply it
+    lv_style_set_text_font(st, font);
+
+    return js_mknull();
+}
+
+// style_set_text_align(styleHandle, align)
+static jsval_t js_style_set_text_align(struct js* js, jsval_t* args, int nargs) {
+    if (nargs < 2) return js_mknull();
+    int styleH = (int)js_getnum(args[0]);
+    int alignVal = (int)js_getnum(args[1]); // e.g. 0 for LEFT, 1 for CENTER, etc.
+
+    lv_style_t* st = get_lv_style(styleH);
+    if (!st) return js_mknull();
+
+    // In LVGL 8.x: LV_TEXT_ALIGN_LEFT=0, _CENTER=1, _RIGHT=2, _AUTO=3
+    lv_style_set_text_align(st, (lv_text_align_t)alignVal);
+
+    return js_mknull();
 }
 
 // create_style()
@@ -1968,60 +1954,6 @@ static jsval_t js_lv_msgbox_get_active_btn_text(struct js *js, jsval_t *args, in
     return js_mkstr(js, t, strlen(t));
 }
 
-/*******************************************************
- * BUTTON BRIDGING
- *******************************************************/
-
-// create_button(parentHandle, x, y, width, height) => returns handle
-static jsval_t js_lv_btn_create(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 5) {
-        Serial.println("lv_btn_create: expects parentHandle, x, y, width, height");
-        return js_mknull();
-    }
-    int parentHandle = (int)js_getnum(args[0]);
-    int x = (int)js_getnum(args[1]);
-    int y = (int)js_getnum(args[2]);
-    int width = (int)js_getnum(args[3]);
-    int height = (int)js_getnum(args[4]);
-
-    lv_obj_t *parent = get_lv_obj(parentHandle);
-    if(!parent) {
-        Serial.println("lv_btn_create: invalid parent handle");
-        return js_mknull();
-    }
-
-    lv_obj_t *button = lv_btn_create(parent);
-    lv_obj_set_pos(button, x, y);
-    lv_obj_set_size(button, width, height);
-
-    int handle = store_lv_obj(button);
-    Serial.printf("lv_btn_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-// button_set_text(buttonHandle, "Button Text")
-static jsval_t js_lv_button_set_text(struct js *js, jsval_t *args, int nargs) {
-    if(nargs < 2) {
-        Serial.println("lv_button_set_text: expects buttonHandle, text");
-        return js_mknull();
-    }
-    int btnHandle = (int)js_getnum(args[0]);
-    const char* text = js_str(js, args[1]);
-
-    lv_obj_t *button = get_lv_obj(btnHandle);
-    if(!button) {
-        Serial.println("lv_button_set_text: invalid button handle");
-        return js_mknull();
-    }
-
-    lv_obj_t *label = lv_label_create(button);
-    lv_label_set_text(label, text ? text : "");
-    lv_obj_center(label); // Center the label within the button
-
-    Serial.printf("lv_button_set_text: handle=%d, text=%s\n", btnHandle, text ? text : "");
-    return js_mknull();
-}
-
 /********************************************************************************
  * SPAN
  ********************************************************************************/
@@ -2211,72 +2143,6 @@ static jsval_t js_lv_tileview_add_tile(struct js *js, jsval_t *args, int nargs) 
     return js_mknum(handle);
 }
 
-
-/*******************************************************
- * LIST BRIDGING
- *******************************************************/
-
-static jsval_t js_lv_list_create(struct js *js, jsval_t *args, int nargs) {
-    // create a list
-    lv_obj_t *list = lv_list_create(lv_scr_act());
-    int handle = store_lv_obj(list);
-    Serial.printf("lv_list_create => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_list_add_btn(struct js *js, jsval_t *args, int nargs) {
-    // (listH, iconSymbolOrNULL, txt)
-    if(nargs < 3) return js_mknull();
-    int lh = (int)js_getnum(args[0]);
-    const char* icon = js_str(js, args[1]);
-    const char* txt  = js_str(js, args[2]);
-
-    lv_obj_t *list = get_lv_obj(lh);
-    if(!list) return js_mknull();
-
-    // If icon is "NULL" or "", pass NULL
-    const char* useIcon = NULL;
-    if(icon && strlen(icon) > 0) {
-        useIcon = icon; // e.g. LV_SYMBOL_OK
-    }
-
-    lv_obj_t *btn = lv_list_add_btn(list, useIcon, txt ? txt : "");
-    int handle = store_lv_obj(btn);
-    Serial.printf("lv_list_add_btn => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_list_add_text(struct js *js, jsval_t *args, int nargs) {
-    // (listH, txt)
-    if(nargs < 2) return js_mknull();
-    int lh = (int)js_getnum(args[0]);
-    const char* txt = js_str(js, args[1]);
-
-    lv_obj_t *list = get_lv_obj(lh);
-    if(!list) return js_mknull();
-
-    lv_obj_t *obj = lv_list_add_text(list, txt ? txt : "");
-    int handle = store_lv_obj(obj);
-    Serial.printf("lv_list_add_text => handle %d\n", handle);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_list_get_btn_text(struct js *js, jsval_t *args, int nargs) {
-    // (listH, btnH) => returns text string
-    if(nargs < 2) return js_mkstr(js, "", 0);
-    int listH = (int)js_getnum(args[0]);
-    int btnH  = (int)js_getnum(args[1]);
-
-    lv_obj_t *list = get_lv_obj(listH);
-    lv_obj_t *btn  = get_lv_obj(btnH);
-    if(!list || !btn) return js_mkstr(js, "", 0);
-
-    const char* txt = lv_list_get_btn_text(list, btn);
-    if(!txt) txt = "";
-    return js_mkstr(js, txt, strlen(txt));
-}
-
-
 /*******************************************************
  * LINE BRIDGING
  *******************************************************/
@@ -2318,29 +2184,363 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) {
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~ 1) HTTP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Helper function to read the HTTP response body
+String readHttpResponseBody(WiFiClient &client) {
+    String headers;
+    String body;
+    bool chunked = false;
+
+    // 1) Read headers line by line until a blank line
+    while (client.connected()) {
+        String line = client.readStringUntil('\n');
+        if (line == "\r") {
+            // End of headers
+            break;
+        }
+        headers += line + "\n";
+        if (line.indexOf("Transfer-Encoding: chunked") >= 0) {
+            chunked = true;
+        }
+    }
+
+    // 2) Read the body
+    if (chunked) {
+        while (true) {
+            // Read chunk size
+            String sizeLine = client.readStringUntil('\n');
+            sizeLine.trim();
+            int chunkSize = strtol(sizeLine.c_str(), NULL, 16);
+            if (chunkSize <= 0) {
+                // No more chunks
+                client.readStringUntil('\n'); // Read trailing \r\n
+                break;
+            }
+
+            // Read the chunk data
+            char buf[256];
+            int bytesRead = 0;
+            while (bytesRead < chunkSize) {
+                int toRead = chunkSize - bytesRead;
+                if (toRead > sizeof(buf)) toRead = sizeof(buf);
+                int n = client.readBytes(buf, toRead);
+                if (n <= 0) break; // Timeout or error
+                body += String(buf).substring(0, n);
+                bytesRead += n;
+            }
+
+            client.readStringUntil('\n'); // Read trailing \r\n
+        }
+    } else {
+        // Read until the connection is closed
+        while (client.connected() || client.available()) {
+            if (client.available()) {
+                char c = client.read();
+                body += c;
+            } else {
+                delay(1);
+            }
+        }
+    }
+
+    return body;
+}
+
+// Bridging function to parse JSON and extract a value for a given key
+static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) {
+      Serial.println("js_parse_json_value: Not enough arguments");
+      return js_mkstr(js, "", 0);
+  }
+
+  // Retrieve JSON string
+  size_t json_len;
+  char* jsonStr_cstr = js_getstr(js, args[0], &json_len);
+  if (!jsonStr_cstr) {
+      Serial.println("js_parse_json_value: Argument 1 is not a string");
+      return js_mkstr(js, "", 0);
+  }
+  String jsonStr(jsonStr_cstr, json_len);
+
+  Serial.printf("js_parse_json_value: Retrieved JSON string (%d bytes): %s\n", json_len, jsonStr.c_str());
+
+  // Retrieve key string
+  size_t key_len;
+  char* key_cstr = js_getstr(js, args[1], &key_len);
+  if (!key_cstr) {
+      Serial.println("js_parse_json_value: Argument 2 is not a string");
+      return js_mkstr(js, "", 0);
+  }
+  String keyStr(key_cstr, key_len);
+
+  Serial.printf("js_parse_json_value: Retrieved key string (%d bytes): %s\n", key_len, keyStr.c_str());
+
+  // Strip surrounding quotes if present
+  if (keyStr.startsWith("\"") && keyStr.endsWith("\"") && keyStr.length() >= 2) {
+      keyStr = keyStr.substring(1, keyStr.length() - 1);
+      Serial.printf("js_parse_json_value: Stripped quotes from key. New key: '%s'\n", keyStr.c_str());
+  }
+
+  // Parse JSON using ArduinoJson
+  StaticJsonDocument<1024> doc; // Adjust size as needed
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  if (error) {
+      Serial.print("js_parse_json_value: JSON parse failed: ");
+      Serial.println(error.c_str());
+      return js_mkstr(js, "", 0);
+  }
+
+  // Check if JSON is an object
+  if (!doc.is<JsonObject>()) {
+      Serial.println("js_parse_json_value: Parsed JSON is not an object");
+      return js_mkstr(js, "", 0);
+  }
+
+  // Debugging: Print all key-value pairs
+  Serial.println("js_parse_json_value: Parsed JSON keys and values:");
+  JsonObject obj = doc.as<JsonObject>();
+  for (JsonPair kv : obj) {
+    String valStr = kv.value().as<String>();
+    Serial.printf("Key: %s, Value: %s\n", kv.key().c_str(), valStr.c_str());
+  }
+
+  // Extract the value
+  JsonVariant value = obj[keyStr.c_str()];
+
+  // Check if the key exists
+  if (value.isNull()) {
+      Serial.printf("js_parse_json_value: Key '%s' not found or null\n", keyStr.c_str());
+      return js_mkstr(js, "", 0);
+  }
+
+  // Convert the value to string, regardless of its type
+  String resultStr;
+  if (value.is<const char*>()) {
+      resultStr = String(value.as<const char*>());
+  } else if (value.is<double>()) {
+      resultStr = String(value.as<double>());
+  } else if (value.is<bool>()) {
+      resultStr = value.as<bool>() ? "true" : "false";
+  } else {
+      // For other types, attempt to stringify
+      resultStr = String(value.as<String>());
+  }
+
+  Serial.printf("js_parse_json_value: Extracted '%s': %s\n", keyStr.c_str(), resultStr.c_str());
+
+  // Return the extracted value to JavaScript
+  return js_mkstr(js, resultStr.c_str(), resultStr.length());
+}
+
+// Bridging function to perform string index search
+static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs) {
+    if (nargs < 2) {
+        Serial.println("str_index_of: Not enough arguments");
+        return js_mknum(-1);
+    }
+
+    // Retrieve haystack string
+    size_t haystack_len;
+    char* haystack_cstr = js_getstr(js, args[0], &haystack_len);
+    if (!haystack_cstr) {
+        Serial.println("str_index_of: Argument 1 is not a string");
+        return js_mknum(-1);
+    }
+    String haystackStr(haystack_cstr, haystack_len);
+
+    // Retrieve needle string
+    size_t needle_len;
+    char* needle_cstr = js_getstr(js, args[1], &needle_len);
+    if (!needle_cstr) {
+        Serial.println("str_index_of: Argument 2 is not a string");
+        return js_mknum(-1);
+    }
+    String needleStr(needle_cstr, needle_len);
+
+    Serial.printf("str_index_of: Retrieved haystack ('%s') and needle ('%s')\n", haystackStr.c_str(), needleStr.c_str());
+
+    // Optional: Strip surrounding quotes if present
+    if (haystackStr.startsWith("\"") && haystackStr.endsWith("\"") && haystackStr.length() >= 2) {
+        haystackStr = haystackStr.substring(1, haystackStr.length() - 1);
+        Serial.printf("str_index_of: Stripped quotes from haystack. New haystack: '%s'\n", haystackStr.c_str());
+    }
+
+    if (needleStr.startsWith("\"") && needleStr.endsWith("\"") && needleStr.length() >= 2) {
+        needleStr = needleStr.substring(1, needleStr.length() - 1);
+        Serial.printf("str_index_of: Stripped quotes from needle. New needle: '%s'\n", needleStr.c_str());
+    }
+
+    Serial.printf("str_index_of: Searching for '%s' in '%s'\n", needleStr.c_str(), haystackStr.c_str());
+
+    int index = haystackStr.indexOf(needleStr);
+    if (index == -1) {
+        Serial.println("str_index_of: Needle not found");
+        return js_mknum(-1);
+    }
+
+    Serial.printf("str_index_of: Found at index %d\n", index);
+    return js_mknum(index);
+}
+
+// Bridging function to perform string substring extraction
+static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
+    if (nargs < 3) {
+        Serial.println("str_substring: Not enough arguments");
+        return js_mkstr(js, "", 0);
+    }
+
+    // Retrieve string
+    size_t str_len;
+    char* str_cstr = js_getstr(js, args[0], &str_len);
+    if (!str_cstr) {
+        Serial.println("str_substring: Argument 1 is not a string");
+        return js_mkstr(js, "", 0);
+    }
+    String strStr(str_cstr, str_len);
+
+    // Check if arguments 2 and 3 are numbers
+    if (js_type(args[1]) != JS_NUM || js_type(args[2]) != JS_NUM) {
+        Serial.println("str_substring: Arguments 2 and 3 must be numbers");
+        return js_mkstr(js, "", 0);
+    }
+
+    // Extract numerical values
+    int start  = (int)js_getnum(args[1]);
+    int length = (int)js_getnum(args[2]);
+
+    Serial.printf("str_substring: Retrieved string ('%s'), start (%d), length (%d)\n", strStr.c_str(), start, length);
+
+    // Optional: Strip surrounding quotes if present
+    if (strStr.startsWith("\"") && strStr.endsWith("\"") && strStr.length() >= 2) {
+        strStr = strStr.substring(1, strStr.length() - 1);
+        Serial.printf("str_substring: Stripped quotes from string. New string: '%s'\n", strStr.c_str());
+    }
+
+    // Handle negative length (extract until end)
+    if (length < 0) {
+        strStr = strStr.substring(start);
+    } else {
+        // Ensure that start + length does not exceed string length
+        int end = start + length;
+        if (end > strStr.length()) {
+            end = strStr.length();
+        }
+        strStr = strStr.substring(start, end);
+    }
+
+    Serial.printf("str_substring: Extracted substring '%s' with length %d\n", strStr.c_str(), length);
+    return js_mkstr(js, strStr.c_str(), strStr.length());
+}
+
+
 static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 1) return js_mkstr(js,"",0);
+  if(nargs<1) return js_mkstr(js,"",0);
   const char* rawUrl = js_str(js, args[0]);
-  if(!rawUrl) return js_mkstr(js,"",0);
+  if(!rawUrl) return js_mkstr(js, "", 0);
 
   // Convert to Arduino String
   String url(rawUrl);
 
-  // 1) Strip leading/trailing quotes if they exist
+  // Strip quotes if needed
   if(url.startsWith("\"") && url.endsWith("\"")) {
-    url.remove(0, 1);                  // remove first char
-    url.remove(url.length()-1, 1);     // remove last char
+    url.remove(0,1);
+    url.remove(url.length()-1,1);
   }
 
   Serial.println("js_http_get => Using SSL for: " + url);
 
-  // 2) We'll assume 'https://' scheme
+  // 1) Remove "https://" prefix (assuming always https)
   const String HTTPS_PREFIX = "https://";
   if(url.startsWith(HTTPS_PREFIX)) {
-    url.remove(0, HTTPS_PREFIX.length()); // remove "https://"
+    url.remove(0, HTTPS_PREFIX.length());
   }
 
-  // 3) Split into host + path
+  // 2) Extract host + path
+  int slashPos = url.indexOf('/');
+  String host, path;
+  if(slashPos < 0) {
+    host = url;
+    path = "/";
+  } else {
+    host = url.substring(0, slashPos);
+    path = url.substring(slashPos);
+  }
+  
+  Serial.println("Parsed host='" + host + "', path='" + path + "'");
+
+  // 3) WiFiClientSecure
+  WiFiClientSecure client;
+  if (g_httpCAcert) {
+    // If user loaded a cert from SD, use it
+    client.setCACert(g_httpCAcert);
+    Serial.println("Using user-supplied CA cert (secure)");
+  } else {
+    // Otherwise, skip validation
+    client.setInsecure();
+    Serial.println("No CA cert => setInsecure() (unsecure)");
+  }
+
+  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  if(!client.connect(host.c_str(), 443)) {
+    Serial.println("Connection failed!");
+    return js_mkstr(js, "", 0);
+  }
+  Serial.println("Connected => sending GET request");
+  
+  // 4) Construct the GET request + custom headers
+  client.print(String("GET ") + path + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+  
+  // Send any stored headers from g_http_headers
+  for (auto &hdr : g_http_headers) {
+    // e.g. "Authorization: Bearer 12345\r\n"
+    client.print(hdr.first);
+    client.print(": ");
+    client.print(hdr.second);
+    client.print("\r\n");
+  }
+
+  client.print("Connection: close\r\n\r\n");
+
+  // 5) Read full response
+  String response = readHttpResponseBody(client);
+  client.stop();
+  
+  Serial.printf("Done reading. response size=%d\n", response.length());
+  Serial.println("Full response content:\n<<<");
+  Serial.println(response);  // <--- add this!
+  Serial.println(">>> End of response");
+  
+  // Return entire raw HTTP response
+  return js_mkstr(js, response.c_str(), response.length());
+}
+
+static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
+  if(nargs < 2) return js_mkstr(js,"",0);
+  const char* rawUrl = js_str(js, args[0]);
+  const char* body   = js_str(js, args[1]);
+  if(!rawUrl || !body) return js_mkstr(js, "", 0);
+
+  // Convert to Arduino Strings for easy manipulation
+  String url(rawUrl);
+  String jsonBody(body);
+
+  // Strip quotes if any
+  if(url.startsWith("\"") && url.endsWith("\"")) {
+    url.remove(0,1);
+    url.remove(url.length()-1,1);
+  }
+  if(jsonBody.startsWith("\"") && jsonBody.endsWith("\"")) {
+    jsonBody.remove(0,1);
+    jsonBody.remove(jsonBody.length()-1,1);
+  }
+
+  // We'll assume "https://"
+  const String HTTPS_PREFIX = "https://";
+  if(url.startsWith(HTTPS_PREFIX)) {
+    url.remove(0, HTTPS_PREFIX.length());
+  }
+
+  // Find first slash => host + path
   int slashPos = url.indexOf('/');
   String host, path;
   if(slashPos < 0) {
@@ -2351,111 +2551,165 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
     path = url.substring(slashPos);
   }
 
-  Serial.println("Parsed host='" + host + "', path='" + path + "'");
+  Serial.println("\njs_http_post => manual approach");
+  Serial.println("Host: " + host);
+  Serial.println("Path: " + path);
+  Serial.printf("Body length=%d\n", jsonBody.length());
 
-  // 4) Always WiFiClientSecure => setInsecure for a generic approach
+  // WiFiClientSecure
   WiFiClientSecure client;
-  client.setInsecure();   // or client.setCACert(...) if you have a CA
-  
+  if (g_httpCAcert) {
+    client.setCACert(g_httpCAcert);
+    Serial.println("Using user-supplied CA cert (POST)");
+  } else {
+    client.setInsecure();
+    Serial.println("No CA => setInsecure() (POST)");
+  }
+
+  // Connect on port 443
   Serial.printf("Connecting to '%s':443...\n", host.c_str());
   if(!client.connect(host.c_str(), 443)) {
-    Serial.println("Connection failed!");
+    Serial.println("Connection failed (POST)!");
     return js_mkstr(js, "", 0);
   }
-  Serial.println("Connected => sending GET request");
-  
-  client.print(String("GET ") + path + " HTTP/1.1\r\n");
+  Serial.println("Connected => sending POST request");
+
+  // Construct POST request
+  // e.g.:
+  // POST /path HTTP/1.1
+  // Host: host
+  // Content-Type: application/json
+  // Content-Length: ...
+  // Connection: close
+  //
+  // {body}
+  client.print(String("POST ") + path + " HTTP/1.1\r\n");
   client.print(String("Host: ") + host + "\r\n");
+
+  // If you want custom headers from g_http_headers, do:
+  // for(auto &hdr : g_http_headers) { ... }
+
+  client.print("Content-Type: application/json\r\n");
+  client.printf("Content-Length: %d\r\n", jsonBody.length());
   client.print("Connection: close\r\n\r\n");
-  
-  // 5) Read everything until closed
-  String response;
-  while(client.connected() || client.available()) {
-    if(client.available()) {
-      char c = client.read();
-      response += c;
-    } else {
-      delay(5);
-    }
-  }
+
+  // Send body
+  client.print(jsonBody);
+
+  // Read entire response
+  String response = readHttpResponseBody(client);
   client.stop();
   
-  Serial.printf("Done reading. response size=%d\n", response.length());
+  Serial.printf("Done POST. response size=%d\n", response.length());
   
-  // Return full raw HTTP response
+  // Return entire raw HTTP response
   return js_mkstr(js, response.c_str(), response.length());
 }
 
-static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 2) return js_mkstr(js, "", 0);
-  const char* url  = js_str(js, args[0]);
-  const char* body = js_str(js, args[1]);
-  if(!url || !body) return js_mkstr(js, "", 0);
-
-  HTTPClient http;
-  if(strncmp(url, "https://", 8) == 0) {
-    WiFiClientSecure secureClient;
-    if(g_httpCAcert) {
-      secureClient.setCACert(g_httpCAcert);
-      Serial.println("Using CA cert from SD (POST)");
-    } else {
-      secureClient.setInsecure();
-      Serial.println("No CA cert => using setInsecure() (POST)");
-    }
-    http.begin(secureClient, url);
-  } else {
-    http.begin(url); // Plain HTTP
-  }
-
-  http.addHeader("Content-Type", "application/json");
-  int httpCode = http.POST((uint8_t*)body, strlen(body));
-  Serial.printf("HTTP Code (POST): %d\n", httpCode);
-  if(httpCode <= 0) {
-    Serial.print("HTTP Error (POST): ");
-    Serial.println(http.errorToString(httpCode));
-    http.end();
-    return js_mkstr(js, "", 0);
-  }
-
-  String payload = http.getString();
-  http.end();
-  return js_mkstr(js, payload.c_str(), payload.length());
-}
-
 static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 1) return js_mkstr(js, "", 0);
-  const char* url = js_str(js, args[0]);
-  if(!url) return js_mkstr(js, "", 0);
+  if(nargs < 1) return js_mkstr(js,"",0);
+  const char* rawUrl = js_str(js, args[0]);
+  if(!rawUrl) return js_mkstr(js, "", 0);
 
-  HTTPClient http;
-  if(strncmp(url, "https://", 8) == 0) {
-    WiFiClientSecure secureClient;
-    if(g_httpCAcert) {
-      secureClient.setCACert(g_httpCAcert);
-      Serial.println("Using CA cert from SD (DELETE)");
-    } else {
-      secureClient.setInsecure();
-      Serial.println("No CA cert => using setInsecure() (DELETE)");
-    }
-    http.begin(secureClient, url);
-  } else {
-    http.begin(url);
+  String url(rawUrl);
+
+  // Remove quotes if any
+  if(url.startsWith("\"") && url.endsWith("\"")) {
+    url.remove(0,1);
+    url.remove(url.length()-1,1);
   }
 
-  int httpCode = http.sendRequest("DELETE");
-  Serial.printf("HTTP Code (DELETE): %d\n", httpCode);
-  if(httpCode <= 0) {
-    Serial.print("HTTP Error (DELETE): ");
-    Serial.println(http.errorToString(httpCode));
-    http.end();
+  // Assume https://
+  const String HTTPS_PREFIX = "https://";
+  if(url.startsWith(HTTPS_PREFIX)) {
+    url.remove(0, HTTPS_PREFIX.length());
+  }
+
+  // Split host/path
+  int slashPos = url.indexOf('/');
+  String host, path;
+  if(slashPos < 0) {
+    host = url;
+    path = "/";
+  } else {
+    host = url.substring(0, slashPos);
+    path = url.substring(slashPos);
+  }
+
+  Serial.println("\njs_http_delete => manual approach");
+  Serial.println("Host: " + host);
+  Serial.println("Path: " + path);
+
+  // WiFiClientSecure
+  WiFiClientSecure client;
+  if (g_httpCAcert) {
+    client.setCACert(g_httpCAcert);
+    Serial.println("Using user-supplied CA cert (DELETE)");
+  } else {
+    client.setInsecure();
+    Serial.println("No CA => setInsecure() (DELETE)");
+  }
+
+  // Connect
+  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  if(!client.connect(host.c_str(), 443)) {
+    Serial.println("Connection failed (DELETE)!");
     return js_mkstr(js, "", 0);
   }
+  Serial.println("Connected => sending DELETE request");
 
-  String payload = http.getString();
-  http.end();
-  return js_mkstr(js, payload.c_str(), payload.length());
+  // e.g.:
+  // DELETE /path HTTP/1.1
+  // Host: host
+  // Connection: close
+  client.print(String("DELETE ") + path + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+
+  // If you want custom headers from g_http_headers, do:
+  // for(auto &hdr : g_http_headers) { ... }
+
+  client.print("Connection: close\r\n\r\n");
+
+  // read entire response
+  String body = readHttpResponseBody(client);
+  client.stop();
+  
+  Serial.printf("Done DELETE. response size=%d\n", body.length());
+  
+  // Return entire raw HTTP response
+  return js_mkstr(js, body.c_str(), body.length());
 }
 
+static jsval_t js_http_set_header(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkfalse();
+
+  const char* key   = js_str(js, args[0]);
+  const char* value = js_str(js, args[1]);
+  if (!key || !value) return js_mkfalse();
+
+  // Convert to Arduino Strings for easy storage
+  String k(key), v(value);
+
+  // Optionally strip leading/trailing quotes if needed
+  if(k.startsWith("\"") && k.endsWith("\"")) {
+    k.remove(0,1);
+    k.remove(k.length()-1,1);
+  }
+  if(v.startsWith("\"") && v.endsWith("\"")) {
+    v.remove(0,1);
+    v.remove(v.length()-1,1);
+  }
+
+  // Append to our global vector
+  g_http_headers.push_back(std::make_pair(k, v));
+  Serial.printf("Added header: %s: %s\n", k.c_str(), v.c_str());
+  return js_mktrue();
+}
+
+static jsval_t js_http_clear_headers(struct js *js, jsval_t *args, int nargs) {
+  g_http_headers.clear();
+  return js_mktrue();
+}
 
 static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nargs) {
   if(nargs < 1) return js_mkfalse();  
@@ -2817,11 +3071,18 @@ void register_js_functions() {
   js_set(js, global, "wifi_get_ip",  js_mkfun(js_wifi_get_ip));
   js_set(js, global, "delay",        js_mkfun(js_delay));
 
+  // bridging for indexOf / substring
+  js_set(js, global, "str_index_of",   js_mkfun(js_str_index_of));
+  js_set(js, global, "str_substring",  js_mkfun(js_str_substring));
+
   // HTTP
   js_set(js, global, "http_get",    js_mkfun(js_http_get));
   js_set(js, global, "http_post",   js_mkfun(js_http_post));
   js_set(js, global, "http_delete", js_mkfun(js_http_delete));
   js_set(js, global, "http_set_ca_cert_from_sd", js_mkfun(js_http_set_ca_cert_from_sd));
+  js_set(js, global, "parse_json_value", js_mkfun(js_parse_json_value));
+  js_set(js, global, "http_set_header", js_mkfun(js_http_set_header));
+  js_set(js, global, "http_clear_headers", js_mkfun(js_http_clear_headers));
 
   // SD functions
   js_set(js, global, "sd_read_file", js_mkfun(js_sd_read_file));
@@ -2837,10 +3098,12 @@ void register_js_functions() {
   // GIF from memory
   js_set(js, global, "show_gif_from_sd", js_mkfun(js_show_gif_from_sd));
 
-  // Basic shapes
+  // Basic shapes and labels.
   js_set(js, global, "draw_label",   js_mkfun(js_lvgl_draw_label));
   js_set(js, global, "draw_rect",    js_mkfun(js_lvgl_draw_rect));
   js_set(js, global, "show_image",   js_mkfun(js_lvgl_show_image));
+  js_set(js, global, "create_label", js_mkfun(js_create_label));
+  js_set(js, global, "label_set_text", js_mkfun(js_label_set_text));
 
   // Handle-based image creation + transforms
   js_set(js, global, "create_image",          js_mkfun(js_create_image));
@@ -2873,6 +3136,8 @@ void register_js_functions() {
   js_set(js, global, "style_set_text_color",      js_mkfun(js_style_set_text_color));
   js_set(js, global, "style_set_text_letter_space", js_mkfun(js_style_set_text_letter_space));
   js_set(js, global, "style_set_text_line_space", js_mkfun(js_style_set_text_line_space));
+  js_set(js, global, "style_set_text_font",       js_mkfun(js_style_set_text_font));
+  js_set(js, global, "style_set_text_align",      js_mkfun(js_style_set_text_align));
   js_set(js, global, "style_set_text_decor",      js_mkfun(js_style_set_text_decor));
   js_set(js, global, "style_set_line_color",      js_mkfun(js_style_set_line_color));
   js_set(js, global, "style_set_line_width",      js_mkfun(js_style_set_line_width));
@@ -2944,19 +3209,9 @@ void register_js_functions() {
   js_set(js, global, "lv_tileview_create",        js_mkfun(js_lv_tileview_create));
   js_set(js, global, "lv_tileview_add_tile",      js_mkfun(js_lv_tileview_add_tile));
 
-  // ---------- LIST bridging
-  js_set(js, global, "lv_list_create",          js_mkfun(js_lv_list_create));
-  js_set(js, global, "lv_list_add_btn",         js_mkfun(js_lv_list_add_btn));
-  js_set(js, global, "lv_list_add_text",        js_mkfun(js_lv_list_add_text));
-  js_set(js, global, "lv_list_get_btn_text",    js_mkfun(js_lv_list_get_btn_text));
-
   // ---------- LINE bridging
   js_set(js, global, "lv_line_create",          js_mkfun(js_lv_line_create));
   js_set(js, global, "lv_line_set_points",      js_mkfun(js_lv_line_set_points));
-
-  // ---------- BUTTON bridging
-  js_set(js, global, "lv_btn_create", js_mkfun(js_lv_btn_create));
-  js_set(js, global, "lv_button_set_text", js_mkfun(js_lv_button_set_text));
 
   // MQTT bridging
   js_set(js, global, "mqtt_init",       js_mkfun(js_mqtt_init));

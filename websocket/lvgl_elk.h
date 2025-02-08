@@ -13,6 +13,8 @@
 #include <vector>
 #include <utility>  // for std::pair
 
+#include "globals.h"
+
 // Global WiFiClient + PubSubClient
 static WiFiClient    g_wifiClient;
 static PubSubClient  g_mqttClient(g_wifiClient);
@@ -3250,9 +3252,10 @@ static void elk_task(void *pvParam) {
   // 2) Register bridging
   register_js_functions();
 
-  // 3) Load & execute your script
-  if(!load_and_execute_js_script("/script.js")) {
-    Serial.println("Failed to load and execute JavaScript script");
+  // 3) Load & execute your script using the filename from the configuration
+  if(!load_and_execute_js_script(g_script_filename.c_str())) {
+    Serial.printf("Failed to load and execute JavaScript script from %s\n", g_script_filename.c_str());
+    // Optionally handle the error
   } else {
     Serial.println("Script executed successfully in elk_task");
   }

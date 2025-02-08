@@ -6,9 +6,13 @@
 #include "pins_config.h"
 #include "rm67162.h"
 #include "lvgl_elk.h"  // Contains init_lvgl_display(), init_lv_fs(), etc.
+#include "globals.h"
+
+// Initialize with the default script filename
+String g_script_filename = "/app.js";
 
 void dynamic_js_setup() {
-  Serial.println("DYNAMIC_JS: Setting up Elk + script.js scenario...");
+  Serial.println("DYNAMIC_JS: Setting up Elk + script scenario...");
 
   // If needed, mount the SD again (or confirm it’s already mounted):
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);

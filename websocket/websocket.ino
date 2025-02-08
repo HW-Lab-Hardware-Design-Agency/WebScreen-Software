@@ -6,13 +6,14 @@
 #include "pins_config.h"     // For PIN_SD_CMD, etc.
 #include "fallback.h"        // Fallback header
 #include "dynamic_js.h"      // Dynamic (Elk + JS) header
+#include "globals.h"
 
 #include <ArduinoJson.h>
 
 // Global flag to decide fallback vs dynamic
 static bool useFallback = false;
 
-static bool readWiFiConfigJSON(const char* path, String &outSSID, String &outPASS) {
+static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, String &outScript) {
   File f = SD_MMC.open(path);
   if (!f) {
     Serial.println("No JSON file");
@@ -28,7 +29,7 @@ static bool readWiFiConfigJSON(const char* path, String &outSSID, String &outPAS
     return false;
   }
 
-  // Extract SSID/PASS from doc
+  // Extract Wi-Fi settings
   outSSID = doc["settings"]["wifi"]["ssid"] | "";
   outPASS = doc["settings"]["wifi"]["pass"] | "";
   if (outSSID.isEmpty() || outPASS.isEmpty()) {
@@ -36,15 +37,17 @@ static bool readWiFiConfigJSON(const char* path, String &outSSID, String &outPAS
     return false;
   }
 
-  // Optionally update 'last_read' with current time
+  // Extract the script filename (default to "app.js" if not provided)
+  outScript = doc["script"] | "app.js";
+
+  // Update 'last_read' if desired
   time_t now;
   time(&now);
   doc["last_read"] = (unsigned long)now;
 
-  // Re-serialize and write back to the same file (if you want to save changes)
+  // Optionally write back the updated JSON
   String updated;
   serializeJson(doc, updated);
-
   f = SD_MMC.open(path, FILE_WRITE);
   if (!f) {
     Serial.println("Failed to open JSON for writing");
@@ -70,13 +73,19 @@ void setup() {
   }
 
   // Optionally read /webscreen.json for Wi-Fi
-  String s, p;
-  if(!readWiFiConfigJSON("/webscreen.json", s, p)) {
+  String s, p, scriptFile;
+  if(!readConfigJSON("/webscreen.json", s, p, scriptFile)) {
     Serial.println("Failed to read /webscreen.json => fallback");
     useFallback = true;
     fallback_setup();
     return;
   }
+
+  // Ensure the script filename starts with a '/'
+  if (!scriptFile.startsWith("/")) {
+    scriptFile = "/" + scriptFile;
+  }
+  g_script_filename = scriptFile;  // update global variable
 
   // Connect Wi-Fi
   WiFi.mode(WIFI_STA);
@@ -95,19 +104,22 @@ void setup() {
   }
   Serial.println("Wi-Fi connected => " + WiFi.localIP().toString());
 
-  // Check if /script.js exists
-  {
-    File checkF = SD_MMC.open("/script.js");
-    if(!checkF) {
-      Serial.println("No script.js => fallback");
-      useFallback = true;
-      fallback_setup();
-      return;
-    }
-    checkF.close();
+  // Use the filename specified in the config; ensure it has a leading '/'
+  String scriptPath = scriptFile;
+  if (!scriptPath.startsWith("/")) {
+    scriptPath = "/" + scriptPath;
   }
+  // Check if the script file exists on the SD card:
+  File checkF = SD_MMC.open(g_script_filename);
+  if(!checkF) {
+    Serial.printf("No %s found => fallback\n", g_script_filename.c_str());
+    useFallback = true;
+    fallback_setup();
+    return;
+  }
+  checkF.close();
 
-  // We have script.js => run dynamic
+  // If everything is okay, run the dynamic JS functionality:
   useFallback = false;
   dynamic_js_setup();
 }

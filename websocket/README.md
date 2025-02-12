@@ -425,6 +425,7 @@ For secure HTTPS connections (such as when calling APIs like [timeapi.io](https:
 1. **Obtain the Certificates:**  
    - If you are using a certificate authority (CA) such as Let's Encrypt, you will have a server certificate and an intermediate certificate.  
    - You can download the root certificate from your CA’s website if needed.
+   - Another option is using [openssl](https://wiki.openssl.org/index.php/Command_Line_Utilities) command, for example `openssl s_client -connect timeapi.io:443 -servername timeapi.io -showcerts > timeapi.pem`. If you follow this method you can skip the next step.
 
 2. **Combine Certificates into One File:**  
    Using a text editor or the `cat` command (on Unix/Linux), concatenate the certificates in the following order:

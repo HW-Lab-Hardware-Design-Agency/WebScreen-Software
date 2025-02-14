@@ -1,5 +1,7 @@
 # WebScreen Firmware
 
+![til](./docs/WebScreen_Notification.gif)
+
 WebScreen is an ESP32-based platform that allows users to run dynamic JavaScript applications using the Elk engine, LVGL for UI rendering, and an SD card for storing multiple JS apps. It supports secure HTTPS communication (with full chain certificates), BLE, MQTT, and more. If no JavaScript app is found on the SD card, a fallback notification app is used.
 
 ## Features

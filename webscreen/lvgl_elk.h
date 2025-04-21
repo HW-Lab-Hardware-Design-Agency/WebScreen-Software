@@ -2,6 +2,7 @@
 
 #include <lvgl.h>
 #include <HTTPClient.h>
+#include "tick.h"
 
 // For BLE
 #include <NimBLEDevice.h>
@@ -28,6 +29,8 @@ static NimBLEServer*         g_bleServer    = nullptr;
 static NimBLECharacteristic* g_bleChar      = nullptr;
 static bool                  g_bleConnected = false;
 
+#define JS_GC_THRESHOLD 0.90
+
 // 4) Elk
 extern "C" {
   #include "elk.h"
@@ -41,7 +44,8 @@ static unsigned long lastWiFiReconnectAttempt = 0;
 /******************************************************************************
  * A) Elk Memory + Global Instances
  ******************************************************************************/
-static uint8_t elk_memory[16 * 1024]; // 16 KB
+#define ELK_HEAP_BYTES  (48 * 1024)
+static uint8_t elk_memory[ELK_HEAP_BYTES];
 struct js *js = NULL;               // Global Elk instance
 // Adjust as needed
 #define MAX_RAM_IMAGES  16
@@ -77,7 +81,7 @@ static void *my_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode) {
   const char *modeStr = (mode == LV_FS_MODE_WR) ? FILE_WRITE : FILE_READ;
   File f = SD_MMC.open(fullPath, modeStr);
   if (!f) {
-    Serial.printf("my_open_cb: failed to open %s\n", fullPath.c_str());
+    LOGF("my_open_cb: failed to open %s\n", fullPath.c_str());
     return NULL;
   }
 
@@ -140,7 +144,7 @@ void init_lv_fs() {
   fs_drv.tell_cb  = my_tell_cb;
 
   lv_fs_drv_register(&fs_drv);
-  Serial.println("LVGL FS driver 'S' registered");
+  LOG("LVGL FS driver 'S' registered");
 }
 
 /******************************************************************************
@@ -218,7 +222,7 @@ void init_mem_fs() {
   mem_drv.tell_cb  = my_mem_tell_cb;
 
   lv_fs_drv_register(&mem_drv);
-  Serial.println("LVGL FS driver 'M' registered (for memory-based GIFs)");
+  LOG("LVGL FS driver 'M' registered (for memory-based GIFs)");
 }
 
 /******************************************************************************
@@ -240,7 +244,7 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
 }
 
 void init_lvgl_display() {
-  Serial.println("Initializing display...");
+  LOG("Initializing display...");
 
   // Turn on backlight / screen power
   pinMode(PIN_LED, OUTPUT);
@@ -252,16 +256,20 @@ void init_lvgl_display() {
 
   // Init LVGL
   lv_init();
+  start_lvgl_tick();
 
-  // Allocate LVGL draw buffer in PSRAM
-  buf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
+  // Use double buffering: draw BUF in internal RAM (DMA capable),
+  // flush BUF in PSRAM (big but non‑DMA).
+  static const uint32_t DRAW_BUF_LINES = 40;              // tweak later
+  static lv_color_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES];
+  buf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE); // PSRAM
   if (!buf) {
-    Serial.println("Failed to allocate LVGL buffer in PSRAM");
+    LOG("Failed to allocate LVGL buffer in PSRAM");
     return;
   }
 
   // Initialize LVGL draw buffer
-  lv_disp_draw_buf_init(&draw_buf, buf, NULL, LVGL_LCD_BUF_SIZE);
+  lv_disp_draw_buf_init(&draw_buf, draw_buf_int, buf, EXAMPLE_LCD_H_RES * DRAW_BUF_LINES);
 
   // Register the display driver
   static lv_disp_drv_t disp_drv;
@@ -272,7 +280,7 @@ void init_lvgl_display() {
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register(&disp_drv);
 
-  Serial.println("LVGL + Display initialized.");
+  LOG("LVGL + Display initialized.");
 }
 
 void lvgl_loop() {
@@ -286,8 +294,8 @@ void lvgl_loop() {
 static jsval_t js_print(struct js *js, jsval_t *args, int nargs) {
   for (int i = 0; i < nargs; i++) {
     const char *str = js_str(js, args[i]);
-    if (str) Serial.println(str);
-    else     Serial.println("print: argument is not a string");
+    if (str) LOG(str);
+    else     LOG("print: argument is not a string");
   }
   return js_mknull();
 }
@@ -309,22 +317,19 @@ static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
     pass = pass.substring(1, pass.length()-1);
   }
 
-  Serial.printf("Connecting to Wi-Fi SSID: %s\n", ssid.c_str());
+  LOGF("Connecting to Wi-Fi SSID: %s\n", ssid.c_str());
   WiFi.begin(ssid.c_str(), pass.c_str());
 
-  int attempts = 20;
-  while (WiFi.status() != WL_CONNECTED && attempts > 0) {
-    delay(500);
-    Serial.print(".");
-    attempts--;
+  for (uint32_t i = 0; i < 20 && WiFi.status()!=WL_CONNECTED; ++i) {
+    vTaskDelay(pdMS_TO_TICKS(250));
+    LOG(".");
   }
-  Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("Wi-Fi connected");
+    LOG("Wi-Fi connected");
     return js_mktrue();
   } else {
-    Serial.println("Failed to connect to Wi-Fi");
+    LOG("Failed to connect to Wi-Fi");
     return js_mkfalse();
   }
 }
@@ -335,7 +340,7 @@ static jsval_t js_wifi_status(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Not connected to Wi-Fi");
+    LOG("Not connected to Wi-Fi");
     return js_mknull();
   }
   IPAddress ip = WiFi.localIP();
@@ -347,7 +352,7 @@ static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
   double ms = js_getnum(args[0]);
-  delay((unsigned long)ms);
+  vTaskDelay(pdMS_TO_TICKS((unsigned long)ms));
   return js_mknull();
 }
 
@@ -359,7 +364,7 @@ static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
 
   File file = SD_MMC.open(path);
   if(!file) {
-    Serial.printf("Failed to open file: %s\n", path);
+    LOGF("Failed to open file: %s\n", path);
     return js_mknull();
   }
   String content = file.readString();
@@ -376,7 +381,7 @@ static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
 
   File f = SD_MMC.open(path, FILE_WRITE);
   if(!f) {
-    Serial.printf("Failed to open for writing: %s\n", path);
+    LOGF("Failed to open for writing: %s\n", path);
     return js_mkfalse();
   }
   f.write((const uint8_t*)data, strlen(data));
@@ -398,11 +403,11 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
 
   File root = SD_MMC.open(path);
   if(!root) {
-    Serial.printf("Failed to open directory: %s\n", path.c_str());
+    LOGF("Failed to open directory: %s\n", path.c_str());
     return js_mknull();
   }
   if(!root.isDirectory()) {
-    Serial.println("Not a directory");
+    LOG("Not a directory");
     root.close();
     return js_mknull();
   }
@@ -431,35 +436,35 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
 bool load_gif_into_ram(const char *path) {
   File f = SD_MMC.open(path, FILE_READ);
   if(!f) {
-    Serial.printf("Failed to open %s\n", path);
+    LOGF("Failed to open %s\n", path);
     return false;
   }
   size_t fileSize = f.size();
-  Serial.printf("File %s is %u bytes\n", path, (unsigned)fileSize);
+  LOGF("File %s is %u bytes\n", path, (unsigned)fileSize);
 
   uint8_t* tmp = (uint8_t*)ps_malloc(fileSize);
   if(!tmp) {
-    Serial.printf("Failed to allocate %u bytes in PSRAM\n",(unsigned)fileSize);
+    LOGF("Failed to allocate %u bytes in PSRAM\n",(unsigned)fileSize);
     f.close();
     return false;
   }
   size_t bytesRead = f.read(tmp, fileSize);
   f.close();
   if(bytesRead < fileSize) {
-    Serial.printf("Failed to read full file: only %u of %u\n",
+    LOGF("Failed to read full file: only %u of %u\n",
                   (unsigned)bytesRead,(unsigned)fileSize);
     free(tmp);
     return false;
   }
   g_gifBuffer = tmp;
   g_gifSize   = fileSize;
-  Serial.println("GIF loaded into PSRAM successfully");
+  LOG("GIF loaded into PSRAM successfully");
   return true;
 }
 
 static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
   if(nargs<1) {
-    Serial.println("show_gif_from_sd: expects path");
+    LOG("show_gif_from_sd: expects path");
     return js_mknull();
   }
   const char* rawPath = js_str(js, args[0]);
@@ -472,7 +477,7 @@ static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
   }
 
   if(!load_gif_into_ram(path.c_str())) {
-    Serial.println("Could not load GIF into RAM");
+    LOG("Could not load GIF into RAM");
     return js_mknull();
   }
 
@@ -480,7 +485,7 @@ static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
   lv_gif_set_src(gif, "M:mygif");   // memory-based
   lv_obj_align(gif, LV_ALIGN_CENTER, 0, 0);
 
-  Serial.printf("Showing GIF from memory driver (file was %s)\n", path.c_str());
+  LOGF("Showing GIF from memory driver (file was %s)\n", path.c_str());
   return js_mknull();
 }
 
@@ -492,16 +497,16 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   // 1) Open file
   File f = SD_MMC.open(path, FILE_READ);
   if (!f) {
-    Serial.printf("Failed to open %s\n", path);
+    LOGF("Failed to open %s\n", path);
     return false;
   }
   size_t fileSize = f.size();
-  Serial.printf("File %s is %u bytes\n", path, (unsigned)fileSize);
+  LOGF("File %s is %u bytes\n", path, (unsigned)fileSize);
 
   // 2) Allocate PSRAM
   uint8_t *buf = (uint8_t *)ps_malloc(fileSize);
   if (!buf) {
-    Serial.printf("Failed to allocate %u bytes in PSRAM\n", (unsigned)fileSize);
+    LOGF("Failed to allocate %u bytes in PSRAM\n", (unsigned)fileSize);
     f.close();
     return false;
   }
@@ -510,7 +515,7 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   size_t bytesRead = f.read(buf, fileSize);
   f.close();
   if (bytesRead < fileSize) {
-    Serial.printf("Failed to read full file: only %u of %u\n",
+    LOGF("Failed to read full file: only %u of %u\n",
                   (unsigned)bytesRead, (unsigned)fileSize);
     free(buf);
     return false;
@@ -538,16 +543,16 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   // If you can't know width/height from file alone, you may just guess or parse
   // For a PNG/JPG you'd typically use an external decoder to fill w,h
 
-  Serial.println("Image loaded into PSRAM successfully");
+  LOG("Image loaded into PSRAM successfully");
   return true;
 }
 
 bool load_and_execute_js_script(const char* path) {
-  Serial.printf("Loading JavaScript script from: %s\n", path);
+  LOGF("Loading JavaScript script from: %s\n", path);
 
   File file = SD_MMC.open(path);
   if(!file) {
-    Serial.println("Failed to open JavaScript script file");
+    LOG("Failed to open JavaScript script file");
     return false;
   }
   String jsScript = file.readString();
@@ -556,10 +561,10 @@ bool load_and_execute_js_script(const char* path) {
   jsval_t res = js_eval(js, jsScript.c_str(), jsScript.length());
   if(js_type(res) == JS_ERR) {
     const char *error = js_str(js, res);
-    Serial.printf("Error executing script: %s\n", error);
+    LOGF("Error executing script: %s\n", error);
     return false;
   }
-  Serial.println("JavaScript script executed successfully");
+  LOG("JavaScript script executed successfully");
   return true;
 }
 
@@ -578,7 +583,7 @@ static const lv_font_t* get_font_for_size(int size) {
 static jsval_t js_lvgl_draw_label(struct js* js, jsval_t* args, int nargs) {
     // We expect at least 3 args: text, x, y. 4th arg is optional fontSize
     if(nargs < 3) {
-        Serial.println("draw_label: expects text, x, y, [fontSize]");
+        LOG("draw_label: expects text, x, y, [fontSize]");
         return js_mknull();
     }
 
@@ -612,7 +617,7 @@ static jsval_t js_lvgl_draw_label(struct js* js, jsval_t* args, int nargs) {
 
 static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   if(nargs<4) {
-    Serial.println("draw_rect: expects x,y,w,h");
+    LOG("draw_rect: expects x,y,w,h");
     return js_mknull();
   }
   int x = (int)js_getnum(args[0]);
@@ -631,13 +636,13 @@ static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   lv_style_set_radius(&styleRect, 5);
   lv_obj_add_style(rect, &styleRect, 0);
 
-  Serial.printf("draw_rect: at (%d,%d), size(%d,%d)\n", x, y, w, h);
+  LOGF("draw_rect: at (%d,%d), size(%d,%d)\n", x, y, w, h);
   return js_mknull();
 }
 
 static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
   if(nargs<3) {
-    Serial.println("show_image: expects path,x,y");
+    LOG("show_image: expects path,x,y");
     return js_mknull();
   }
   const char* rawPath = js_str(js, args[0]);
@@ -645,7 +650,7 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
   int y = (int)js_getnum(args[2]);
 
   if(!rawPath) {
-    Serial.println("show_image: invalid path");
+    LOG("show_image: invalid path");
     return js_mknull();
   }
   // Build "S:/filename"
@@ -659,28 +664,35 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
   lv_img_set_src(img, lvglPath.c_str());
   lv_obj_set_pos(img, x, y);
 
-  Serial.printf("show_image: '%s' at (%d,%d)\n", lvglPath.c_str(), x, y);
+  LOGF("show_image: '%s' at (%d,%d)\n", lvglPath.c_str(), x, y);
   return js_mknull();
 }
 
 /******************************************************************************
  * G2) create_image, rotate_obj, move_obj, animate_obj (Object Handle Approach)
  ******************************************************************************/
-static const int MAX_OBJECTS = 16;
-static lv_obj_t *g_lv_obj_map[MAX_OBJECTS] = { nullptr };
+// std::vector‑based registry ----
+#include <vector>
+#include <mutex>
+static std::vector<lv_obj_t*> g_objects;
+static std::mutex             g_obj_mtx;
 
 static int store_lv_obj(lv_obj_t *obj) {
-  for(int i=0; i<MAX_OBJECTS; i++) {
-    if(!g_lv_obj_map[i]) {
-      g_lv_obj_map[i] = obj;
-      return i;
-    }
-  }
-  return -1; // No free slot
+  std::lock_guard<std::mutex> lock(g_obj_mtx);
+  for (size_t i = 0; i < g_objects.size(); ++i)
+    if (!g_objects[i]) { g_objects[i] = obj; return (int)i; }
+  g_objects.push_back(obj);
+  return (int)(g_objects.size() - 1);
 }
-static lv_obj_t* get_lv_obj(int handle) {
-  if(handle<0 || handle>=MAX_OBJECTS) return nullptr;
-  return g_lv_obj_map[handle];
+
+static lv_obj_t* get_lv_obj(int h) {
+  std::lock_guard<std::mutex> lock(g_obj_mtx);
+  return (h>=0 && h < (int)g_objects.size()) ? g_objects[h] : nullptr;
+}
+
+static void release_lv_obj(int h) {
+  std::lock_guard<std::mutex> lock(g_obj_mtx);
+  if (h>=0 && h < (int)g_objects.size()) g_objects[h] = nullptr;
 }
 
 // Helper functions to extract RGB components from lv_color_t
@@ -699,7 +711,7 @@ uint8_t get_blue(lv_color_t color) {
 // create_image("/messi.png", x,y) => returns handle
 static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
   if(nargs<3) {
-    Serial.println("create_image: expects path,x,y");
+    LOG("create_image: expects path,x,y");
     return js_mknum(-1);
   }
   const char* rawPath = js_str(js, args[0]);
@@ -718,14 +730,14 @@ static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
   lv_obj_set_pos(img, x, y);
 
   int handle = store_lv_obj(img);
-  Serial.printf("create_image: '%s' => handle %d\n", fullPath.c_str(), handle);
+  LOGF("create_image: '%s' => handle %d\n", fullPath.c_str(), handle);
   return js_mknum(handle);
 }
 
 // create_image_from_ram("/somefile.bin", x, y)
 static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
-    Serial.println("create_image_from_ram: expects path, x, y");
+    LOG("create_image_from_ram: expects path, x, y");
     return js_mknum(-1);
   }
 
@@ -741,7 +753,7 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
     if (!g_ram_images[i].used) { slot = i; break; }
   }
   if (slot < 0) {
-    Serial.println("No free RamImage slots!");
+    LOG("No free RamImage slots!");
     return js_mknum(-1);
   }
   RamImage *ri = &g_ram_images[slot];
@@ -754,7 +766,7 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
 
   // 4) Actually load the file into the RamImage
   if (!load_image_file_into_ram(path.c_str(), ri)) {
-    Serial.println("Could not load image into RAM");
+    LOG("Could not load image into RAM");
     return js_mknum(-1);
   }
 
@@ -768,7 +780,7 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
 
   // 8) Store it in our handle-based system
   int handle = store_lv_obj(img);
-  Serial.printf("create_image_from_ram: '%s' => ram slot=%d => handle %d\n",
+  LOGF("create_image_from_ram: '%s' => ram slot=%d => handle %d\n",
                 path.c_str(), slot, handle);
   return js_mknum(handle);
 }
@@ -776,7 +788,7 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
 // rotate_obj(handle, angle)
 static jsval_t js_rotate_obj(struct js *js, jsval_t *args, int nargs) {
   if(nargs<2) {
-    Serial.println("rotate_obj: expects handle, angle");
+    LOG("rotate_obj: expects handle, angle");
     return js_mknull();
   }
   int handle = (int)js_getnum(args[0]);
@@ -784,19 +796,19 @@ static jsval_t js_rotate_obj(struct js *js, jsval_t *args, int nargs) {
 
   lv_obj_t *obj = get_lv_obj(handle);
   if(!obj) {
-    Serial.println("rotate_obj: invalid handle");
+    LOG("rotate_obj: invalid handle");
     return js_mknull();
   }
   // For lv_img in LVGL => set angle
   lv_img_set_angle(obj, angle);
-  Serial.printf("rotate_obj: handle=%d angle=%d\n", handle, angle);
+  LOGF("rotate_obj: handle=%d angle=%d\n", handle, angle);
   return js_mknull();
 }
 
 // move_obj(handle, x, y)
 static jsval_t js_move_obj(struct js *js, jsval_t *args, int nargs) {
   if(nargs<3) {
-    Serial.println("move_obj: expects handle,x,y");
+    LOG("move_obj: expects handle,x,y");
     return js_mknull();
   }
   int handle = (int)js_getnum(args[0]);
@@ -805,11 +817,11 @@ static jsval_t js_move_obj(struct js *js, jsval_t *args, int nargs) {
 
   lv_obj_t *obj = get_lv_obj(handle);
   if(!obj) {
-    Serial.println("move_obj: invalid handle");
+    LOG("move_obj: invalid handle");
     return js_mknull();
   }
   lv_obj_set_pos(obj, x, y);
-  Serial.printf("move_obj: handle=%d => pos(%d,%d)\n", handle, x, y);
+  LOGF("move_obj: handle=%d => pos(%d,%d)\n", handle, x, y);
   return js_mknull();
 }
 
@@ -826,7 +838,7 @@ static void anim_y_cb(void *var, int32_t v) {
 // animate_obj(handle, x0,y0, x1,y1, duration)
 static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs) {
   if(nargs<5) {
-    Serial.println("animate_obj: expects handle,x0,y0,x1,y1,[duration]");
+    LOG("animate_obj: expects handle,x0,y0,x1,y1,[duration]");
     return js_mknull();
   }
   int handle   = (int)js_getnum(args[0]);
@@ -838,7 +850,7 @@ static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs) {
 
   lv_obj_t *obj = get_lv_obj(handle);
   if(!obj) {
-    Serial.println("animate_obj: invalid handle");
+    LOG("animate_obj: invalid handle");
     return js_mknull();
   }
   // Start pos
@@ -862,7 +874,7 @@ static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs) {
   lv_anim_set_exec_cb(&a2, anim_y_cb);
   lv_anim_start(&a2);
 
-  Serial.printf("animate_obj: handle=%d from(%d,%d) to(%d,%d), dur=%d\n",
+  LOGF("animate_obj: handle=%d from(%d,%d) to(%d,%d), dur=%d\n",
                 handle, x0,y0, x1,y1, duration);
   return js_mknull();
 }
@@ -957,11 +969,11 @@ static jsval_t js_create_style(struct js *js, jsval_t *args, int nargs) {
       lv_style_t *st = new lv_style_t;
       lv_style_init(st);
       g_style_map[i] = st;
-      Serial.printf("create_style => handle %d\n", i);
+      LOGF("create_style => handle %d\n", i);
       return js_mknum(i);
     }
   }
-  Serial.println("create_style => no free style slots");
+  LOG("create_style => no free style slots");
   return js_mknum(-1);
 }
 
@@ -976,7 +988,7 @@ static jsval_t js_obj_add_style(struct js *js, jsval_t *args, int nargs) {
   lv_obj_t* obj    = get_lv_obj(objHandle);
   lv_style_t* st   = get_lv_style(styleHandle);
   if(!obj || !st) {
-    Serial.println("obj_add_style => invalid handle");
+    LOG("obj_add_style => invalid handle");
     return js_mknull();
   }
   lv_obj_add_style(obj, st, partState);
@@ -1352,7 +1364,7 @@ static jsval_t js_obj_set_size(struct js *js, jsval_t *args, int nargs) {
 
   lv_obj_t *obj = get_lv_obj(handle);
   if(!obj) {
-    Serial.printf("obj_set_size => invalid handle %d\n", handle);
+    LOGF("obj_set_size => invalid handle %d\n", handle);
     return js_mknull();
   }
   lv_obj_set_size(obj, w, h);
@@ -1369,7 +1381,7 @@ static jsval_t js_obj_align(struct js *js, jsval_t *args, int nargs) {
 
   lv_obj_t *obj = get_lv_obj(handle);
   if(!obj) {
-    Serial.printf("obj_align => invalid handle %d\n", handle);
+    LOGF("obj_align => invalid handle %d\n", handle);
     return js_mknull();
   }
   lv_obj_align(obj, (lv_align_t)alignVal, xOfs, yOfs);
@@ -1499,7 +1511,7 @@ static jsval_t js_lv_chart_create(struct js *js, jsval_t *args, int nargs) {
 
     // Store in your handle-based system
     int handle = store_lv_obj(chart);
-    Serial.printf("lv_chart_create => handle %d\n", handle);
+    LOGF("lv_chart_create => handle %d\n", handle);
 
     // Return handle to JS
     return js_mknum(handle);
@@ -2164,7 +2176,7 @@ static jsval_t js_lv_tileview_add_tile(struct js *js, jsval_t *args, int nargs) 
 static jsval_t js_lv_line_create(struct js *js, jsval_t *args, int nargs) {
     lv_obj_t *line = lv_line_create(lv_scr_act());
     int handle = store_lv_obj(line);
-    Serial.printf("lv_line_create => handle %d\n", handle);
+    LOGF("lv_line_create => handle %d\n", handle);
     return js_mknum(handle);
 }
 
@@ -2251,7 +2263,7 @@ String readHttpResponseBody(WiFiClient &client) {
                 char c = client.read();
                 body += c;
             } else {
-                delay(1);
+                vTaskDelay(pdMS_TO_TICKS(1));
             }
         }
     }
@@ -2262,7 +2274,7 @@ String readHttpResponseBody(WiFiClient &client) {
 // Bridging function to parse JSON and extract a value for a given key
 static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
-      Serial.println("js_parse_json_value: Not enough arguments");
+      LOG("js_parse_json_value: Not enough arguments");
       return js_mkstr(js, "", 0);
   }
 
@@ -2270,28 +2282,28 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
   size_t json_len;
   char* jsonStr_cstr = js_getstr(js, args[0], &json_len);
   if (!jsonStr_cstr) {
-      Serial.println("js_parse_json_value: Argument 1 is not a string");
+      LOG("js_parse_json_value: Argument 1 is not a string");
       return js_mkstr(js, "", 0);
   }
   String jsonStr(jsonStr_cstr, json_len);
 
-  Serial.printf("js_parse_json_value: Retrieved JSON string (%d bytes): %s\n", json_len, jsonStr.c_str());
+  LOGF("js_parse_json_value: Retrieved JSON string (%d bytes): %s\n", json_len, jsonStr.c_str());
 
   // Retrieve key string
   size_t key_len;
   char* key_cstr = js_getstr(js, args[1], &key_len);
   if (!key_cstr) {
-      Serial.println("js_parse_json_value: Argument 2 is not a string");
+      LOG("js_parse_json_value: Argument 2 is not a string");
       return js_mkstr(js, "", 0);
   }
   String keyStr(key_cstr, key_len);
 
-  Serial.printf("js_parse_json_value: Retrieved key string (%d bytes): %s\n", key_len, keyStr.c_str());
+  LOGF("js_parse_json_value: Retrieved key string (%d bytes): %s\n", key_len, keyStr.c_str());
 
   // Strip surrounding quotes if present
   if (keyStr.startsWith("\"") && keyStr.endsWith("\"") && keyStr.length() >= 2) {
       keyStr = keyStr.substring(1, keyStr.length() - 1);
-      Serial.printf("js_parse_json_value: Stripped quotes from key. New key: '%s'\n", keyStr.c_str());
+      LOGF("js_parse_json_value: Stripped quotes from key. New key: '%s'\n", keyStr.c_str());
   }
 
   // Parse JSON using ArduinoJson
@@ -2299,22 +2311,22 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
   DeserializationError error = deserializeJson(doc, jsonStr);
   if (error) {
       Serial.print("js_parse_json_value: JSON parse failed: ");
-      Serial.println(error.c_str());
+      LOG(error.c_str());
       return js_mkstr(js, "", 0);
   }
 
   // Check if JSON is an object
   if (!doc.is<JsonObject>()) {
-      Serial.println("js_parse_json_value: Parsed JSON is not an object");
+      LOG("js_parse_json_value: Parsed JSON is not an object");
       return js_mkstr(js, "", 0);
   }
 
   // Debugging: Print all key-value pairs
-  Serial.println("js_parse_json_value: Parsed JSON keys and values:");
+  LOG("js_parse_json_value: Parsed JSON keys and values:");
   JsonObject obj = doc.as<JsonObject>();
   for (JsonPair kv : obj) {
     String valStr = kv.value().as<String>();
-    Serial.printf("Key: %s, Value: %s\n", kv.key().c_str(), valStr.c_str());
+    LOGF("Key: %s, Value: %s\n", kv.key().c_str(), valStr.c_str());
   }
 
   // Extract the value
@@ -2322,7 +2334,7 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
 
   // Check if the key exists
   if (value.isNull()) {
-      Serial.printf("js_parse_json_value: Key '%s' not found or null\n", keyStr.c_str());
+      LOGF("js_parse_json_value: Key '%s' not found or null\n", keyStr.c_str());
       return js_mkstr(js, "", 0);
   }
 
@@ -2339,7 +2351,7 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
       resultStr = String(value.as<String>());
   }
 
-  Serial.printf("js_parse_json_value: Extracted '%s': %s\n", keyStr.c_str(), resultStr.c_str());
+  LOGF("js_parse_json_value: Extracted '%s': %s\n", keyStr.c_str(), resultStr.c_str());
 
   // Return the extracted value to JavaScript
   return js_mkstr(js, resultStr.c_str(), resultStr.length());
@@ -2348,7 +2360,7 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
 // Bridging function to perform string index search
 static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs) {
     if (nargs < 2) {
-        Serial.println("str_index_of: Not enough arguments");
+        LOG("str_index_of: Not enough arguments");
         return js_mknum(-1);
     }
 
@@ -2356,7 +2368,7 @@ static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs) {
     size_t haystack_len;
     char* haystack_cstr = js_getstr(js, args[0], &haystack_len);
     if (!haystack_cstr) {
-        Serial.println("str_index_of: Argument 1 is not a string");
+        LOG("str_index_of: Argument 1 is not a string");
         return js_mknum(-1);
     }
     String haystackStr(haystack_cstr, haystack_len);
@@ -2365,40 +2377,40 @@ static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs) {
     size_t needle_len;
     char* needle_cstr = js_getstr(js, args[1], &needle_len);
     if (!needle_cstr) {
-        Serial.println("str_index_of: Argument 2 is not a string");
+        LOG("str_index_of: Argument 2 is not a string");
         return js_mknum(-1);
     }
     String needleStr(needle_cstr, needle_len);
 
-    Serial.printf("str_index_of: Retrieved haystack ('%s') and needle ('%s')\n", haystackStr.c_str(), needleStr.c_str());
+    LOGF("str_index_of: Retrieved haystack ('%s') and needle ('%s')\n", haystackStr.c_str(), needleStr.c_str());
 
     // Optional: Strip surrounding quotes if present
     if (haystackStr.startsWith("\"") && haystackStr.endsWith("\"") && haystackStr.length() >= 2) {
         haystackStr = haystackStr.substring(1, haystackStr.length() - 1);
-        Serial.printf("str_index_of: Stripped quotes from haystack. New haystack: '%s'\n", haystackStr.c_str());
+        LOGF("str_index_of: Stripped quotes from haystack. New haystack: '%s'\n", haystackStr.c_str());
     }
 
     if (needleStr.startsWith("\"") && needleStr.endsWith("\"") && needleStr.length() >= 2) {
         needleStr = needleStr.substring(1, needleStr.length() - 1);
-        Serial.printf("str_index_of: Stripped quotes from needle. New needle: '%s'\n", needleStr.c_str());
+        LOGF("str_index_of: Stripped quotes from needle. New needle: '%s'\n", needleStr.c_str());
     }
 
-    Serial.printf("str_index_of: Searching for '%s' in '%s'\n", needleStr.c_str(), haystackStr.c_str());
+    LOGF("str_index_of: Searching for '%s' in '%s'\n", needleStr.c_str(), haystackStr.c_str());
 
     int index = haystackStr.indexOf(needleStr);
     if (index == -1) {
-        Serial.println("str_index_of: Needle not found");
+        LOG("str_index_of: Needle not found");
         return js_mknum(-1);
     }
 
-    Serial.printf("str_index_of: Found at index %d\n", index);
+    LOGF("str_index_of: Found at index %d\n", index);
     return js_mknum(index);
 }
 
 // Bridging function to perform string substring extraction
 static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
     if (nargs < 3) {
-        Serial.println("str_substring: Not enough arguments");
+        LOG("str_substring: Not enough arguments");
         return js_mkstr(js, "", 0);
     }
 
@@ -2406,14 +2418,14 @@ static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
     size_t str_len;
     char* str_cstr = js_getstr(js, args[0], &str_len);
     if (!str_cstr) {
-        Serial.println("str_substring: Argument 1 is not a string");
+        LOG("str_substring: Argument 1 is not a string");
         return js_mkstr(js, "", 0);
     }
     String strStr(str_cstr, str_len);
 
     // Check if arguments 2 and 3 are numbers
     if (js_type(args[1]) != JS_NUM || js_type(args[2]) != JS_NUM) {
-        Serial.println("str_substring: Arguments 2 and 3 must be numbers");
+        LOG("str_substring: Arguments 2 and 3 must be numbers");
         return js_mkstr(js, "", 0);
     }
 
@@ -2421,12 +2433,12 @@ static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
     int start  = (int)js_getnum(args[1]);
     int length = (int)js_getnum(args[2]);
 
-    Serial.printf("str_substring: Retrieved string ('%s'), start (%d), length (%d)\n", strStr.c_str(), start, length);
+    LOGF("str_substring: Retrieved string ('%s'), start (%d), length (%d)\n", strStr.c_str(), start, length);
 
     // Optional: Strip surrounding quotes if present
     if (strStr.startsWith("\"") && strStr.endsWith("\"") && strStr.length() >= 2) {
         strStr = strStr.substring(1, strStr.length() - 1);
-        Serial.printf("str_substring: Stripped quotes from string. New string: '%s'\n", strStr.c_str());
+        LOGF("str_substring: Stripped quotes from string. New string: '%s'\n", strStr.c_str());
     }
 
     // Handle negative length (extract until end)
@@ -2441,7 +2453,7 @@ static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
         strStr = strStr.substring(start, end);
     }
 
-    Serial.printf("str_substring: Extracted substring '%s' with length %d\n", strStr.c_str(), length);
+    LOGF("str_substring: Extracted substring '%s' with length %d\n", strStr.c_str(), length);
     return js_mkstr(js, strStr.c_str(), strStr.length());
 }
 
@@ -2460,7 +2472,7 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
     url.remove(url.length()-1,1);
   }
 
-  Serial.println("js_http_get => Using SSL for: " + url);
+  LOG("js_http_get => Using SSL for: " + url);
 
   // 1) Remove "https://" prefix (assuming always https)
   const String HTTPS_PREFIX = "https://";
@@ -2479,26 +2491,26 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
     path = url.substring(slashPos);
   }
   
-  Serial.println("Parsed host='" + host + "', path='" + path + "'");
+  LOG("Parsed host='" + host + "', path='" + path + "'");
 
   // 3) WiFiClientSecure
   WiFiClientSecure client;
   if (g_httpCAcert) {
     // If user loaded a cert from SD, use it
     client.setCACert(g_httpCAcert);
-    Serial.println("Using user-supplied CA cert (secure)");
+    LOG("Using user-supplied CA cert (secure)");
   } else {
     // Otherwise, skip validation
     client.setInsecure();
-    Serial.println("No CA cert => setInsecure() (unsecure)");
+    LOG("No CA cert => setInsecure() (unsecure)");
   }
 
-  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  LOGF("Connecting to '%s':443...\n", host.c_str());
   if(!client.connect(host.c_str(), 443)) {
-    Serial.println("Connection failed!");
+    LOG("Connection failed!");
     return js_mkstr(js, "", 0);
   }
-  Serial.println("Connected => sending GET request");
+  LOG("Connected => sending GET request");
   
   // 4) Construct the GET request + custom headers
   client.print(String("GET ") + path + " HTTP/1.1\r\n");
@@ -2519,10 +2531,10 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
   String response = readHttpResponseBody(client);
   client.stop();
   
-  Serial.printf("Done reading. response size=%d\n", response.length());
-  Serial.println("Full response content:\n<<<");
-  Serial.println(response);  // <--- add this!
-  Serial.println(">>> End of response");
+  LOGF("Done reading. response size=%d\n", response.length());
+  LOG("Full response content:\n<<<");
+  LOG(response);  // <--- add this!
+  LOG(">>> End of response");
   
   // Return entire raw HTTP response
   return js_mkstr(js, response.c_str(), response.length());
@@ -2565,28 +2577,28 @@ static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
     path = url.substring(slashPos);
   }
 
-  Serial.println("\njs_http_post => manual approach");
-  Serial.println("Host: " + host);
-  Serial.println("Path: " + path);
-  Serial.printf("Body length=%d\n", jsonBody.length());
+  LOG("\njs_http_post => manual approach");
+  LOG("Host: " + host);
+  LOG("Path: " + path);
+  LOGF("Body length=%d\n", jsonBody.length());
 
   // WiFiClientSecure
   WiFiClientSecure client;
   if (g_httpCAcert) {
     client.setCACert(g_httpCAcert);
-    Serial.println("Using user-supplied CA cert (POST)");
+    LOG("Using user-supplied CA cert (POST)");
   } else {
     client.setInsecure();
-    Serial.println("No CA => setInsecure() (POST)");
+    LOG("No CA => setInsecure() (POST)");
   }
 
   // Connect on port 443
-  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  LOGF("Connecting to '%s':443...\n", host.c_str());
   if(!client.connect(host.c_str(), 443)) {
-    Serial.println("Connection failed (POST)!");
+    LOG("Connection failed (POST)!");
     return js_mkstr(js, "", 0);
   }
-  Serial.println("Connected => sending POST request");
+  LOG("Connected => sending POST request");
 
   // Construct POST request
   // e.g.:
@@ -2614,7 +2626,7 @@ static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
   String response = readHttpResponseBody(client);
   client.stop();
   
-  Serial.printf("Done POST. response size=%d\n", response.length());
+  LOGF("Done POST. response size=%d\n", response.length());
   
   // Return entire raw HTTP response
   return js_mkstr(js, response.c_str(), response.length());
@@ -2650,27 +2662,27 @@ static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
     path = url.substring(slashPos);
   }
 
-  Serial.println("\njs_http_delete => manual approach");
-  Serial.println("Host: " + host);
-  Serial.println("Path: " + path);
+  LOG("\njs_http_delete => manual approach");
+  LOG("Host: " + host);
+  LOG("Path: " + path);
 
   // WiFiClientSecure
   WiFiClientSecure client;
   if (g_httpCAcert) {
     client.setCACert(g_httpCAcert);
-    Serial.println("Using user-supplied CA cert (DELETE)");
+    LOG("Using user-supplied CA cert (DELETE)");
   } else {
     client.setInsecure();
-    Serial.println("No CA => setInsecure() (DELETE)");
+    LOG("No CA => setInsecure() (DELETE)");
   }
 
   // Connect
-  Serial.printf("Connecting to '%s':443...\n", host.c_str());
+  LOGF("Connecting to '%s':443...\n", host.c_str());
   if(!client.connect(host.c_str(), 443)) {
-    Serial.println("Connection failed (DELETE)!");
+    LOG("Connection failed (DELETE)!");
     return js_mkstr(js, "", 0);
   }
-  Serial.println("Connected => sending DELETE request");
+  LOG("Connected => sending DELETE request");
 
   // e.g.:
   // DELETE /path HTTP/1.1
@@ -2688,7 +2700,7 @@ static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
   String body = readHttpResponseBody(client);
   client.stop();
   
-  Serial.printf("Done DELETE. response size=%d\n", body.length());
+  LOGF("Done DELETE. response size=%d\n", body.length());
   
   // Return entire raw HTTP response
   return js_mkstr(js, body.c_str(), body.length());
@@ -2716,7 +2728,7 @@ static jsval_t js_http_set_header(struct js *js, jsval_t *args, int nargs) {
 
   // Append to our global vector
   g_http_headers.push_back(std::make_pair(k, v));
-  Serial.printf("Added header: %s: %s\n", k.c_str(), v.c_str());
+  LOGF("Added header: %s: %s\n", k.c_str(), v.c_str());
   return js_mktrue();
 }
 
@@ -2739,13 +2751,13 @@ static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nar
   // Open file from SD
   File f = SD_MMC.open(path, FILE_READ);
   if(!f) {
-    Serial.printf("Failed to open CA cert file: %s\n", path.c_str());
+    LOGF("Failed to open CA cert file: %s\n", path.c_str());
     return js_mkfalse();
   }
 
   size_t size = f.size();
   if(size == 0) {
-    Serial.printf("CA file is empty: %s\n", path.c_str());
+    LOGF("CA file is empty: %s\n", path.c_str());
     f.close();
     return js_mkfalse();
   }
@@ -2759,7 +2771,7 @@ static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nar
   // Allocate enough bytes (include space for trailing '\0')
   g_httpCAcert = (char*)malloc(size + 1);
   if(!g_httpCAcert) {
-    Serial.println("Not enough RAM to store CA cert!");
+    LOG("Not enough RAM to store CA cert!");
     f.close();
     return js_mkfalse();
   }
@@ -2769,7 +2781,7 @@ static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nar
   f.close();
   g_httpCAcert[bytesRead] = '\0';  // Null-terminate
 
-  Serial.printf("Loaded CA cert (%u bytes) from SD file: %s\n", (unsigned)bytesRead, path.c_str());
+  LOGF("Loaded CA cert (%u bytes) from SD file: %s\n", (unsigned)bytesRead, path.c_str());
   return js_mktrue();
 }
 
@@ -2799,12 +2811,12 @@ class MyServerCallbacks : public NimBLEServerCallbacks {
  public:
   void onConnect(NimBLEServer* pServer) {
     g_bleConnected = true;
-    Serial.println("BLE device connected");
+    LOG("BLE device connected");
   }
 
   void onDisconnect(NimBLEServer* pServer) {
     g_bleConnected = false;
-    Serial.println("BLE device disconnected");
+    LOG("BLE device disconnected");
     pServer->startAdvertising();
   }
 };
@@ -2813,7 +2825,7 @@ class MyCharCallbacks : public NimBLECharacteristicCallbacks {
  public:
   void onWrite(NimBLECharacteristic* pCharacteristic) {
     std::string rxData = pCharacteristic->getValue();
-    Serial.printf("BLE Received: %s\n", rxData.c_str());
+    LOGF("BLE Received: %s\n", rxData.c_str());
   }
 };
 
@@ -2847,7 +2859,7 @@ static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs) {
 
   // Start advertising
   g_bleServer->getAdvertising()->start();
-  Serial.println("NimBLE advertising started");
+  LOG("NimBLE advertising started");
   return js_mktrue();
 }
 
@@ -2870,7 +2882,7 @@ static jsval_t js_ble_write(struct js *js, jsval_t *args, int nargs) {
 
 // MQTT message callback from PubSubClient
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
-  Serial.printf("[MQTT] Message arrived on topic '%s'\n", topic);
+  LOGF("[MQTT] Message arrived on topic '%s'\n", topic);
 
   // If we have a non-empty callback name, build a snippet and eval
   if (g_mqttCallbackName[0] != '\0') {
@@ -2891,14 +2903,14 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
              topicStr.c_str(),
              msgStr.c_str());
 
-    Serial.printf("[MQTT] Evaluating snippet: %s\n", snippet);
+    LOGF("[MQTT] Evaluating snippet: %s\n", snippet);
 
     // Evaluate snippet
     jsval_t res = js_eval(js, snippet, strlen(snippet));
     // Optionally check if res is error
     if (js_type(res) == JS_ERR) {
       Serial.print("[MQTT] Callback error: ");
-      Serial.println(js_str(js, res));
+      LOG(js_str(js, res));
     }
   }
 }
@@ -2917,7 +2929,7 @@ static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
 
   g_mqttClient.setServer(broker, port);
   g_mqttClient.setCallback(onMqttMessage);
-  Serial.printf("[MQTT] init => broker=%s port=%d\n", broker, port);
+  LOGF("[MQTT] init => broker=%s port=%d\n", broker, port);
 
   return js_mktrue();
 }
@@ -2937,10 +2949,10 @@ static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
   }
 
   if(ok) {
-    Serial.println("[MQTT] Connected successfully");
+    LOG("[MQTT] Connected successfully");
     return js_mktrue();
   } else {
-    Serial.printf("[MQTT] Connect failed, rc=%d\n", g_mqttClient.state());
+    LOGF("[MQTT] Connect failed, rc=%d\n", g_mqttClient.state());
     return js_mkfalse();
   }
 }
@@ -2963,7 +2975,7 @@ static jsval_t js_mqtt_subscribe(struct js *js, jsval_t *args, int nargs) {
   if(!topic) return js_mkfalse();
 
   bool ok = g_mqttClient.subscribe(topic);
-  Serial.printf("[MQTT] Subscribed to '%s'? => %s\n", topic, ok ? "OK" : "FAIL");
+  LOGF("[MQTT] Subscribed to '%s'? => %s\n", topic, ok ? "OK" : "FAIL");
   return ok ? js_mktrue() : js_mkfalse();
 }
 
@@ -2990,7 +3002,7 @@ static jsval_t js_mqtt_on_message(struct js *js, jsval_t *args, int nargs) {
   g_mqttCallbackName[len] = '\0';
 
   Serial.print("[MQTT] JS callback name set to: ");
-  Serial.println(g_mqttCallbackName);
+  LOG(g_mqttCallbackName);
   return js_mktrue();
 }
 
@@ -3001,26 +3013,26 @@ bool doMqttConnect() {
   // extern int         g_mqttPort;
   // g_mqttClient.setServer(g_mqttBroker, g_mqttPort);
 
-  Serial.println("[MQTT] Checking broker connection...");
+  LOG("[MQTT] Checking broker connection...");
 
   // Attempt to connect with e.g. a default clientID (or user/pass if needed)
   bool ok = g_mqttClient.connect("WebScreenClient");
   if(!ok) {
     // Print the reason code: g_mqttClient.state()
-    Serial.printf("[MQTT] Connect fail, rc=%d\n", g_mqttClient.state());
+    LOGF("[MQTT] Connect fail, rc=%d\n", g_mqttClient.state());
     return false;
   }
 
   // If connected, subscribe to any default topic if you want:
   // g_mqttClient.subscribe("some/topic");
 
-  Serial.println("[MQTT] Connected successfully");
+  LOG("[MQTT] Connected successfully");
   return true;
 }
 
 // This function tries to reconnect Wi-Fi if Wi-Fi is down
 bool doWiFiReconnect() {
-  Serial.println("[WiFi] Checking connection...");
+  LOG("[WiFi] Checking connection...");
 
   // If you have an SSID/pass stored
   // extern String g_ssid;
@@ -3032,12 +3044,12 @@ bool doWiFiReconnect() {
   for (int i = 0; i < 15; i++) {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.print("[WiFi] Reconnected. IP=");
-      Serial.println(WiFi.localIP());
+      LOG(WiFi.localIP());
       return true;
     }
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
   }
-  Serial.println("[WiFi] Still not connected");
+  LOG("[WiFi] Still not connected");
   return false;
 }
 
@@ -3049,7 +3061,7 @@ void wifiMqttMaintainLoop() {
     // Try reconnect every 10 seconds
     if(now - lastWiFiReconnectAttempt > 10000) {
       lastWiFiReconnectAttempt = now;
-      Serial.println("[WiFi] Connection lost, attempting recon...");
+      LOG("[WiFi] Connection lost, attempting recon...");
       doWiFiReconnect();
     }
     // If Wi-Fi is still down, we skip MQTT
@@ -3061,7 +3073,7 @@ void wifiMqttMaintainLoop() {
     unsigned long now = millis();
     if(now - lastMqttReconnectAttempt > 10000) {
       lastMqttReconnectAttempt = now;
-      Serial.println("[MQTT] Lost MQTT, trying reconnect...");
+      LOG("[MQTT] Lost MQTT, trying reconnect...");
       if(doMqttConnect()) {
         lastMqttReconnectAttempt = 0; 
       }
@@ -3243,7 +3255,7 @@ static void elk_task(void *pvParam) {
   // 1) Create Elk
   js = js_create(elk_memory, sizeof(elk_memory));
   if(!js) {
-    Serial.println("Failed to initialize Elk in elk_task");
+    LOG("Failed to initialize Elk in elk_task");
     // Delete this task if you want
     vTaskDelete(NULL);
     return;
@@ -3254,10 +3266,10 @@ static void elk_task(void *pvParam) {
 
   // 3) Load & execute your script using the filename from the configuration
   if(!load_and_execute_js_script(g_script_filename.c_str())) {
-    Serial.printf("Failed to load and execute JavaScript script from %s\n", g_script_filename.c_str());
+    LOGF("Failed to load and execute JavaScript script from %s\n", g_script_filename.c_str());
     // Optionally handle the error
   } else {
-    Serial.println("Script executed successfully in elk_task");
+    LOG("Script executed successfully in elk_task");
   }
 
   // 4) Now keep running lv_timer_handler() or your lvgl_loop
@@ -3266,8 +3278,7 @@ static void elk_task(void *pvParam) {
     // Check Wi-Fi and MQTT, handle reconnections
     wifiMqttMaintainLoop();
     lv_timer_handler();
-    delay(5);
-    // or lvgl_loop() if you prefer
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 
   // If you ever want to exit the task, do:

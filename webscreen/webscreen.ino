@@ -16,7 +16,7 @@ static bool useFallback = false;
 static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, String &outScript) {
   File f = SD_MMC.open(path);
   if (!f) {
-    Serial.println("No JSON file");
+    LOG("No JSON file");
     return false;
   }
   String jsonStr = f.readString();
@@ -25,7 +25,7 @@ static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, S
   StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, jsonStr);
   if (error) {
-    Serial.printf("Failed to parse JSON: %s\n", error.c_str());
+    LOGF("Failed to parse JSON: %s\n", error.c_str());
     return false;
   }
 
@@ -33,7 +33,7 @@ static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, S
   outSSID = doc["settings"]["wifi"]["ssid"] | "";
   outPASS = doc["settings"]["wifi"]["pass"] | "";
   if (outSSID.isEmpty() || outPASS.isEmpty()) {
-    Serial.println("SSID or PASS empty in JSON");
+    LOG("SSID or PASS empty in JSON");
     return false;
   }
 
@@ -50,7 +50,7 @@ static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, S
   serializeJson(doc, updated);
   f = SD_MMC.open(path, FILE_WRITE);
   if (!f) {
-    Serial.println("Failed to open JSON for writing");
+    LOG("Failed to open JSON for writing");
     return false;
   }
   f.print(updated);
@@ -61,12 +61,16 @@ static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, S
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
+  vTaskDelay(pdMS_TO_TICKS(2000));
+
+  // force the display power/backlight pin always ON:
+  pinMode(OUTPUT_PIN, OUTPUT);
+  digitalWrite(OUTPUT_PIN, HIGH);
 
   // Attempt to mount SD
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
   if(!SD_MMC.begin("/sdcard", true, false, 1000000)) {
-    Serial.println("SD card mount fail => fallback");
+    LOG("SD card mount fail => fallback");
     useFallback = true;
     fallback_setup();
     return;
@@ -75,7 +79,7 @@ void setup() {
   // Optionally read /webscreen.json for Wi-Fi
   String s, p, scriptFile;
   if(!readConfigJSON("/webscreen.json", s, p, scriptFile)) {
-    Serial.println("Failed to read /webscreen.json => fallback");
+    LOG("Failed to read /webscreen.json => fallback");
     useFallback = true;
     fallback_setup();
     return;
@@ -92,17 +96,17 @@ void setup() {
   WiFi.begin(s.c_str(), p.c_str());
   unsigned long startMs = millis();
   while(WiFi.status()!=WL_CONNECTED && (millis()-startMs)<15000) {
-    delay(250);
+    vTaskDelay(pdMS_TO_TICKS(250));
     Serial.print(".");
   }
-  Serial.println();
+  LOG();
   if(WiFi.status()!=WL_CONNECTED) {
-    Serial.println("Wi-Fi fail => fallback");
+    LOG("Wi-Fi fail => fallback");
     useFallback = true;
     fallback_setup();
     return;
   }
-  Serial.println("Wi-Fi connected => " + WiFi.localIP().toString());
+  LOG("Wi-Fi connected => " + WiFi.localIP().toString());
 
   // Use the filename specified in the config; ensure it has a leading '/'
   String scriptPath = scriptFile;
@@ -112,7 +116,7 @@ void setup() {
   // Check if the script file exists on the SD card:
   File checkF = SD_MMC.open(g_script_filename);
   if(!checkF) {
-    Serial.printf("No %s found => fallback\n", g_script_filename.c_str());
+    LOGF("No %s found => fallback\n", g_script_filename.c_str());
     useFallback = true;
     fallback_setup();
     return;

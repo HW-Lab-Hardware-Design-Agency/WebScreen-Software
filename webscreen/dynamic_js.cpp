@@ -12,12 +12,12 @@
 String g_script_filename = "/app.js";
 
 void dynamic_js_setup() {
-  Serial.println("DYNAMIC_JS: Setting up Elk + script scenario...");
+  LOG("DYNAMIC_JS: Setting up Elk + script scenario...");
 
   // If needed, mount the SD again (or confirm it’s already mounted):
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
   if(!SD_MMC.begin("/sdcard", true, false, 1000000)) {
-    Serial.println("Card Mount Failed => can't run dynamic JS code properly");
+    LOG("Card Mount Failed => can't run dynamic JS code properly");
     return;
   }
 
@@ -44,14 +44,13 @@ void dynamic_js_setup() {
       NULL,              
       1,                 
       NULL,              
-      1                  
+      0                  
   );
 
-  Serial.println("DYNAMIC_JS: setup done!");
+  LOG("DYNAMIC_JS: setup done!");
 }
 
 void dynamic_js_loop() {
-  // The Elk code runs in the FreeRTOS task (elk_task),
-  // so we typically only do minimal work here
-  delay(500);
+  // The Elk code runs in the FreeRTOS task (elk_task).
+  vTaskDelay(pdMS_TO_TICKS(50));
 }

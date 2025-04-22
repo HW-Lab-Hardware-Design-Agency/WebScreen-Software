@@ -69,7 +69,7 @@ static void lcd_send_cmd(uint32_t cmd, uint8_t *dat, uint32_t len) {
   t.flags = (SPI_TRANS_MULTILINE_CMD | SPI_TRANS_MULTILINE_ADDR);
   t.cmd = 0x02;
   t.addr = cmd << 8;
-  // Serial.printf("t.addr:0x%X\r\n", t.addr);
+  // LOGF("t.addr:0x%X\r\n", t.addr);
   if (len != 0) {
     t.tx_buffer = dat;
     t.length = 8 * len;

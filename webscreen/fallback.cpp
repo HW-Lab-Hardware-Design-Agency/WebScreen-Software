@@ -4,6 +4,8 @@
 #include "rm67162.h"          // LCD driver
 #include <lvgl.h>             // Ensure you have LVGL
 #include "notification.h"      // For the GIF data
+#include "globals.h"
+#include "tick.h"
 
 // We'll store references to the fallback label + gif
 static lv_obj_t* fb_label = nullptr;
@@ -48,12 +50,13 @@ static void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, u
 }
 
 void fallback_setup() {
-  Serial.println("FALLBACK: Setting up scrolling label + GIF...");
+  LOG("FALLBACK: Setting up scrolling label + GIF...");
 
   // 1) Minimal LVGL init (only if not already done).  
   //    If your main code calls lv_init() elsewhere, 
   //    you might skip or check if it’s safe to call again.
   lv_init();
+  start_lvgl_tick();
 
   // 2) Power on the screen, set backlight
   pinMode(PIN_LED, OUTPUT);
@@ -66,7 +69,7 @@ void fallback_setup() {
   // 4) Allocate a buffer for fallback usage
   fbBuf = (lv_color_t*) ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
   if(!fbBuf) {
-    Serial.println("FALLBACK: Failed to allocate buffer");
+    LOG("FALLBACK: Failed to allocate buffer");
     return;
   }
 

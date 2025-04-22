@@ -2084,91 +2084,6 @@ static jsval_t js_lv_spangroup_refr_mode(struct js *js, jsval_t *args, int nargs
     return js_mknull();
 }
 
-/********************************************************************************
- * WIN (Window)
- ********************************************************************************/
-static jsval_t js_lv_win_create(struct js *js, jsval_t *args, int nargs) {
-    // (parentH or -1, headerHeight)
-    int parentH = -1;
-    int headerHeight = 40;
-    if(nargs>0) parentH = (int)js_getnum(args[0]);
-    if(nargs>1) headerHeight = (int)js_getnum(args[1]);
-
-    lv_obj_t *parent = (parentH<0)? lv_scr_act() : get_lv_obj(parentH);
-    if(!parent) parent = lv_scr_act();
-
-    lv_obj_t * win = lv_win_create(parent, headerHeight);
-    int handle = store_lv_obj(win);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_win_add_btn(struct js *js, jsval_t *args, int nargs) {
-    // (winH, symbolOrText, btnWidth)
-    if(nargs<3) return js_mknum(-1);
-    int wh = (int)js_getnum(args[0]);
-    const char* txt = js_str(js, args[1]);
-    int width = (int)js_getnum(args[2]);
-
-    lv_obj_t *win = get_lv_obj(wh);
-    if(!win) return js_mknum(-1);
-
-    lv_obj_t *btn = lv_win_add_btn(win, txt, width);
-    int handle = store_lv_obj(btn);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_win_add_title(struct js *js, jsval_t *args, int nargs) {
-    // (winH, "mytitle")
-    if(nargs<2) return js_mknull();
-    int wh = (int)js_getnum(args[0]);
-    const char* t = js_str(js, args[1]);
-    if(!t) return js_mknull();
-
-    lv_obj_t *win = get_lv_obj(wh);
-    if(!win) return js_mknull();
-
-    lv_win_add_title(win, t);
-    return js_mknull();
-}
-
-static jsval_t js_lv_win_get_content(struct js *js, jsval_t *args, int nargs) {
-    // (winH) => handle
-    if(nargs<1) return js_mknum(-1);
-    int wh = (int)js_getnum(args[0]);
-    lv_obj_t *win = get_lv_obj(wh);
-    if(!win) return js_mknum(-1);
-
-    lv_obj_t * c = lv_win_get_content(win);
-    int handle = store_lv_obj(c);
-    return js_mknum(handle);
-}
-
-/********************************************************************************
- * TUTORIAL FOR TILES (TileView)
- ********************************************************************************/
-static jsval_t js_lv_tileview_create(struct js *js, jsval_t *args, int nargs) {
-    // no param
-    lv_obj_t * tv = lv_tileview_create(lv_scr_act());
-    int handle = store_lv_obj(tv);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_tileview_add_tile(struct js *js, jsval_t *args, int nargs) {
-    // (tileviewH, col, row, allowedDir) => returns tile page handle
-    if(nargs<4) return js_mknum(-1);
-    int tvH = (int)js_getnum(args[0]);
-    int col = (int)js_getnum(args[1]);
-    int row = (int)js_getnum(args[2]);
-    int dir = (int)js_getnum(args[3]); // e.g. LV_DIR_LEFT|LV_DIR_RIGHT etc.
-
-    lv_obj_t *tv = get_lv_obj(tvH);
-    if(!tv) return js_mknum(-1);
-
-    lv_obj_t * tile = lv_tileview_add_tile(tv, col, row, dir);
-    int handle = store_lv_obj(tile);
-    return js_mknum(handle);
-}
-
 /*******************************************************
  * LINE BRIDGING
  *******************************************************/
@@ -3224,16 +3139,6 @@ void register_js_functions() {
   js_set(js, global, "lv_span_set_text",         js_mkfun(js_lv_span_set_text));
   js_set(js, global, "lv_span_set_text_static",  js_mkfun(js_lv_span_set_text_static));
   js_set(js, global, "lv_spangroup_refr_mode",   js_mkfun(js_lv_spangroup_refr_mode));
-
-  //==================== WIN =============================
-  js_set(js, global, "lv_win_create",             js_mkfun(js_lv_win_create));
-  js_set(js, global, "lv_win_add_btn",            js_mkfun(js_lv_win_add_btn));
-  js_set(js, global, "lv_win_add_title",          js_mkfun(js_lv_win_add_title));
-  js_set(js, global, "lv_win_get_content",        js_mkfun(js_lv_win_get_content));
-
-  //==================== TILEVIEW ========================
-  js_set(js, global, "lv_tileview_create",        js_mkfun(js_lv_tileview_create));
-  js_set(js, global, "lv_tileview_add_tile",      js_mkfun(js_lv_tileview_add_tile));
 
   // ---------- LINE bridging
   js_set(js, global, "lv_line_create",          js_mkfun(js_lv_line_create));

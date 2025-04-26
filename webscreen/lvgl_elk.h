@@ -928,39 +928,87 @@ static jsval_t js_label_set_text(struct js* js, jsval_t* args, int nargs) {
   return js_mknull();
 }
 
-// style_set_text_font(styleHandle, fontSize)
-static jsval_t js_style_set_text_font(struct js* js, jsval_t* args, int nargs) {
-    if (nargs < 2) return js_mknull();
-    int styleH = (int)js_getnum(args[0]);
-    int fontSize = (int)js_getnum(args[1]);
-
-    // Convert the style handle to an lv_style_t*
-    lv_style_t* st = get_lv_style(styleH);
-    if (!st) return js_mknull();
-
-    // Pick a built-in font
-    const lv_font_t* font = get_font_for_size(fontSize);
-
-    // Apply it
-    lv_style_set_text_font(st, font);
-
-    return js_mknull();
+// ---------- Macro helpers to autogenerate LVGL style wrappers --------------
+#define STYLE_SET_INT(JS_FN_NAME, LV_FN)                                    \
+static jsval_t JS_FN_NAME(struct js* js, jsval_t* a, int n){                \
+  if(n < 2)               return js_mknull();                               \
+  int h  = (int)js_getnum(a[0]);                                            \
+  int v  = (int)js_getnum(a[1]);                                            \
+  lv_style_t* st = get_lv_style(h);                                         \
+  if(!st)                return js_mknull();                                \
+  LV_FN(st, (lv_coord_t)v);                                                 \
+  return js_mknull();                                                       \
 }
 
-// style_set_text_align(styleHandle, align)
-static jsval_t js_style_set_text_align(struct js* js, jsval_t* args, int nargs) {
-    if (nargs < 2) return js_mknull();
-    int styleH = (int)js_getnum(args[0]);
-    int alignVal = (int)js_getnum(args[1]); // e.g. 0 for LEFT, 1 for CENTER, etc.
-
-    lv_style_t* st = get_lv_style(styleH);
-    if (!st) return js_mknull();
-
-    // In LVGL 8.x: LV_TEXT_ALIGN_LEFT=0, _CENTER=1, _RIGHT=2, _AUTO=3
-    lv_style_set_text_align(st, (lv_text_align_t)alignVal);
-
-    return js_mknull();
+#define STYLE_SET_COLOR(JS_FN_NAME, LV_FN)                                  \
+static jsval_t JS_FN_NAME(struct js* js, jsval_t* a, int n){                \
+  if(n < 2)               return js_mknull();                               \
+  int h  = (int)js_getnum(a[0]);                                            \
+  uint32_t col = (uint32_t)js_getnum(a[1]);                                 \
+  lv_style_t* st = get_lv_style(h);                                         \
+  if(!st)                return js_mknull();                                \
+  LV_FN(st, lv_color_hex(col));                                             \
+  return js_mknull();                                                       \
 }
+
+// ---------------- Auto-generated wrappers -----------------------------------
+STYLE_SET_INT  (js_style_set_radius,            lv_style_set_radius)
+STYLE_SET_INT  (js_style_set_bg_opa,            lv_style_set_bg_opa)
+STYLE_SET_COLOR(js_style_set_bg_color,          lv_style_set_bg_color)
+STYLE_SET_COLOR(js_style_set_border_color,      lv_style_set_border_color)
+STYLE_SET_INT  (js_style_set_border_width,      lv_style_set_border_width)
+STYLE_SET_INT  (js_style_set_border_opa,        lv_style_set_border_opa)
+STYLE_SET_INT  (js_style_set_border_side,       lv_style_set_border_side)
+STYLE_SET_INT  (js_style_set_outline_width,     lv_style_set_outline_width)
+STYLE_SET_COLOR(js_style_set_outline_color,     lv_style_set_outline_color)
+STYLE_SET_INT  (js_style_set_outline_pad,       lv_style_set_outline_pad)
+STYLE_SET_INT  (js_style_set_shadow_width,      lv_style_set_shadow_width)
+STYLE_SET_COLOR(js_style_set_shadow_color,      lv_style_set_shadow_color)
+STYLE_SET_INT  (js_style_set_shadow_ofs_x,      lv_style_set_shadow_ofs_x)
+STYLE_SET_INT  (js_style_set_shadow_ofs_y,      lv_style_set_shadow_ofs_y)
+STYLE_SET_COLOR(js_style_set_img_recolor,       lv_style_set_img_recolor)
+STYLE_SET_INT  (js_style_set_img_recolor_opa,   lv_style_set_img_recolor_opa)
+STYLE_SET_INT  (js_style_set_transform_angle,   lv_style_set_transform_angle)
+STYLE_SET_COLOR(js_style_set_text_color,        lv_style_set_text_color)
+STYLE_SET_INT  (js_style_set_text_letter_space, lv_style_set_text_letter_space)
+STYLE_SET_INT  (js_style_set_text_line_space,   lv_style_set_text_line_space)
+STYLE_SET_INT  (js_style_set_text_decor,        lv_style_set_text_decor)
+STYLE_SET_COLOR(js_style_set_line_color,        lv_style_set_line_color)
+STYLE_SET_INT  (js_style_set_line_width,        lv_style_set_line_width)
+STYLE_SET_INT  (js_style_set_line_rounded,      lv_style_set_line_rounded)
+STYLE_SET_INT  (js_style_set_pad_all,           lv_style_set_pad_all)
+STYLE_SET_INT  (js_style_set_pad_left,          lv_style_set_pad_left)
+STYLE_SET_INT  (js_style_set_pad_right,         lv_style_set_pad_right)
+STYLE_SET_INT  (js_style_set_pad_top,           lv_style_set_pad_top)
+STYLE_SET_INT  (js_style_set_pad_bottom,        lv_style_set_pad_bottom)
+STYLE_SET_INT  (js_style_set_pad_ver,           lv_style_set_pad_ver)
+STYLE_SET_INT  (js_style_set_pad_hor,           lv_style_set_pad_hor)
+STYLE_SET_INT  (js_style_set_width,             lv_style_set_width)
+STYLE_SET_INT  (js_style_set_height,            lv_style_set_height)
+STYLE_SET_INT  (js_style_set_x,                 lv_style_set_x)
+STYLE_SET_INT  (js_style_set_y,                 lv_style_set_y)
+
+// ---------- Two setters that still need custom logic ------------------------
+static jsval_t js_style_set_text_font(struct js* js, jsval_t* a, int n){
+  if(n < 2) return js_mknull();
+  int h  = (int)js_getnum(a[0]);
+  int sz = (int)js_getnum(a[1]);
+  lv_style_t* st = get_lv_style(h);
+  if(!st) return js_mknull();
+  lv_style_set_text_font(st, get_font_for_size(sz));
+  return js_mknull();
+}
+
+static jsval_t js_style_set_text_align(struct js* js, jsval_t* a, int n){
+  if(n < 2) return js_mknull();
+  int h  = (int)js_getnum(a[0]);
+  int al = (int)js_getnum(a[1]);      // LV_TEXT_ALIGN_LEFT|CENTER|RIGHT|AUTO
+  lv_style_t* st = get_lv_style(h);
+  if(!st) return js_mknull();
+  lv_style_set_text_align(st, (lv_text_align_t)al);
+  return js_mknull();
+}
+
 
 // create_style()
 static jsval_t js_create_style(struct js *js, jsval_t *args, int nargs) {
@@ -995,363 +1043,7 @@ static jsval_t js_obj_add_style(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-// ***Full style property setters***
-static jsval_t js_style_set_radius(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int radius = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_radius(st, (lv_coord_t)radius);
-  return js_mknull();
-}
 
-static jsval_t js_style_set_bg_opa(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int opaVal = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_bg_opa(st, (lv_opa_t)opaVal);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_bg_color(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH   = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]); // numeric hex
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_bg_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_color(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH    = (int)js_getnum(args[0]);
-  double color  = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_border_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_width(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int bw     = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_border_width(st, bw);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_opa(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int opa    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_border_opa(st, (lv_opa_t)opa);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_side(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int side   = (int)js_getnum(args[1]); // e.g. LV_BORDER_SIDE_BOTTOM|LV_BORDER_SIDE_RIGHT
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_border_side(st, side);
-  return js_mknull();
-}
-
-// Outline
-static jsval_t js_style_set_outline_width(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w      = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_outline_width(st, w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_outline_color(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH  = (int)js_getnum(args[0]);
-  double col  = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_outline_color(st, lv_color_hex((uint32_t)col));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_outline_pad(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_outline_pad(st, pad);
-  return js_mknull();
-}
-
-// Shadow
-static jsval_t js_style_set_shadow_width(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w      = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_shadow_width(st, w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_shadow_color(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH   = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_shadow_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_shadow_ofs_x(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int ofs    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_shadow_ofs_x(st, ofs);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_shadow_ofs_y(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int ofs    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_shadow_ofs_y(st, ofs);
-  return js_mknull();
-}
-
-// Image recolor, transform
-static jsval_t js_style_set_img_recolor(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH   = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_img_recolor(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_img_recolor_opa(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int opa    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_img_recolor_opa(st, (lv_opa_t)opa);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_transform_angle(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int angle  = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_transform_angle(st, (lv_coord_t)angle);
-  return js_mknull();
-}
-
-// Text
-static jsval_t js_style_set_text_color(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH   = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_text_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_text_letter_space(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int space  = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_text_letter_space(st, space);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_text_line_space(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int space  = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_text_line_space(st, space);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_text_decor(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int decor  = (int)js_getnum(args[1]); // e.g. LV_TEXT_DECOR_UNDERLINE
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_text_decor(st, decor);
-  return js_mknull();
-}
-
-// Line
-static jsval_t js_style_set_line_color(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH   = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_line_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_line_width(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w      = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_line_width(st, w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_line_rounded(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH  = (int)js_getnum(args[0]);
-  bool round  = (bool)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_line_rounded(st, round);
-  return js_mknull();
-}
-
-// Padding
-static jsval_t js_style_set_pad_all(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_pad_all(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_left(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_pad_left(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_right(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_pad_right(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_top(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_pad_top(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_bottom(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_pad_bottom(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_ver(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_pad_ver(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_hor(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad    = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_pad_hor(st, pad);
-  return js_mknull();
-}
-
-// Some dimension-related style props
-static jsval_t js_style_set_width(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w      = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_width(st, (lv_coord_t)w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_height(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int h      = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_height(st, (lv_coord_t)h);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_x(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH  = (int)js_getnum(args[0]);
-  double val  = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_x(st, (lv_coord_t)val);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_y(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int styleH  = (int)js_getnum(args[0]);
-  double val  = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if(!st) return js_mknull();
-  lv_style_set_y(st, (lv_coord_t)val);
-  return js_mknull();
-}
 
 /******************************************************************************
  * H2) Additional object property functions

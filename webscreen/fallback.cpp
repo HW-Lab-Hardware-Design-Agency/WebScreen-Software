@@ -1,13 +1,15 @@
 // fallback.cpp
 
-#include <Arduino.h>
-#include "fallback.h"
-#include "pins_config.h"
-#include "rm67162.h" // LCD driver
-#include <lvgl.h>
-#include "notification.h" // for the GIF data
-#include "globals.h"
-#include "tick.h"
+#include "fallback.h" // Own header first
+
+#include <Arduino.h> // For Serial, String? (check usage)
+#include <lvgl.h>     // Uses LVGL objects, styles, animations directly
+
+#include "pins_config.h" // Needs pin definitions
+#include "rm67162.h"     // Needs lcd_PushColors etc.
+#include "notification.h"// Needs the image data `notification`
+#include "globals.h"     // Needs LOG, EXAMPLE_LCD_*, LVGL_LCD_BUF_SIZE, ps_malloc?
+#include "tick.h"        // Needs start_lvgl_tick()
 
 namespace
 {

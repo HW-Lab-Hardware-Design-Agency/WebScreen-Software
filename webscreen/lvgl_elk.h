@@ -2694,155 +2694,134 @@ void wifiMqttMaintainLoop() {
 /******************************************************************************
  * I) Register All JS Functions
  ******************************************************************************/
+struct JsBinding {
+  const char* name;
+  // note: struct js* here, not "js*"
+  jsval_t (*fn)(struct js*, jsval_t*, int);
+};
+
+static constexpr JsBinding kBindings[] = {
+  { "print",        js_print   },
+  { "wifi_connect", js_wifi_connect   },
+  { "wifi_status",  js_wifi_status   },
+  { "wifi_get_ip",  js_wifi_get_ip   },
+  { "delay",        js_delay   },
+  { "str_index_of",   js_str_index_of   },
+  { "str_substring",  js_str_substring   },
+  { "http_get",    js_http_get   },
+  { "http_post",   js_http_post   },
+  { "http_delete", js_http_delete   },
+  { "http_set_ca_cert_from_sd", js_http_set_ca_cert_from_sd   },
+  { "parse_json_value", js_parse_json_value   },
+  { "http_set_header", js_http_set_header   },
+  { "http_clear_headers", js_http_clear_headers   },
+  { "sd_read_file", js_sd_read_file   },
+  { "sd_write_file",js_sd_write_file   },
+  { "sd_list_dir",  js_sd_list_dir   },
+  { "sd_delete_file", js_sd_delete_file   },
+  { "ble_init",         js_ble_init   },
+  { "ble_is_connected", js_ble_is_connected   },
+  { "ble_write",        js_ble_write   },
+  { "show_gif_from_sd", js_show_gif_from_sd   },
+  { "draw_label",   js_lvgl_draw_label   },
+  { "draw_rect",    js_lvgl_draw_rect   },
+  { "show_image",   js_lvgl_show_image   },
+  { "create_label", js_create_label   },
+  { "label_set_text", js_label_set_text   },
+  { "create_image",          js_create_image   },
+  { "create_image_from_ram", js_create_image_from_ram   },
+  { "rotate_obj",            js_rotate_obj   },
+  { "move_obj",              js_move_obj   },
+  { "animate_obj",           js_animate_obj   },
+  { "create_style",              js_create_style   },
+  { "obj_add_style",             js_obj_add_style   },
+  { "style_set_radius",          js_style_set_radius   },
+  { "style_set_bg_opa",          js_style_set_bg_opa   },
+  { "style_set_bg_color",        js_style_set_bg_color   },
+  { "style_set_border_color",    js_style_set_border_color   },
+  { "style_set_border_width",    js_style_set_border_width   },
+  { "style_set_border_opa",      js_style_set_border_opa   },
+  { "style_set_border_side",     js_style_set_border_side   },
+  { "style_set_outline_width",   js_style_set_outline_width   },
+  { "style_set_outline_color",   js_style_set_outline_color   },
+  { "style_set_outline_pad",     js_style_set_outline_pad   },
+  { "style_set_shadow_width",    js_style_set_shadow_width   },
+  { "style_set_shadow_color",    js_style_set_shadow_color   },
+  { "style_set_shadow_ofs_x",    js_style_set_shadow_ofs_x   },
+  { "style_set_shadow_ofs_y",    js_style_set_shadow_ofs_y   },
+  { "style_set_img_recolor",     js_style_set_img_recolor   },
+  { "style_set_img_recolor_opa", js_style_set_img_recolor_opa   },
+  { "style_set_transform_angle",  js_style_set_transform_angle   },
+  { "style_set_text_color",      js_style_set_text_color   },
+  { "style_set_text_letter_space", js_style_set_text_letter_space   },
+  { "style_set_text_line_space", js_style_set_text_line_space   },
+  { "style_set_text_font",       js_style_set_text_font   },
+  { "style_set_text_align",      js_style_set_text_align   },
+  { "style_set_text_decor",      js_style_set_text_decor   },
+  { "style_set_line_color",      js_style_set_line_color   },
+  { "style_set_line_width",      js_style_set_line_width   },
+  { "style_set_line_rounded",    js_style_set_line_rounded   },
+  { "style_set_pad_all",         js_style_set_pad_all   },
+  { "style_set_pad_left",        js_style_set_pad_left   },
+  { "style_set_pad_right",       js_style_set_pad_right   },
+  { "style_set_pad_top",         js_style_set_pad_top   },
+  { "style_set_pad_bottom",      js_style_set_pad_bottom   },
+  { "style_set_pad_ver",         js_style_set_pad_ver   },
+  { "style_set_pad_hor",         js_style_set_pad_hor   },
+  { "style_set_width",           js_style_set_width   },
+  { "style_set_height",          js_style_set_height   },
+  { "style_set_x",               js_style_set_x   },
+  { "style_set_y",               js_style_set_y   },
+  { "obj_set_size",        js_obj_set_size   },
+  { "obj_align",           js_obj_align   },
+  { "obj_set_scroll_snap_x",   js_obj_set_scroll_snap_x   },
+  { "obj_set_scroll_snap_y",   js_obj_set_scroll_snap_y   },
+  { "obj_add_flag",            js_obj_add_flag   },
+  { "obj_clear_flag",          js_obj_clear_flag   },
+  { "obj_set_scroll_dir",      js_obj_set_scroll_dir   },
+  { "obj_set_scrollbar_mode",  js_obj_set_scrollbar_mode   },
+  { "obj_set_flex_flow",       js_obj_set_flex_flow   },
+  { "obj_set_flex_align",      js_obj_set_flex_align   },
+  { "obj_set_style_clip_corner", js_obj_set_style_clip_corner   },
+  { "obj_set_style_base_dir",  js_obj_set_style_base_dir   },
+  { "lv_meter_create",                   js_lv_meter_create   },
+  { "lv_meter_add_scale",                js_lv_meter_add_scale   },
+  { "lv_meter_set_scale_ticks",          js_lv_meter_set_scale_ticks   },
+  { "lv_meter_set_scale_major_ticks",    js_lv_meter_set_scale_major_ticks   },
+  { "lv_meter_set_scale_range",          js_lv_meter_set_scale_range   },
+  { "lv_meter_add_arc",                  js_lv_meter_add_arc   },
+  { "lv_meter_add_scale_lines",          js_lv_meter_add_scale_lines   },
+  { "lv_meter_add_needle_line",          js_lv_meter_add_needle_line   },
+  { "lv_meter_add_needle_img",           js_lv_meter_add_needle_img   },
+  { "lv_meter_set_indicator_start_value",js_lv_meter_set_indicator_start_value   },
+  { "lv_meter_set_indicator_end_value",  js_lv_meter_set_indicator_end_value   },
+  { "lv_meter_set_indicator_value",      js_lv_meter_set_indicator_value   },
+  { "lv_msgbox_create",            js_lv_msgbox_create   },
+  { "lv_msgbox_get_active_btn_text", js_lv_msgbox_get_active_btn_text   },
+  { "lv_spangroup_create",      js_lv_spangroup_create   },
+  { "lv_spangroup_set_align",   js_lv_spangroup_set_align   },
+  { "lv_spangroup_set_overflow",js_lv_spangroup_set_overflow   },
+  { "lv_spangroup_set_indent",  js_lv_spangroup_set_indent   },
+  { "lv_spangroup_set_mode",    js_lv_spangroup_set_mode   },
+  { "lv_spangroup_new_span",    js_lv_spangroup_new_span   },
+  { "lv_span_set_text",         js_lv_span_set_text   },
+  { "lv_span_set_text_static",  js_lv_span_set_text_static   },
+  { "lv_spangroup_refr_mode",   js_lv_spangroup_refr_mode   },
+  { "lv_line_create",          js_lv_line_create   },
+  { "lv_line_set_points",      js_lv_line_set_points   },
+  { "mqtt_init",       js_mqtt_init   },
+  { "mqtt_connect",    js_mqtt_connect   },
+  { "mqtt_publish",    js_mqtt_publish   },
+  { "mqtt_subscribe",  js_mqtt_subscribe   },
+  { "mqtt_loop",       js_mqtt_loop   },
+  { "mqtt_on_message", js_mqtt_on_message   }
+};
+
 void register_js_functions() {
-  jsval_t global = js_glob(js);
-
-  // Basic
-  js_set(js, global, "print",        js_mkfun(js_print));
-  js_set(js, global, "wifi_connect", js_mkfun(js_wifi_connect));
-  js_set(js, global, "wifi_status",  js_mkfun(js_wifi_status));
-  js_set(js, global, "wifi_get_ip",  js_mkfun(js_wifi_get_ip));
-  js_set(js, global, "delay",        js_mkfun(js_delay));
-
-  // bridging for indexOf / substring
-  js_set(js, global, "str_index_of",   js_mkfun(js_str_index_of));
-  js_set(js, global, "str_substring",  js_mkfun(js_str_substring));
-
-  // HTTP
-  js_set(js, global, "http_get",    js_mkfun(js_http_get));
-  js_set(js, global, "http_post",   js_mkfun(js_http_post));
-  js_set(js, global, "http_delete", js_mkfun(js_http_delete));
-  js_set(js, global, "http_set_ca_cert_from_sd", js_mkfun(js_http_set_ca_cert_from_sd));
-  js_set(js, global, "parse_json_value", js_mkfun(js_parse_json_value));
-  js_set(js, global, "http_set_header", js_mkfun(js_http_set_header));
-  js_set(js, global, "http_clear_headers", js_mkfun(js_http_clear_headers));
-
-  // SD functions
-  js_set(js, global, "sd_read_file", js_mkfun(js_sd_read_file));
-  js_set(js, global, "sd_write_file",js_mkfun(js_sd_write_file));
-  js_set(js, global, "sd_list_dir",  js_mkfun(js_sd_list_dir));
-  js_set(js, global, "sd_delete_file", js_mkfun(js_sd_delete_file));
-
-  // BLE
-  js_set(js, global, "ble_init",         js_mkfun(js_ble_init));
-  js_set(js, global, "ble_is_connected", js_mkfun(js_ble_is_connected));
-  js_set(js, global, "ble_write",        js_mkfun(js_ble_write));
-
-  // GIF from memory
-  js_set(js, global, "show_gif_from_sd", js_mkfun(js_show_gif_from_sd));
-
-  // Basic shapes and labels.
-  js_set(js, global, "draw_label",   js_mkfun(js_lvgl_draw_label));
-  js_set(js, global, "draw_rect",    js_mkfun(js_lvgl_draw_rect));
-  js_set(js, global, "show_image",   js_mkfun(js_lvgl_show_image));
-  js_set(js, global, "create_label", js_mkfun(js_create_label));
-  js_set(js, global, "label_set_text", js_mkfun(js_label_set_text));
-
-  // Handle-based image creation + transforms
-  js_set(js, global, "create_image",          js_mkfun(js_create_image));
-  js_set(js, global, "create_image_from_ram", js_mkfun(js_create_image_from_ram));
-  js_set(js, global, "rotate_obj",            js_mkfun(js_rotate_obj));
-  js_set(js, global, "move_obj",              js_mkfun(js_move_obj));
-  js_set(js, global, "animate_obj",           js_mkfun(js_animate_obj));
-
-  // Style creation + property setters
-  js_set(js, global, "create_style",              js_mkfun(js_create_style));
-  js_set(js, global, "obj_add_style",             js_mkfun(js_obj_add_style));
-
-  js_set(js, global, "style_set_radius",          js_mkfun(js_style_set_radius));
-  js_set(js, global, "style_set_bg_opa",          js_mkfun(js_style_set_bg_opa));
-  js_set(js, global, "style_set_bg_color",        js_mkfun(js_style_set_bg_color));
-  js_set(js, global, "style_set_border_color",    js_mkfun(js_style_set_border_color));
-  js_set(js, global, "style_set_border_width",    js_mkfun(js_style_set_border_width));
-  js_set(js, global, "style_set_border_opa",      js_mkfun(js_style_set_border_opa));
-  js_set(js, global, "style_set_border_side",     js_mkfun(js_style_set_border_side));
-  js_set(js, global, "style_set_outline_width",   js_mkfun(js_style_set_outline_width));
-  js_set(js, global, "style_set_outline_color",   js_mkfun(js_style_set_outline_color));
-  js_set(js, global, "style_set_outline_pad",     js_mkfun(js_style_set_outline_pad));
-  js_set(js, global, "style_set_shadow_width",    js_mkfun(js_style_set_shadow_width));
-  js_set(js, global, "style_set_shadow_color",    js_mkfun(js_style_set_shadow_color));
-  js_set(js, global, "style_set_shadow_ofs_x",    js_mkfun(js_style_set_shadow_ofs_x));
-  js_set(js, global, "style_set_shadow_ofs_y",    js_mkfun(js_style_set_shadow_ofs_y));
-  js_set(js, global, "style_set_img_recolor",     js_mkfun(js_style_set_img_recolor));
-  js_set(js, global, "style_set_img_recolor_opa", js_mkfun(js_style_set_img_recolor_opa));
-  js_set(js, global, "style_set_transform_angle",  js_mkfun(js_style_set_transform_angle));
-  js_set(js, global, "style_set_text_color",      js_mkfun(js_style_set_text_color));
-  js_set(js, global, "style_set_text_letter_space", js_mkfun(js_style_set_text_letter_space));
-  js_set(js, global, "style_set_text_line_space", js_mkfun(js_style_set_text_line_space));
-  js_set(js, global, "style_set_text_font",       js_mkfun(js_style_set_text_font));
-  js_set(js, global, "style_set_text_align",      js_mkfun(js_style_set_text_align));
-  js_set(js, global, "style_set_text_decor",      js_mkfun(js_style_set_text_decor));
-  js_set(js, global, "style_set_line_color",      js_mkfun(js_style_set_line_color));
-  js_set(js, global, "style_set_line_width",      js_mkfun(js_style_set_line_width));
-  js_set(js, global, "style_set_line_rounded",    js_mkfun(js_style_set_line_rounded));
-  js_set(js, global, "style_set_pad_all",         js_mkfun(js_style_set_pad_all));
-  js_set(js, global, "style_set_pad_left",        js_mkfun(js_style_set_pad_left));
-  js_set(js, global, "style_set_pad_right",       js_mkfun(js_style_set_pad_right));
-  js_set(js, global, "style_set_pad_top",         js_mkfun(js_style_set_pad_top));
-  js_set(js, global, "style_set_pad_bottom",      js_mkfun(js_style_set_pad_bottom));
-  js_set(js, global, "style_set_pad_ver",         js_mkfun(js_style_set_pad_ver));
-  js_set(js, global, "style_set_pad_hor",         js_mkfun(js_style_set_pad_hor));
-  js_set(js, global, "style_set_width",           js_mkfun(js_style_set_width));
-  js_set(js, global, "style_set_height",          js_mkfun(js_style_set_height));
-  js_set(js, global, "style_set_x",               js_mkfun(js_style_set_x));
-  js_set(js, global, "style_set_y",               js_mkfun(js_style_set_y));
-
-  // Object property setters
-  js_set(js, global, "obj_set_size",        js_mkfun(js_obj_set_size));
-  js_set(js, global, "obj_align",           js_mkfun(js_obj_align));
-
-  // Scroll, flex, flags
-  js_set(js, global, "obj_set_scroll_snap_x",   js_mkfun(js_obj_set_scroll_snap_x));
-  js_set(js, global, "obj_set_scroll_snap_y",   js_mkfun(js_obj_set_scroll_snap_y));
-  js_set(js, global, "obj_add_flag",            js_mkfun(js_obj_add_flag));
-  js_set(js, global, "obj_clear_flag",          js_mkfun(js_obj_clear_flag));
-  js_set(js, global, "obj_set_scroll_dir",      js_mkfun(js_obj_set_scroll_dir));
-  js_set(js, global, "obj_set_scrollbar_mode",  js_mkfun(js_obj_set_scrollbar_mode));
-  js_set(js, global, "obj_set_flex_flow",       js_mkfun(js_obj_set_flex_flow));
-  js_set(js, global, "obj_set_flex_align",      js_mkfun(js_obj_set_flex_align));
-  js_set(js, global, "obj_set_style_clip_corner", js_mkfun(js_obj_set_style_clip_corner));
-  js_set(js, global, "obj_set_style_base_dir",  js_mkfun(js_obj_set_style_base_dir));
-
-  //==================== METER ============================
-  js_set(js, global, "lv_meter_create",                   js_mkfun(js_lv_meter_create));
-  js_set(js, global, "lv_meter_add_scale",                js_mkfun(js_lv_meter_add_scale));
-  js_set(js, global, "lv_meter_set_scale_ticks",          js_mkfun(js_lv_meter_set_scale_ticks));
-  js_set(js, global, "lv_meter_set_scale_major_ticks",    js_mkfun(js_lv_meter_set_scale_major_ticks));
-  js_set(js, global, "lv_meter_set_scale_range",          js_mkfun(js_lv_meter_set_scale_range));
-  js_set(js, global, "lv_meter_add_arc",                  js_mkfun(js_lv_meter_add_arc));
-  js_set(js, global, "lv_meter_add_scale_lines",          js_mkfun(js_lv_meter_add_scale_lines));
-  js_set(js, global, "lv_meter_add_needle_line",          js_mkfun(js_lv_meter_add_needle_line));
-  js_set(js, global, "lv_meter_add_needle_img",           js_mkfun(js_lv_meter_add_needle_img));
-  js_set(js, global, "lv_meter_set_indicator_start_value",js_mkfun(js_lv_meter_set_indicator_start_value));
-  js_set(js, global, "lv_meter_set_indicator_end_value",  js_mkfun(js_lv_meter_set_indicator_end_value));
-  js_set(js, global, "lv_meter_set_indicator_value",      js_mkfun(js_lv_meter_set_indicator_value));
-
-  //==================== MSGBOX ==========================
-  js_set(js, global, "lv_msgbox_create",            js_mkfun(js_lv_msgbox_create));
-  js_set(js, global, "lv_msgbox_get_active_btn_text", js_mkfun(js_lv_msgbox_get_active_btn_text));
-
-  //==================== SPAN ============================
-  js_set(js, global, "lv_spangroup_create",      js_mkfun(js_lv_spangroup_create));
-  js_set(js, global, "lv_spangroup_set_align",   js_mkfun(js_lv_spangroup_set_align));
-  js_set(js, global, "lv_spangroup_set_overflow",js_mkfun(js_lv_spangroup_set_overflow));
-  js_set(js, global, "lv_spangroup_set_indent",  js_mkfun(js_lv_spangroup_set_indent));
-  js_set(js, global, "lv_spangroup_set_mode",    js_mkfun(js_lv_spangroup_set_mode));
-  js_set(js, global, "lv_spangroup_new_span",    js_mkfun(js_lv_spangroup_new_span));
-  js_set(js, global, "lv_span_set_text",         js_mkfun(js_lv_span_set_text));
-  js_set(js, global, "lv_span_set_text_static",  js_mkfun(js_lv_span_set_text_static));
-  js_set(js, global, "lv_spangroup_refr_mode",   js_mkfun(js_lv_spangroup_refr_mode));
-
-  // ---------- LINE bridging
-  js_set(js, global, "lv_line_create",          js_mkfun(js_lv_line_create));
-  js_set(js, global, "lv_line_set_points",      js_mkfun(js_lv_line_set_points));
-
-  // MQTT bridging
-  js_set(js, global, "mqtt_init",       js_mkfun(js_mqtt_init));
-  js_set(js, global, "mqtt_connect",    js_mkfun(js_mqtt_connect));
-  js_set(js, global, "mqtt_publish",    js_mkfun(js_mqtt_publish));
-  js_set(js, global, "mqtt_subscribe",  js_mkfun(js_mqtt_subscribe));
-  js_set(js, global, "mqtt_loop",       js_mkfun(js_mqtt_loop));
-  js_set(js, global, "mqtt_on_message", js_mkfun(js_mqtt_on_message));
+  auto glob = js_glob(js);
+  for(auto &b : kBindings) {
+    js_set(js, glob, b.name, js_mkfun(b.fn));
+  }
 }
 
 //------------------------------------------------------------------------------

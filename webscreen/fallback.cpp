@@ -3,26 +3,27 @@
 #include <Arduino.h>
 #include "fallback.h"
 #include "pins_config.h"
-#include "rm67162.h"       // LCD driver
+#include "rm67162.h" // LCD driver
 #include <lvgl.h>
-#include "notification.h"   // for the GIF data
+#include "notification.h" // for the GIF data
 #include "globals.h"
 #include "tick.h"
 
-namespace {
+namespace
+{
   // how long the label scrolls (in ms)
   static constexpr uint32_t SCROLL_DURATION = 10000;
 
   // LVGL objects & buffers
-  static lv_obj_t*          fb_label = nullptr;
-  static lv_obj_t*          fb_gif   = nullptr;
+  static lv_obj_t *fb_label = nullptr;
+  static lv_obj_t *fb_gif = nullptr;
   static lv_disp_draw_buf_t fb_draw_buf;
-  static lv_color_t*        fb_buf    = nullptr;
+  static lv_color_t *fb_buf = nullptr;
 
   // our fallback display flush callback
-  static void disp_flush(lv_disp_drv_t* disp,
-                         const lv_area_t* area,
-                         lv_color_t* color_p)
+  static void disp_flush(lv_disp_drv_t *disp,
+                         const lv_area_t *area,
+                         lv_color_t *color_p)
   {
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
@@ -31,41 +32,42 @@ namespace {
                    area->y1,
                    w,
                    h,
-                   reinterpret_cast<uint16_t*>(&color_p->full));
+                   reinterpret_cast<uint16_t *>(&color_p->full));
     lv_disp_flush_ready(disp);
   }
 
-
   // animation callback: move the label vertically
-  static void scroll_anim_cb(void* var, int32_t v) {
-    lv_obj_set_y(static_cast<lv_obj_t*>(var), v);
+  static void scroll_anim_cb(void *var, int32_t v)
+  {
+    lv_obj_set_y(static_cast<lv_obj_t *>(var), v);
   }
 
   // kick off (or re-kick) the scrolling
-  static void start_scroll_anim(lv_obj_t* obj) {
+  static void start_scroll_anim(lv_obj_t *obj)
+  {
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, obj);
     // from just off the bottom to just above the top
     lv_anim_set_values(&a,
-      static_cast<int32_t>(EXAMPLE_LCD_V_RES),
-      -lv_obj_get_height(obj)
-    );
+                       static_cast<int32_t>(EXAMPLE_LCD_V_RES),
+                       -lv_obj_get_height(obj));
     lv_anim_set_time(&a, SCROLL_DURATION);
     lv_anim_set_exec_cb(&a, scroll_anim_cb);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
     lv_anim_set_repeat_count(&a, 2);
     // when done, hide the label & show the GIF
-    lv_anim_set_ready_cb(&a, [](lv_anim_t* anim){
+    lv_anim_set_ready_cb(&a, [](lv_anim_t *anim)
+                         {
       auto* lbl = static_cast<lv_obj_t*>(anim->var);
       lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_clear_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
-    });
+      lv_obj_clear_flag(fb_gif, LV_OBJ_FLAG_HIDDEN); });
     lv_anim_start(&a);
   }
 }
 
-void fallback_setup() {
+void fallback_setup()
+{
   LOG("FALLBACK: setting up");
 
   // 1) LVGL init + tick
@@ -79,10 +81,10 @@ void fallback_setup() {
   lcd_setRotation(1);
 
   // 3) draw‐buffer
-  fb_buf = static_cast<lv_color_t*>(
-    ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE)
-  );
-  if(!fb_buf) {
+  fb_buf = static_cast<lv_color_t *>(
+      ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE));
+  if (!fb_buf)
+  {
     LOG("FALLBACK: buffer alloc failed");
     return;
   }
@@ -110,12 +112,11 @@ void fallback_setup() {
   fb_label = lv_label_create(lv_scr_act());
   lv_obj_add_style(fb_label, &style, 0);
   lv_label_set_text(fb_label,
-    "/\\_/\\\n"
-    "= ( • . • ) =\n"
-    " /       \\ \n"
-    "Welcome to Webscreen! This is the Notification App,\n"
-    "you can also run apps from the SD card.\n"
-  );
+                    "/\\_/\\\n"
+                    "= ( • . • ) =\n"
+                    " /       \\ \n"
+                    "Welcome to Webscreen! This is the Notification App,\n"
+                    "you can also run apps from the SD card.\n");
   lv_label_set_long_mode(fb_label, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(fb_label, EXAMPLE_LCD_H_RES - 20);
   lv_obj_align(fb_label, LV_ALIGN_CENTER, 0, 0);
@@ -130,12 +131,14 @@ void fallback_setup() {
   lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
 }
 
-void fallback_loop() {
+void fallback_loop()
+{
   // let LVGL run
   lv_timer_handler();
 
   // if there’s serial input, replace the label & re-scroll
-  if (Serial.available()) {
+  if (Serial.available())
+  {
     String line = Serial.readStringUntil('\n');
     lv_label_set_text(fb_label, line.c_str());
     lv_obj_align(fb_label, LV_ALIGN_CENTER, 0, 0);

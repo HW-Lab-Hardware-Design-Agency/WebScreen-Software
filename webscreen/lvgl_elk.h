@@ -7,64 +7,68 @@
 // For BLE
 #include <NimBLEDevice.h>
 
-#include <WiFi.h>           // WiFi library that also provides WiFiClient
+#include <WiFi.h> // WiFi library that also provides WiFiClient
 #include <ArduinoJson.h>
-#include <PubSubClient.h>   // For MQTT
+#include <PubSubClient.h> // For MQTT
 
 #include <vector>
-#include <utility>  // for std::pair
+#include <utility> // for std::pair
 
 #include "globals.h"
 
 // Global WiFiClient + PubSubClient
-static WiFiClient    g_wifiClient;
-static PubSubClient  g_mqttClient(g_wifiClient);
+static WiFiClient g_wifiClient;
+static PubSubClient g_mqttClient(g_wifiClient);
 
 // HTTP client certificate.
-static char* g_httpCAcert = nullptr;  // Will hold entire PEM cert from SD
+static char *g_httpCAcert = nullptr; // Will hold entire PEM cert from SD
 static std::vector<std::pair<String, String>> g_http_headers;
 
 // NimBLE globals
-static NimBLEServer*         g_bleServer    = nullptr;
-static NimBLECharacteristic* g_bleChar      = nullptr;
-static bool                  g_bleConnected = false;
+static NimBLEServer *g_bleServer = nullptr;
+static NimBLECharacteristic *g_bleChar = nullptr;
+static bool g_bleConnected = false;
 
 #define JS_GC_THRESHOLD 0.90
 
 // 4) Elk
-extern "C" {
-  #include "elk.h"
+extern "C"
+{
+#include "elk.h"
 }
 
 // For storing a JavaScript callback to handle incoming messages
-static char g_mqttCallbackName[32];  // Big enough for a function name
+static char g_mqttCallbackName[32]; // Big enough for a function name
 static unsigned long lastMqttReconnectAttempt = 0;
 static unsigned long lastWiFiReconnectAttempt = 0;
 
 /******************************************************************************
  * A) Elk Memory + Global Instances
  ******************************************************************************/
-#define ELK_HEAP_BYTES  (48 * 1024)
+#define ELK_HEAP_BYTES (48 * 1024)
 static uint8_t elk_memory[ELK_HEAP_BYTES];
-struct js *js = NULL;               // Global Elk instance
+struct js *js = NULL; // Global Elk instance
 // Adjust as needed
-#define MAX_RAM_IMAGES  16
+#define MAX_RAM_IMAGES 16
 
 // 4) Memory storage
-struct RamImage {
-  bool     used;          // Is this slot in use?
-  uint8_t *buffer;        // Raw image data allocated from ps_malloc()
-  size_t   size;          // Byte size of that buffer
-  lv_img_dsc_t dsc;       // The descriptor we pass to lv_img_set_src()
+struct RamImage
+{
+  bool used;        // Is this slot in use?
+  uint8_t *buffer;  // Raw image data allocated from ps_malloc()
+  size_t size;      // Byte size of that buffer
+  lv_img_dsc_t dsc; // The descriptor we pass to lv_img_set_src()
 };
 
 static RamImage g_ram_images[MAX_RAM_IMAGES];
 
-void init_ram_images() {
-  for (int i = 0; i < MAX_RAM_IMAGES; i++) {
-    g_ram_images[i].used   = false;
+void init_ram_images()
+{
+  for (int i = 0; i < MAX_RAM_IMAGES; i++)
+  {
+    g_ram_images[i].used = false;
     g_ram_images[i].buffer = NULL;
-    g_ram_images[i].size   = 0;
+    g_ram_images[i].size = 0;
     // g_ram_images[i].dsc can remain zeroed
   }
 }
@@ -72,15 +76,18 @@ void init_ram_images() {
 /******************************************************************************
  * C) "S" Driver for Reading Files from SD
  ******************************************************************************/
-typedef struct {
+typedef struct
+{
   File file;
 } lv_arduino_fs_file_t;
 
-static void *my_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode) {
-  String fullPath = String("/") + path; 
+static void *my_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode)
+{
+  String fullPath = String("/") + path;
   const char *modeStr = (mode == LV_FS_MODE_WR) ? FILE_WRITE : FILE_READ;
   File f = SD_MMC.open(fullPath, modeStr);
-  if (!f) {
+  if (!f)
+  {
     LOGF("my_open_cb: failed to open %s\n", fullPath.c_str());
     return NULL;
   }
@@ -90,58 +97,71 @@ static void *my_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode) {
   return fp;
 }
 
-static lv_fs_res_t my_close_cb(lv_fs_drv_t *drv, void *file_p) {
+static lv_fs_res_t my_close_cb(lv_fs_drv_t *drv, void *file_p)
+{
   lv_arduino_fs_file_t *fp = (lv_arduino_fs_file_t *)file_p;
-  if (!fp) return LV_FS_RES_INV_PARAM;
+  if (!fp)
+    return LV_FS_RES_INV_PARAM;
   fp->file.close();
   delete fp;
   return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t my_read_cb(lv_fs_drv_t *drv, void *file_p, void *buf, uint32_t btr, uint32_t *br) {
+static lv_fs_res_t my_read_cb(lv_fs_drv_t *drv, void *file_p, void *buf, uint32_t btr, uint32_t *br)
+{
   lv_arduino_fs_file_t *fp = (lv_arduino_fs_file_t *)file_p;
-  if (!fp) return LV_FS_RES_INV_PARAM;
-  *br = fp->file.read((uint8_t*)buf, btr);
+  if (!fp)
+    return LV_FS_RES_INV_PARAM;
+  *br = fp->file.read((uint8_t *)buf, btr);
   return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t my_write_cb(lv_fs_drv_t *drv, void *file_p, const void *buf, uint32_t btw, uint32_t *bw) {
+static lv_fs_res_t my_write_cb(lv_fs_drv_t *drv, void *file_p, const void *buf, uint32_t btw, uint32_t *bw)
+{
   lv_arduino_fs_file_t *fp = (lv_arduino_fs_file_t *)file_p;
-  if (!fp) return LV_FS_RES_INV_PARAM;
+  if (!fp)
+    return LV_FS_RES_INV_PARAM;
   *bw = fp->file.write((const uint8_t *)buf, btw);
   return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t my_seek_cb(lv_fs_drv_t *drv, void *file_p, uint32_t pos, lv_fs_whence_t whence) {
+static lv_fs_res_t my_seek_cb(lv_fs_drv_t *drv, void *file_p, uint32_t pos, lv_fs_whence_t whence)
+{
   lv_arduino_fs_file_t *fp = (lv_arduino_fs_file_t *)file_p;
-  if (!fp) return LV_FS_RES_INV_PARAM;
+  if (!fp)
+    return LV_FS_RES_INV_PARAM;
 
   SeekMode m = SeekSet;
-  if (whence == LV_FS_SEEK_CUR) m = SeekCur;
-  if (whence == LV_FS_SEEK_END) m = SeekEnd;
+  if (whence == LV_FS_SEEK_CUR)
+    m = SeekCur;
+  if (whence == LV_FS_SEEK_END)
+    m = SeekEnd;
 
   fp->file.seek(pos, m);
   return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t my_tell_cb(lv_fs_drv_t *drv, void *file_p, uint32_t *pos_p) {
+static lv_fs_res_t my_tell_cb(lv_fs_drv_t *drv, void *file_p, uint32_t *pos_p)
+{
   lv_arduino_fs_file_t *fp = (lv_arduino_fs_file_t *)file_p;
-  if (!fp) return LV_FS_RES_INV_PARAM;
+  if (!fp)
+    return LV_FS_RES_INV_PARAM;
   *pos_p = fp->file.position();
   return LV_FS_RES_OK;
 }
 
-void init_lv_fs() {
+void init_lv_fs()
+{
   static lv_fs_drv_t fs_drv;
   lv_fs_drv_init(&fs_drv);
 
   fs_drv.letter = 'S';
-  fs_drv.open_cb  = my_open_cb;
+  fs_drv.open_cb = my_open_cb;
   fs_drv.close_cb = my_close_cb;
-  fs_drv.read_cb  = my_read_cb;
-  fs_drv.write_cb = my_write_cb;  
-  fs_drv.seek_cb  = my_seek_cb;
-  fs_drv.tell_cb  = my_tell_cb;
+  fs_drv.read_cb = my_read_cb;
+  fs_drv.write_cb = my_write_cb;
+  fs_drv.seek_cb = my_seek_cb;
+  fs_drv.tell_cb = my_tell_cb;
 
   lv_fs_drv_register(&fs_drv);
   LOG("LVGL FS driver 'S' registered");
@@ -150,32 +170,39 @@ void init_lv_fs() {
 /******************************************************************************
  * D) "M" Memory Driver (for GIF usage)
  ******************************************************************************/
-typedef struct {
+typedef struct
+{
   size_t pos;
 } mem_file_t;
 
 static uint8_t *g_gifBuffer = NULL;
-static size_t   g_gifSize   = 0;
+static size_t g_gifSize = 0;
 
-static void *my_mem_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode) {
+static void *my_mem_open_cb(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode)
+{
   mem_file_t *mf = new mem_file_t();
   mf->pos = 0;
   return mf;
 }
 
-static lv_fs_res_t my_mem_close_cb(lv_fs_drv_t *drv, void *file_p) {
+static lv_fs_res_t my_mem_close_cb(lv_fs_drv_t *drv, void *file_p)
+{
   mem_file_t *mf = (mem_file_t *)file_p;
-  if(!mf) return LV_FS_RES_INV_PARAM;
+  if (!mf)
+    return LV_FS_RES_INV_PARAM;
   delete mf;
   return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t my_mem_read_cb(lv_fs_drv_t *drv, void *file_p, void *buf, uint32_t btr, uint32_t *br) {
+static lv_fs_res_t my_mem_read_cb(lv_fs_drv_t *drv, void *file_p, void *buf, uint32_t btr, uint32_t *br)
+{
   mem_file_t *mf = (mem_file_t *)file_p;
-  if(!mf) return LV_FS_RES_INV_PARAM;
+  if (!mf)
+    return LV_FS_RES_INV_PARAM;
 
   size_t remaining = g_gifSize - mf->pos;
-  if (btr > remaining) btr = remaining;
+  if (btr > remaining)
+    btr = remaining;
 
   memcpy(buf, g_gifBuffer + mf->pos, btr);
   mf->pos += btr;
@@ -183,43 +210,53 @@ static lv_fs_res_t my_mem_read_cb(lv_fs_drv_t *drv, void *file_p, void *buf, uin
   return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t my_mem_write_cb(lv_fs_drv_t *drv, void *file_p, const void *buf, uint32_t btw, uint32_t *bw) {
+static lv_fs_res_t my_mem_write_cb(lv_fs_drv_t *drv, void *file_p, const void *buf, uint32_t btw, uint32_t *bw)
+{
   *bw = 0;
   return LV_FS_RES_NOT_IMP;
 }
 
-static lv_fs_res_t my_mem_seek_cb(lv_fs_drv_t *drv, void *file_p, uint32_t pos, lv_fs_whence_t whence) {
+static lv_fs_res_t my_mem_seek_cb(lv_fs_drv_t *drv, void *file_p, uint32_t pos, lv_fs_whence_t whence)
+{
   mem_file_t *mf = (mem_file_t *)file_p;
-  if(!mf) return LV_FS_RES_INV_PARAM;
+  if (!mf)
+    return LV_FS_RES_INV_PARAM;
 
   size_t newpos = mf->pos;
-  if(whence == LV_FS_SEEK_SET) newpos = pos;
-  else if(whence == LV_FS_SEEK_CUR) newpos += pos;
-  else if(whence == LV_FS_SEEK_END) newpos = g_gifSize + pos;
+  if (whence == LV_FS_SEEK_SET)
+    newpos = pos;
+  else if (whence == LV_FS_SEEK_CUR)
+    newpos += pos;
+  else if (whence == LV_FS_SEEK_END)
+    newpos = g_gifSize + pos;
 
-  if(newpos > g_gifSize) newpos = g_gifSize;
+  if (newpos > g_gifSize)
+    newpos = g_gifSize;
   mf->pos = newpos;
   return LV_FS_RES_OK;
 }
 
-static lv_fs_res_t my_mem_tell_cb(lv_fs_drv_t *drv, void *file_p, uint32_t *pos_p) {
+static lv_fs_res_t my_mem_tell_cb(lv_fs_drv_t *drv, void *file_p, uint32_t *pos_p)
+{
   mem_file_t *mf = (mem_file_t *)file_p;
-  if(!mf) return LV_FS_RES_INV_PARAM;
+  if (!mf)
+    return LV_FS_RES_INV_PARAM;
   *pos_p = mf->pos;
   return LV_FS_RES_OK;
 }
 
-void init_mem_fs() {
+void init_mem_fs()
+{
   static lv_fs_drv_t mem_drv;
   lv_fs_drv_init(&mem_drv);
 
   mem_drv.letter = 'M';
-  mem_drv.open_cb  = my_mem_open_cb;
+  mem_drv.open_cb = my_mem_open_cb;
   mem_drv.close_cb = my_mem_close_cb;
-  mem_drv.read_cb  = my_mem_read_cb;
+  mem_drv.read_cb = my_mem_read_cb;
   mem_drv.write_cb = my_mem_write_cb;
-  mem_drv.seek_cb  = my_mem_seek_cb;
-  mem_drv.tell_cb  = my_mem_tell_cb;
+  mem_drv.seek_cb = my_mem_seek_cb;
+  mem_drv.tell_cb = my_mem_tell_cb;
 
   lv_fs_drv_register(&mem_drv);
   LOG("LVGL FS driver 'M' registered (for memory-based GIFs)");
@@ -231,7 +268,8 @@ void init_mem_fs() {
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf = NULL;
 
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
+{
   // Calculate width/height from the area
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -243,7 +281,8 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
   lv_disp_flush_ready(disp);
 }
 
-void init_lvgl_display() {
+void init_lvgl_display()
+{
   LOG("Initializing display...");
 
   // Turn on backlight / screen power
@@ -260,10 +299,11 @@ void init_lvgl_display() {
 
   // Use double buffering: draw BUF in internal RAM (DMA capable),
   // flush BUF in PSRAM (big but non‑DMA).
-  static const uint32_t DRAW_BUF_LINES = 40;              // tweak later
+  static const uint32_t DRAW_BUF_LINES = 40; // tweak later
   static lv_color_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES];
   buf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE); // PSRAM
-  if (!buf) {
+  if (!buf)
+  {
     LOG("Failed to allocate LVGL buffer in PSRAM");
     return;
   }
@@ -283,7 +323,8 @@ void init_lvgl_display() {
   LOG("LVGL + Display initialized.");
 }
 
-void lvgl_loop() {
+void lvgl_loop()
+{
   // Call LVGL's timer handler
   lv_timer_handler();
 }
@@ -291,55 +332,71 @@ void lvgl_loop() {
 /******************************************************************************
  * E) Elk-Facing Functions (print, Wi-Fi, SD ops, etc.)
  ******************************************************************************/
-static jsval_t js_print(struct js *js, jsval_t *args, int nargs) {
-  for (int i = 0; i < nargs; i++) {
+static jsval_t js_print(struct js *js, jsval_t *args, int nargs)
+{
+  for (int i = 0; i < nargs; i++)
+  {
     const char *str = js_str(js, args[i]);
-    if (str) LOG(str);
-    else     LOG("print: argument is not a string");
+    if (str)
+      LOG(str);
+    else
+      LOG("print: argument is not a string");
   }
   return js_mknull();
 }
 
 // Wi-Fi connect
-static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
-  if (nargs != 2) return js_mkfalse();
-  const char* ssidQ  = js_str(js, args[0]);
-  const char* passQ  = js_str(js, args[1]);
-  if (!ssidQ || !passQ) return js_mkfalse();
+static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs != 2)
+    return js_mkfalse();
+  const char *ssidQ = js_str(js, args[0]);
+  const char *passQ = js_str(js, args[1]);
+  if (!ssidQ || !passQ)
+    return js_mkfalse();
 
   // Strip quotes if any
   String ssid(ssidQ);
   String pass(passQ);
-  if (ssid.startsWith("\"") && ssid.endsWith("\"")) {
-    ssid = ssid.substring(1, ssid.length()-1);
+  if (ssid.startsWith("\"") && ssid.endsWith("\""))
+  {
+    ssid = ssid.substring(1, ssid.length() - 1);
   }
-  if (pass.startsWith("\"") && pass.endsWith("\"")) {
-    pass = pass.substring(1, pass.length()-1);
+  if (pass.startsWith("\"") && pass.endsWith("\""))
+  {
+    pass = pass.substring(1, pass.length() - 1);
   }
 
   LOGF("Connecting to Wi-Fi SSID: %s\n", ssid.c_str());
   WiFi.begin(ssid.c_str(), pass.c_str());
 
-  for (uint32_t i = 0; i < 20 && WiFi.status()!=WL_CONNECTED; ++i) {
+  for (uint32_t i = 0; i < 20 && WiFi.status() != WL_CONNECTED; ++i)
+  {
     vTaskDelay(pdMS_TO_TICKS(250));
     LOG(".");
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED)
+  {
     LOG("Wi-Fi connected");
     return js_mktrue();
-  } else {
+  }
+  else
+  {
     LOG("Failed to connect to Wi-Fi");
     return js_mkfalse();
   }
 }
 
-static jsval_t js_wifi_status(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_wifi_status(struct js *js, jsval_t *args, int nargs)
+{
   return (WiFi.status() == WL_CONNECTED) ? js_mktrue() : js_mkfalse();
 }
 
-static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
-  if (WiFi.status() != WL_CONNECTED) {
+static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs)
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
     LOG("Not connected to Wi-Fi");
     return js_mknull();
   }
@@ -349,21 +406,27 @@ static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Delay in JS: "delay(ms)"
-static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
-  if (nargs != 1) return js_mknull();
+static jsval_t js_delay(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs != 1)
+    return js_mknull();
   double ms = js_getnum(args[0]);
   vTaskDelay(pdMS_TO_TICKS((unsigned long)ms));
   return js_mknull();
 }
 
 // sd_read_file(path)
-static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
-  if (nargs != 1) return js_mknull();
-  const char* path = js_str(js, args[0]);
-  if(!path) return js_mknull();
+static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs != 1)
+    return js_mknull();
+  const char *path = js_str(js, args[0]);
+  if (!path)
+    return js_mknull();
 
   File file = SD_MMC.open(path);
-  if(!file) {
+  if (!file)
+  {
     LOGF("Failed to open file: %s\n", path);
     return js_mknull();
   }
@@ -373,40 +436,50 @@ static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
 }
 
 // sd_write_file(path, data)
-static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
-  if (nargs != 2) return js_mkfalse();
+static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs != 2)
+    return js_mkfalse();
   const char *path = js_str(js, args[0]);
   const char *data = js_str(js, args[1]);
-  if(!path || !data) return js_mkfalse();
+  if (!path || !data)
+    return js_mkfalse();
 
   File f = SD_MMC.open(path, FILE_WRITE);
-  if(!f) {
+  if (!f)
+  {
     LOGF("Failed to open for writing: %s\n", path);
     return js_mkfalse();
   }
-  f.write((const uint8_t*)data, strlen(data));
+  f.write((const uint8_t *)data, strlen(data));
   f.close();
   return js_mktrue();
 }
 
 // sd_list_dir(path)
-static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
-  if (nargs != 1) return js_mknull();
-  const char* pathQ = js_str(js, args[0]);
-  if (!pathQ) return js_mknull();
+static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs != 1)
+    return js_mknull();
+  const char *pathQ = js_str(js, args[0]);
+  if (!pathQ)
+    return js_mknull();
 
   // Strip quotes
   String path(pathQ);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length()-1);
+  if (path.startsWith("\"") && path.endsWith("\""))
+  {
+    path = path.substring(1, path.length() - 1);
   }
 
   File root = SD_MMC.open(path);
-  if(!root) {
+  if (!root)
+  {
     LOGF("Failed to open directory: %s\n", path.c_str());
     return js_mknull();
   }
-  if(!root.isDirectory()) {
+  if (!root.isDirectory())
+  {
     LOG("Not a directory");
     root.close();
     return js_mknull();
@@ -417,12 +490,14 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
   int fileListLen = 0;
 
   File f = root.openNextFile();
-  while(f) {
-    const char* type = f.isDirectory() ? "DIR: " : "FILE: ";
-    const char* name = f.name();
-    int len = snprintf(fileList + fileListLen, sizeof(fileList)-fileListLen,
+  while (f)
+  {
+    const char *type = f.isDirectory() ? "DIR: " : "FILE: ";
+    const char *name = f.name();
+    int len = snprintf(fileList + fileListLen, sizeof(fileList) - fileListLen,
                        "%s%s\n", type, name);
-    if (len<0 || len>=(int)(sizeof(fileList)-fileListLen)) break;
+    if (len < 0 || len >= (int)(sizeof(fileList) - fileListLen))
+      break;
     fileListLen += len;
     f = root.openNextFile();
   }
@@ -433,70 +508,80 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
 /******************************************************************************
  * F) Load GIF from SD => g_gifBuffer => "M:mygif"
  ******************************************************************************/
-bool load_gif_into_ram(const char *path) {
+bool load_gif_into_ram(const char *path)
+{
   File f = SD_MMC.open(path, FILE_READ);
-  if(!f) {
+  if (!f)
+  {
     LOGF("Failed to open %s\n", path);
     return false;
   }
   size_t fileSize = f.size();
   LOGF("File %s is %u bytes\n", path, (unsigned)fileSize);
 
-  uint8_t* tmp = (uint8_t*)ps_malloc(fileSize);
-  if(!tmp) {
-    LOGF("Failed to allocate %u bytes in PSRAM\n",(unsigned)fileSize);
+  uint8_t *tmp = (uint8_t *)ps_malloc(fileSize);
+  if (!tmp)
+  {
+    LOGF("Failed to allocate %u bytes in PSRAM\n", (unsigned)fileSize);
     f.close();
     return false;
   }
   size_t bytesRead = f.read(tmp, fileSize);
   f.close();
-  if(bytesRead < fileSize) {
+  if (bytesRead < fileSize)
+  {
     LOGF("Failed to read full file: only %u of %u\n",
-                  (unsigned)bytesRead,(unsigned)fileSize);
+         (unsigned)bytesRead, (unsigned)fileSize);
     free(tmp);
     return false;
   }
   g_gifBuffer = tmp;
-  g_gifSize   = fileSize;
+  g_gifSize = fileSize;
   LOG("GIF loaded into PSRAM successfully");
   return true;
 }
 
-static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<1) {
+static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+  {
     LOG("show_gif_from_sd: expects path");
     return js_mknull();
   }
-  const char* rawPath = js_str(js, args[0]);
-  if(!rawPath) return js_mknull();
+  const char *rawPath = js_str(js, args[0]);
+  if (!rawPath)
+    return js_mknull();
 
   // Strip quotes
   String path(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length()-1);
+  if (path.startsWith("\"") && path.endsWith("\""))
+  {
+    path = path.substring(1, path.length() - 1);
   }
 
-  if(!load_gif_into_ram(path.c_str())) {
+  if (!load_gif_into_ram(path.c_str()))
+  {
     LOG("Could not load GIF into RAM");
     return js_mknull();
   }
 
   lv_obj_t *gif = lv_gif_create(lv_scr_act());
-  lv_gif_set_src(gif, "M:mygif");   // memory-based
+  lv_gif_set_src(gif, "M:mygif"); // memory-based
   lv_obj_align(gif, LV_ALIGN_CENTER, 0, 0);
 
   LOGF("Showing GIF from memory driver (file was %s)\n", path.c_str());
   return js_mknull();
 }
 
-
 /******************************************************************************
  * J) Load + Execute JS from SD
  ******************************************************************************/
-bool load_image_file_into_ram(const char *path, RamImage *outImg) {
+bool load_image_file_into_ram(const char *path, RamImage *outImg)
+{
   // 1) Open file
   File f = SD_MMC.open(path, FILE_READ);
-  if (!f) {
+  if (!f)
+  {
     LOGF("Failed to open %s\n", path);
     return false;
   }
@@ -505,7 +590,8 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
 
   // 2) Allocate PSRAM
   uint8_t *buf = (uint8_t *)ps_malloc(fileSize);
-  if (!buf) {
+  if (!buf)
+  {
     LOGF("Failed to allocate %u bytes in PSRAM\n", (unsigned)fileSize);
     f.close();
     return false;
@@ -514,17 +600,18 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   // 3) Read all data
   size_t bytesRead = f.read(buf, fileSize);
   f.close();
-  if (bytesRead < fileSize) {
+  if (bytesRead < fileSize)
+  {
     LOGF("Failed to read full file: only %u of %u\n",
-                  (unsigned)bytesRead, (unsigned)fileSize);
+         (unsigned)bytesRead, (unsigned)fileSize);
     free(buf);
     return false;
   }
 
   // 4) Fill out the RamImage struct
-  outImg->used   = true;
+  outImg->used = true;
   outImg->buffer = buf;
-  outImg->size   = fileSize;
+  outImg->size = fileSize;
 
   // 5) Fill out the lv_img_dsc_t with minimal info
   //    - If it's a "raw" or "true color" format, you can do:
@@ -532,12 +619,12 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   memset(d, 0, sizeof(*d));
 
   // Basic mandatory fields:
-  d->data_size       = fileSize;
-  d->data            = buf;
+  d->data_size = fileSize;
+  d->data = buf;
   d->header.always_zero = 0;
-  d->header.w       = 200;
-  d->header.h       = 200;
-  d->header.cf      = LV_IMG_CF_TRUE_COLOR; 
+  d->header.w = 200;
+  d->header.h = 200;
+  d->header.cf = LV_IMG_CF_TRUE_COLOR;
   // or LV_IMG_CF_RAW if using a custom decoder
 
   // If you can't know width/height from file alone, you may just guess or parse
@@ -547,11 +634,13 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   return true;
 }
 
-bool load_and_execute_js_script(const char* path) {
+bool load_and_execute_js_script(const char *path)
+{
   LOGF("Loading JavaScript script from: %s\n", path);
 
   File file = SD_MMC.open(path);
-  if(!file) {
+  if (!file)
+  {
     LOG("Failed to open JavaScript script file");
     return false;
   }
@@ -559,7 +648,8 @@ bool load_and_execute_js_script(const char* path) {
   file.close();
 
   jsval_t res = js_eval(js, jsScript.c_str(), jsScript.length());
-  if(js_type(res) == JS_ERR) {
+  if (js_type(res) == JS_ERR)
+  {
     const char *error = js_str(js, res);
     LOGF("Error executing script: %s\n", error);
     return false;
@@ -571,52 +661,63 @@ bool load_and_execute_js_script(const char* path) {
 /******************************************************************************
  * G) Basic draw_label, draw_rect, show_image from SD
  ******************************************************************************/
-static const lv_font_t* get_font_for_size(int size) {
-    // Map the integer size to specific built-in Montserrat fonts
-    if(size == 14)  return &lv_font_montserrat_14;
-    if(size == 28)  return &lv_font_montserrat_28;
-    if(size == 40)  return &lv_font_montserrat_40;
-    // Fallback:
+static const lv_font_t *get_font_for_size(int size)
+{
+  // Map the integer size to specific built-in Montserrat fonts
+  if (size == 14)
     return &lv_font_montserrat_14;
+  if (size == 28)
+    return &lv_font_montserrat_28;
+  if (size == 40)
+    return &lv_font_montserrat_40;
+  // Fallback:
+  return &lv_font_montserrat_14;
 }
 
-static jsval_t js_lvgl_draw_label(struct js* js, jsval_t* args, int nargs) {
-    // We expect at least 3 args: text, x, y. 4th arg is optional fontSize
-    if(nargs < 3) {
-        LOG("draw_label: expects text, x, y, [fontSize]");
-        return js_mknull();
-    }
-
-    // 1) Extract text and strip quotes if any
-    const char* rawText = js_str(js, args[0]);
-    if(!rawText) return js_mknull();
-    String txt(rawText);
-    if(txt.startsWith("\"") && txt.endsWith("\"")) {
-        txt.remove(0, 1);
-        txt.remove(txt.length() - 1, 1);
-    }
-
-    // 2) X, Y
-    int x = (int)js_getnum(args[1]);
-    int y = (int)js_getnum(args[2]);
-
-    // 3) Create label and set text
-    lv_obj_t* label = lv_label_create(lv_scr_act());
-    lv_label_set_text(label, txt.c_str());
-    lv_obj_set_pos(label, x, y);
-
-    // 4) If fontSize argument is provided, apply that font
-    if(nargs >= 4) {
-        int fontSize = (int)js_getnum(args[3]);
-        const lv_font_t* font = get_font_for_size(fontSize);
-        lv_obj_set_style_text_font(label, font, 0);
-    }
-
+static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs)
+{
+  // We expect at least 3 args: text, x, y. 4th arg is optional fontSize
+  if (nargs < 3)
+  {
+    LOG("draw_label: expects text, x, y, [fontSize]");
     return js_mknull();
+  }
+
+  // 1) Extract text and strip quotes if any
+  const char *rawText = js_str(js, args[0]);
+  if (!rawText)
+    return js_mknull();
+  String txt(rawText);
+  if (txt.startsWith("\"") && txt.endsWith("\""))
+  {
+    txt.remove(0, 1);
+    txt.remove(txt.length() - 1, 1);
+  }
+
+  // 2) X, Y
+  int x = (int)js_getnum(args[1]);
+  int y = (int)js_getnum(args[2]);
+
+  // 3) Create label and set text
+  lv_obj_t *label = lv_label_create(lv_scr_act());
+  lv_label_set_text(label, txt.c_str());
+  lv_obj_set_pos(label, x, y);
+
+  // 4) If fontSize argument is provided, apply that font
+  if (nargs >= 4)
+  {
+    int fontSize = (int)js_getnum(args[3]);
+    const lv_font_t *font = get_font_for_size(fontSize);
+    lv_obj_set_style_text_font(label, font, 0);
+  }
+
+  return js_mknull();
 }
 
-static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<4) {
+static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 4)
+  {
     LOG("draw_rect: expects x,y,w,h");
     return js_mknull();
   }
@@ -640,23 +741,27 @@ static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) {
+static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+  {
     LOG("show_image: expects path,x,y");
     return js_mknull();
   }
-  const char* rawPath = js_str(js, args[0]);
+  const char *rawPath = js_str(js, args[0]);
   int x = (int)js_getnum(args[1]);
   int y = (int)js_getnum(args[2]);
 
-  if(!rawPath) {
+  if (!rawPath)
+  {
     LOG("show_image: invalid path");
     return js_mknull();
   }
   // Build "S:/filename"
   String path(rawPath);
-  if(path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length()-1);
+  if (path.startsWith("\"") && path.endsWith("\""))
+  {
+    path = path.substring(1, path.length() - 1);
   }
   String lvglPath = "S:" + path;
 
@@ -674,54 +779,69 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
 // std::vector‑based registry ----
 #include <vector>
 #include <mutex>
-static std::vector<lv_obj_t*> g_objects;
-static std::mutex             g_obj_mtx;
+static std::vector<lv_obj_t *> g_objects;
+static std::mutex g_obj_mtx;
 
-static int store_lv_obj(lv_obj_t *obj) {
+static int store_lv_obj(lv_obj_t *obj)
+{
   std::lock_guard<std::mutex> lock(g_obj_mtx);
   for (size_t i = 0; i < g_objects.size(); ++i)
-    if (!g_objects[i]) { g_objects[i] = obj; return (int)i; }
+    if (!g_objects[i])
+    {
+      g_objects[i] = obj;
+      return (int)i;
+    }
   g_objects.push_back(obj);
   return (int)(g_objects.size() - 1);
 }
 
-static lv_obj_t* get_lv_obj(int h) {
+static lv_obj_t *get_lv_obj(int h)
+{
   std::lock_guard<std::mutex> lock(g_obj_mtx);
-  return (h>=0 && h < (int)g_objects.size()) ? g_objects[h] : nullptr;
+  return (h >= 0 && h < (int)g_objects.size()) ? g_objects[h] : nullptr;
 }
 
-static void release_lv_obj(int h) {
+static void release_lv_obj(int h)
+{
   std::lock_guard<std::mutex> lock(g_obj_mtx);
-  if (h>=0 && h < (int)g_objects.size()) g_objects[h] = nullptr;
+  if (h >= 0 && h < (int)g_objects.size())
+    g_objects[h] = nullptr;
 }
 
 // Helper functions to extract RGB components from lv_color_t
-uint8_t get_red(lv_color_t color) {
-    return (color.full >> 11) & 0x1F; // 5 bits
+uint8_t get_red(lv_color_t color)
+{
+  return (color.full >> 11) & 0x1F; // 5 bits
 }
 
-uint8_t get_green(lv_color_t color) {
-    return (color.full >> 5) & 0x3F; // 6 bits
+uint8_t get_green(lv_color_t color)
+{
+  return (color.full >> 5) & 0x3F; // 6 bits
 }
 
-uint8_t get_blue(lv_color_t color) {
-    return color.full & 0x1F; // 5 bits
+uint8_t get_blue(lv_color_t color)
+{
+  return color.full & 0x1F; // 5 bits
 }
 
 // create_image("/messi.png", x,y) => returns handle
-static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) {
+static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+  {
     LOG("create_image: expects path,x,y");
     return js_mknum(-1);
   }
-  const char* rawPath = js_str(js, args[0]);
+  const char *rawPath = js_str(js, args[0]);
   int x = (int)js_getnum(args[1]);
   int y = (int)js_getnum(args[2]);
-  if(!rawPath) return js_mknum(-1);
+  if (!rawPath)
+    return js_mknum(-1);
 
   String path(rawPath);
-  if(path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length()-1);
+  if (path.startsWith("\"") && path.endsWith("\""))
+  {
+    path = path.substring(1, path.length() - 1);
   }
   String fullPath = "S:" + path;
 
@@ -735,24 +855,33 @@ static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
 }
 
 // create_image_from_ram("/somefile.bin", x, y)
-static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 3) {
+static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+  {
     LOG("create_image_from_ram: expects path, x, y");
     return js_mknum(-1);
   }
 
   // 1) Parse arguments
   const char *rawPath = js_str(js, args[0]);
-  int x = (int) js_getnum(args[1]);
-  int y = (int) js_getnum(args[2]);
-  if (!rawPath) return js_mknum(-1);
+  int x = (int)js_getnum(args[1]);
+  int y = (int)js_getnum(args[2]);
+  if (!rawPath)
+    return js_mknum(-1);
 
   // 2) Find a free RamImage slot
   int slot = -1;
-  for (int i = 0; i < MAX_RAM_IMAGES; i++) {
-    if (!g_ram_images[i].used) { slot = i; break; }
+  for (int i = 0; i < MAX_RAM_IMAGES; i++)
+  {
+    if (!g_ram_images[i].used)
+    {
+      slot = i;
+      break;
+    }
   }
-  if (slot < 0) {
+  if (slot < 0)
+  {
     LOG("No free RamImage slots!");
     return js_mknum(-1);
   }
@@ -760,12 +889,14 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
 
   // 3) Strip quotes
   String path = String(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
+  if (path.startsWith("\"") && path.endsWith("\""))
+  {
     path = path.substring(1, path.length() - 1);
   }
 
   // 4) Actually load the file into the RamImage
-  if (!load_image_file_into_ram(path.c_str(), ri)) {
+  if (!load_image_file_into_ram(path.c_str(), ri))
+  {
     LOG("Could not load image into RAM");
     return js_mknum(-1);
   }
@@ -773,7 +904,7 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
   // 5) Create the LVGL object
   lv_obj_t *img = lv_img_create(lv_scr_act());
   // 6) lv_img_set_src with the in-RAM descriptor
-  lv_img_set_src(img, &ri->dsc);  // <--- the magic
+  lv_img_set_src(img, &ri->dsc); // <--- the magic
 
   // 7) Set position
   lv_obj_set_pos(img, x, y);
@@ -781,21 +912,24 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
   // 8) Store it in our handle-based system
   int handle = store_lv_obj(img);
   LOGF("create_image_from_ram: '%s' => ram slot=%d => handle %d\n",
-                path.c_str(), slot, handle);
+       path.c_str(), slot, handle);
   return js_mknum(handle);
 }
 
 // rotate_obj(handle, angle)
-static jsval_t js_rotate_obj(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) {
+static jsval_t js_rotate_obj(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+  {
     LOG("rotate_obj: expects handle, angle");
     return js_mknull();
   }
   int handle = (int)js_getnum(args[0]);
-  int angle  = (int)js_getnum(args[1]); // 0..3600 => 0..360 deg
+  int angle = (int)js_getnum(args[1]); // 0..3600 => 0..360 deg
 
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) {
+  if (!obj)
+  {
     LOG("rotate_obj: invalid handle");
     return js_mknull();
   }
@@ -806,17 +940,20 @@ static jsval_t js_rotate_obj(struct js *js, jsval_t *args, int nargs) {
 }
 
 // move_obj(handle, x, y)
-static jsval_t js_move_obj(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) {
+static jsval_t js_move_obj(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+  {
     LOG("move_obj: expects handle,x,y");
     return js_mknull();
   }
   int handle = (int)js_getnum(args[0]);
-  int x      = (int)js_getnum(args[1]);
-  int y      = (int)js_getnum(args[2]);
+  int x = (int)js_getnum(args[1]);
+  int y = (int)js_getnum(args[2]);
 
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) {
+  if (!obj)
+  {
     LOG("move_obj: invalid handle");
     return js_mknull();
   }
@@ -826,30 +963,35 @@ static jsval_t js_move_obj(struct js *js, jsval_t *args, int nargs) {
 }
 
 // We'll animate X + Y with two separate anims
-static void anim_x_cb(void *var, int32_t v) {
+static void anim_x_cb(void *var, int32_t v)
+{
   lv_obj_t *obj = (lv_obj_t *)var;
   lv_obj_set_x(obj, v);
 }
-static void anim_y_cb(void *var, int32_t v) {
+static void anim_y_cb(void *var, int32_t v)
+{
   lv_obj_t *obj = (lv_obj_t *)var;
   lv_obj_set_y(obj, v);
 }
 
 // animate_obj(handle, x0,y0, x1,y1, duration)
-static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<5) {
+static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 5)
+  {
     LOG("animate_obj: expects handle,x0,y0,x1,y1,[duration]");
     return js_mknull();
   }
-  int handle   = (int)js_getnum(args[0]);
-  int x0       = (int)js_getnum(args[1]);
-  int y0       = (int)js_getnum(args[2]);
-  int x1       = (int)js_getnum(args[3]);
-  int y1       = (int)js_getnum(args[4]);
-  int duration = (nargs>=6)? (int)js_getnum(args[5]) : 1000;
+  int handle = (int)js_getnum(args[0]);
+  int x0 = (int)js_getnum(args[1]);
+  int y0 = (int)js_getnum(args[2]);
+  int x1 = (int)js_getnum(args[3]);
+  int y1 = (int)js_getnum(args[4]);
+  int duration = (nargs >= 6) ? (int)js_getnum(args[5]) : 1000;
 
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) {
+  if (!obj)
+  {
     LOG("animate_obj: invalid handle");
     return js_mknull();
   }
@@ -875,7 +1017,7 @@ static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs) {
   lv_anim_start(&a2);
 
   LOGF("animate_obj: handle=%d from(%d,%d) to(%d,%d), dur=%d\n",
-                handle, x0,y0, x1,y1, duration);
+       handle, x0, y0, x1, y1, duration);
   return js_mknull();
 }
 
@@ -883,45 +1025,53 @@ static jsval_t js_animate_obj(struct js *js, jsval_t *args, int nargs) {
  * H) Style Handles + Full Style Setters
  ******************************************************************************/
 static const int MAX_STYLES = 32;
-static lv_style_t *g_style_map[MAX_STYLES] = { nullptr };
+static lv_style_t *g_style_map[MAX_STYLES] = {nullptr};
 
-static lv_style_t* get_lv_style(int handle) {
-  if(handle<0 || handle>=MAX_STYLES) return nullptr;
+static lv_style_t *get_lv_style(int handle)
+{
+  if (handle < 0 || handle >= MAX_STYLES)
+    return nullptr;
   return g_style_map[handle];
 }
 
-
-static jsval_t js_create_label(struct js* js, jsval_t* args, int nargs) {
-  if(nargs < 2) return js_mknum(-1);  // need x,y
+static jsval_t js_create_label(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknum(-1); // need x,y
   int x = (int)js_getnum(args[0]);
   int y = (int)js_getnum(args[1]);
 
-  lv_obj_t* label = lv_label_create(lv_scr_act());
+  lv_obj_t *label = lv_label_create(lv_scr_act());
   lv_obj_set_pos(label, x, y);
 
   int handle = store_lv_obj(label);
   return js_mknum(handle);
 }
 
-static jsval_t js_label_set_text(struct js* js, jsval_t* args, int nargs) {
-  if(nargs < 2) return js_mknull();
+static jsval_t js_label_set_text(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
   int lblHandle = (int)js_getnum(args[0]);
-  const char* rawText = js_str(js, args[1]);
-  if(!rawText) return js_mknull();
+  const char *rawText = js_str(js, args[1]);
+  if (!rawText)
+    return js_mknull();
 
   // Convert to an Arduino String so we can trim quotes.
   String txt(rawText);
 
   // If the string starts and ends with " and is longer than 1 char,
   // remove those outer quotes.
-  if(txt.startsWith("\"") && txt.endsWith("\"") && txt.length() > 1) {
-      txt.remove(0, 1);                 // remove leading "
-      txt.remove(txt.length() - 1, 1);  // remove trailing "
+  if (txt.startsWith("\"") && txt.endsWith("\"") && txt.length() > 1)
+  {
+    txt.remove(0, 1);                // remove leading "
+    txt.remove(txt.length() - 1, 1); // remove trailing "
   }
 
   // Retrieve the lv_obj_t* from the handle
-  lv_obj_t* label = get_lv_obj(lblHandle);
-  if(!label) return js_mknull();
+  lv_obj_t *label = get_lv_obj(lblHandle);
+  if (!label)
+    return js_mknull();
 
   // Finally set the text (now without extra quotes)
   lv_label_set_text(label, txt.c_str());
@@ -929,91 +1079,105 @@ static jsval_t js_label_set_text(struct js* js, jsval_t* args, int nargs) {
 }
 
 // ---------- Macro helpers to autogenerate LVGL style wrappers --------------
-#define STYLE_SET_INT(JS_FN_NAME, LV_FN)                                    \
-static jsval_t JS_FN_NAME(struct js* js, jsval_t* a, int n){                \
-  if(n < 2)               return js_mknull();                               \
-  int h  = (int)js_getnum(a[0]);                                            \
-  int v  = (int)js_getnum(a[1]);                                            \
-  lv_style_t* st = get_lv_style(h);                                         \
-  if(!st)                return js_mknull();                                \
-  LV_FN(st, (lv_coord_t)v);                                                 \
-  return js_mknull();                                                       \
-}
+#define STYLE_SET_INT(JS_FN_NAME, LV_FN)                      \
+  static jsval_t JS_FN_NAME(struct js *js, jsval_t *a, int n) \
+  {                                                           \
+    if (n < 2)                                                \
+      return js_mknull();                                     \
+    int h = (int)js_getnum(a[0]);                             \
+    int v = (int)js_getnum(a[1]);                             \
+    lv_style_t *st = get_lv_style(h);                         \
+    if (!st)                                                  \
+      return js_mknull();                                     \
+    LV_FN(st, (lv_coord_t)v);                                 \
+    return js_mknull();                                       \
+  }
 
-#define STYLE_SET_COLOR(JS_FN_NAME, LV_FN)                                  \
-static jsval_t JS_FN_NAME(struct js* js, jsval_t* a, int n){                \
-  if(n < 2)               return js_mknull();                               \
-  int h  = (int)js_getnum(a[0]);                                            \
-  uint32_t col = (uint32_t)js_getnum(a[1]);                                 \
-  lv_style_t* st = get_lv_style(h);                                         \
-  if(!st)                return js_mknull();                                \
-  LV_FN(st, lv_color_hex(col));                                             \
-  return js_mknull();                                                       \
-}
+#define STYLE_SET_COLOR(JS_FN_NAME, LV_FN)                    \
+  static jsval_t JS_FN_NAME(struct js *js, jsval_t *a, int n) \
+  {                                                           \
+    if (n < 2)                                                \
+      return js_mknull();                                     \
+    int h = (int)js_getnum(a[0]);                             \
+    uint32_t col = (uint32_t)js_getnum(a[1]);                 \
+    lv_style_t *st = get_lv_style(h);                         \
+    if (!st)                                                  \
+      return js_mknull();                                     \
+    LV_FN(st, lv_color_hex(col));                             \
+    return js_mknull();                                       \
+  }
 
 // ---------------- Auto-generated wrappers -----------------------------------
-STYLE_SET_INT  (js_style_set_radius,            lv_style_set_radius)
-STYLE_SET_INT  (js_style_set_bg_opa,            lv_style_set_bg_opa)
-STYLE_SET_COLOR(js_style_set_bg_color,          lv_style_set_bg_color)
-STYLE_SET_COLOR(js_style_set_border_color,      lv_style_set_border_color)
-STYLE_SET_INT  (js_style_set_border_width,      lv_style_set_border_width)
-STYLE_SET_INT  (js_style_set_border_opa,        lv_style_set_border_opa)
-STYLE_SET_INT  (js_style_set_border_side,       lv_style_set_border_side)
-STYLE_SET_INT  (js_style_set_outline_width,     lv_style_set_outline_width)
-STYLE_SET_COLOR(js_style_set_outline_color,     lv_style_set_outline_color)
-STYLE_SET_INT  (js_style_set_outline_pad,       lv_style_set_outline_pad)
-STYLE_SET_INT  (js_style_set_shadow_width,      lv_style_set_shadow_width)
-STYLE_SET_COLOR(js_style_set_shadow_color,      lv_style_set_shadow_color)
-STYLE_SET_INT  (js_style_set_shadow_ofs_x,      lv_style_set_shadow_ofs_x)
-STYLE_SET_INT  (js_style_set_shadow_ofs_y,      lv_style_set_shadow_ofs_y)
-STYLE_SET_COLOR(js_style_set_img_recolor,       lv_style_set_img_recolor)
-STYLE_SET_INT  (js_style_set_img_recolor_opa,   lv_style_set_img_recolor_opa)
-STYLE_SET_INT  (js_style_set_transform_angle,   lv_style_set_transform_angle)
-STYLE_SET_COLOR(js_style_set_text_color,        lv_style_set_text_color)
-STYLE_SET_INT  (js_style_set_text_letter_space, lv_style_set_text_letter_space)
-STYLE_SET_INT  (js_style_set_text_line_space,   lv_style_set_text_line_space)
-STYLE_SET_INT  (js_style_set_text_decor,        lv_style_set_text_decor)
-STYLE_SET_COLOR(js_style_set_line_color,        lv_style_set_line_color)
-STYLE_SET_INT  (js_style_set_line_width,        lv_style_set_line_width)
-STYLE_SET_INT  (js_style_set_line_rounded,      lv_style_set_line_rounded)
-STYLE_SET_INT  (js_style_set_pad_all,           lv_style_set_pad_all)
-STYLE_SET_INT  (js_style_set_pad_left,          lv_style_set_pad_left)
-STYLE_SET_INT  (js_style_set_pad_right,         lv_style_set_pad_right)
-STYLE_SET_INT  (js_style_set_pad_top,           lv_style_set_pad_top)
-STYLE_SET_INT  (js_style_set_pad_bottom,        lv_style_set_pad_bottom)
-STYLE_SET_INT  (js_style_set_pad_ver,           lv_style_set_pad_ver)
-STYLE_SET_INT  (js_style_set_pad_hor,           lv_style_set_pad_hor)
-STYLE_SET_INT  (js_style_set_width,             lv_style_set_width)
-STYLE_SET_INT  (js_style_set_height,            lv_style_set_height)
-STYLE_SET_INT  (js_style_set_x,                 lv_style_set_x)
-STYLE_SET_INT  (js_style_set_y,                 lv_style_set_y)
+STYLE_SET_INT(js_style_set_radius, lv_style_set_radius)
+STYLE_SET_INT(js_style_set_bg_opa, lv_style_set_bg_opa)
+STYLE_SET_COLOR(js_style_set_bg_color, lv_style_set_bg_color)
+STYLE_SET_COLOR(js_style_set_border_color, lv_style_set_border_color)
+STYLE_SET_INT(js_style_set_border_width, lv_style_set_border_width)
+STYLE_SET_INT(js_style_set_border_opa, lv_style_set_border_opa)
+STYLE_SET_INT(js_style_set_border_side, lv_style_set_border_side)
+STYLE_SET_INT(js_style_set_outline_width, lv_style_set_outline_width)
+STYLE_SET_COLOR(js_style_set_outline_color, lv_style_set_outline_color)
+STYLE_SET_INT(js_style_set_outline_pad, lv_style_set_outline_pad)
+STYLE_SET_INT(js_style_set_shadow_width, lv_style_set_shadow_width)
+STYLE_SET_COLOR(js_style_set_shadow_color, lv_style_set_shadow_color)
+STYLE_SET_INT(js_style_set_shadow_ofs_x, lv_style_set_shadow_ofs_x)
+STYLE_SET_INT(js_style_set_shadow_ofs_y, lv_style_set_shadow_ofs_y)
+STYLE_SET_COLOR(js_style_set_img_recolor, lv_style_set_img_recolor)
+STYLE_SET_INT(js_style_set_img_recolor_opa, lv_style_set_img_recolor_opa)
+STYLE_SET_INT(js_style_set_transform_angle, lv_style_set_transform_angle)
+STYLE_SET_COLOR(js_style_set_text_color, lv_style_set_text_color)
+STYLE_SET_INT(js_style_set_text_letter_space, lv_style_set_text_letter_space)
+STYLE_SET_INT(js_style_set_text_line_space, lv_style_set_text_line_space)
+STYLE_SET_INT(js_style_set_text_decor, lv_style_set_text_decor)
+STYLE_SET_COLOR(js_style_set_line_color, lv_style_set_line_color)
+STYLE_SET_INT(js_style_set_line_width, lv_style_set_line_width)
+STYLE_SET_INT(js_style_set_line_rounded, lv_style_set_line_rounded)
+STYLE_SET_INT(js_style_set_pad_all, lv_style_set_pad_all)
+STYLE_SET_INT(js_style_set_pad_left, lv_style_set_pad_left)
+STYLE_SET_INT(js_style_set_pad_right, lv_style_set_pad_right)
+STYLE_SET_INT(js_style_set_pad_top, lv_style_set_pad_top)
+STYLE_SET_INT(js_style_set_pad_bottom, lv_style_set_pad_bottom)
+STYLE_SET_INT(js_style_set_pad_ver, lv_style_set_pad_ver)
+STYLE_SET_INT(js_style_set_pad_hor, lv_style_set_pad_hor)
+STYLE_SET_INT(js_style_set_width, lv_style_set_width)
+STYLE_SET_INT(js_style_set_height, lv_style_set_height)
+STYLE_SET_INT(js_style_set_x, lv_style_set_x)
+STYLE_SET_INT(js_style_set_y, lv_style_set_y)
 
 // ---------- Two setters that still need custom logic ------------------------
-static jsval_t js_style_set_text_font(struct js* js, jsval_t* a, int n){
-  if(n < 2) return js_mknull();
-  int h  = (int)js_getnum(a[0]);
+static jsval_t js_style_set_text_font(struct js *js, jsval_t *a, int n)
+{
+  if (n < 2)
+    return js_mknull();
+  int h = (int)js_getnum(a[0]);
   int sz = (int)js_getnum(a[1]);
-  lv_style_t* st = get_lv_style(h);
-  if(!st) return js_mknull();
+  lv_style_t *st = get_lv_style(h);
+  if (!st)
+    return js_mknull();
   lv_style_set_text_font(st, get_font_for_size(sz));
   return js_mknull();
 }
 
-static jsval_t js_style_set_text_align(struct js* js, jsval_t* a, int n){
-  if(n < 2) return js_mknull();
-  int h  = (int)js_getnum(a[0]);
-  int al = (int)js_getnum(a[1]);      // LV_TEXT_ALIGN_LEFT|CENTER|RIGHT|AUTO
-  lv_style_t* st = get_lv_style(h);
-  if(!st) return js_mknull();
+static jsval_t js_style_set_text_align(struct js *js, jsval_t *a, int n)
+{
+  if (n < 2)
+    return js_mknull();
+  int h = (int)js_getnum(a[0]);
+  int al = (int)js_getnum(a[1]); // LV_TEXT_ALIGN_LEFT|CENTER|RIGHT|AUTO
+  lv_style_t *st = get_lv_style(h);
+  if (!st)
+    return js_mknull();
   lv_style_set_text_align(st, (lv_text_align_t)al);
   return js_mknull();
 }
 
-
 // create_style()
-static jsval_t js_create_style(struct js *js, jsval_t *args, int nargs) {
-  for(int i=0; i<MAX_STYLES; i++) {
-    if(!g_style_map[i]) {
+static jsval_t js_create_style(struct js *js, jsval_t *args, int nargs)
+{
+  for (int i = 0; i < MAX_STYLES; i++)
+  {
+    if (!g_style_map[i])
+    {
       lv_style_t *st = new lv_style_t;
       lv_style_init(st);
       g_style_map[i] = st;
@@ -1026,16 +1190,20 @@ static jsval_t js_create_style(struct js *js, jsval_t *args, int nargs) {
 }
 
 // obj_add_style(objHandle, styleHandle, partOrState)
-static jsval_t js_obj_add_style(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int objHandle   = (int)js_getnum(args[0]);
+static jsval_t js_obj_add_style(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
+  int objHandle = (int)js_getnum(args[0]);
   int styleHandle = (int)js_getnum(args[1]);
-  int partState   = 0;
-  if(nargs>=3) partState = (int)js_getnum(args[2]);
+  int partState = 0;
+  if (nargs >= 3)
+    partState = (int)js_getnum(args[2]);
 
-  lv_obj_t* obj    = get_lv_obj(objHandle);
-  lv_style_t* st   = get_lv_style(styleHandle);
-  if(!obj || !st) {
+  lv_obj_t *obj = get_lv_obj(objHandle);
+  lv_style_t *st = get_lv_style(styleHandle);
+  if (!obj || !st)
+  {
     LOG("obj_add_style => invalid handle");
     return js_mknull();
   }
@@ -1043,19 +1211,20 @@ static jsval_t js_obj_add_style(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-
-
 /******************************************************************************
  * H2) Additional object property functions
  ******************************************************************************/
-static jsval_t js_obj_set_size(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) return js_mknull();
+static jsval_t js_obj_set_size(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+    return js_mknull();
   int handle = (int)js_getnum(args[0]);
-  int w      = (int)js_getnum(args[1]);
-  int h      = (int)js_getnum(args[2]);
+  int w = (int)js_getnum(args[1]);
+  int h = (int)js_getnum(args[2]);
 
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) {
+  if (!obj)
+  {
     LOGF("obj_set_size => invalid handle %d\n", handle);
     return js_mknull();
   }
@@ -1064,15 +1233,18 @@ static jsval_t js_obj_set_size(struct js *js, jsval_t *args, int nargs) {
 }
 
 // obj_align(objHandle, alignConst, xOfs, yOfs)
-static jsval_t js_obj_align(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<4) return js_mknull();
-  int handle   = (int)js_getnum(args[0]);
+static jsval_t js_obj_align(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 4)
+    return js_mknull();
+  int handle = (int)js_getnum(args[0]);
   int alignVal = (int)js_getnum(args[1]);
-  int xOfs     = (int)js_getnum(args[2]);
-  int yOfs     = (int)js_getnum(args[3]);
+  int xOfs = (int)js_getnum(args[2]);
+  int yOfs = (int)js_getnum(args[3]);
 
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) {
+  if (!obj)
+  {
     LOGF("obj_align => invalid handle %d\n", handle);
     return js_mknull();
   }
@@ -1084,108 +1256,138 @@ static jsval_t js_obj_align(struct js *js, jsval_t *args, int nargs) {
  * ***ADDED FOR NEW EXAMPLES***
  * For scrolling, flex, flags, etc.
  ******************************************************************************/
-static jsval_t js_obj_set_scroll_snap_x(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int handle     = (int)js_getnum(args[0]);
-  int snap_mode  = (int)js_getnum(args[1]); // numeric for LV_SCROLL_SNAP_x
+static jsval_t js_obj_set_scroll_snap_x(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
+  int handle = (int)js_getnum(args[0]);
+  int snap_mode = (int)js_getnum(args[1]); // numeric for LV_SCROLL_SNAP_x
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_scroll_snap_x(obj, (lv_scroll_snap_t)snap_mode);
   return js_mknull();
 }
 
-static jsval_t js_obj_set_scroll_snap_y(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int handle     = (int)js_getnum(args[0]);
-  int snap_mode  = (int)js_getnum(args[1]);
+static jsval_t js_obj_set_scroll_snap_y(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
+  int handle = (int)js_getnum(args[0]);
+  int snap_mode = (int)js_getnum(args[1]);
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_scroll_snap_y(obj, (lv_scroll_snap_t)snap_mode);
   return js_mknull();
 }
 
-static jsval_t js_obj_add_flag(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
+static jsval_t js_obj_add_flag(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
   int handle = (int)js_getnum(args[0]);
-  int flag   = (int)js_getnum(args[1]);
+  int flag = (int)js_getnum(args[1]);
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_add_flag(obj, (lv_obj_flag_t)flag);
   return js_mknull();
 }
 
-static jsval_t js_obj_clear_flag(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
+static jsval_t js_obj_clear_flag(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
   int handle = (int)js_getnum(args[0]);
-  int flag   = (int)js_getnum(args[1]);
+  int flag = (int)js_getnum(args[1]);
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_clear_flag(obj, (lv_obj_flag_t)flag);
   return js_mknull();
 }
 
-static jsval_t js_obj_set_scroll_dir(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
+static jsval_t js_obj_set_scroll_dir(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
   int handle = (int)js_getnum(args[0]);
-  int dir    = (int)js_getnum(args[1]); // e.g. LV_DIR_VER or ...
+  int dir = (int)js_getnum(args[1]); // e.g. LV_DIR_VER or ...
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_scroll_dir(obj, (lv_dir_t)dir);
   return js_mknull();
 }
 
-static jsval_t js_obj_set_scrollbar_mode(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
+static jsval_t js_obj_set_scrollbar_mode(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
   int handle = (int)js_getnum(args[0]);
-  int mode   = (int)js_getnum(args[1]); // e.g. LV_SCROLLBAR_MODE_OFF
+  int mode = (int)js_getnum(args[1]); // e.g. LV_SCROLLBAR_MODE_OFF
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_scrollbar_mode(obj, (lv_scrollbar_mode_t)mode);
   return js_mknull();
 }
 
-static jsval_t js_obj_set_flex_flow(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<2) return js_mknull();
-  int handle   = (int)js_getnum(args[0]);
+static jsval_t js_obj_set_flex_flow(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mknull();
+  int handle = (int)js_getnum(args[0]);
   int flowEnum = (int)js_getnum(args[1]); // e.g. LV_FLEX_FLOW_ROW_WRAP
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_flex_flow(obj, (lv_flex_flow_t)flowEnum);
   return js_mknull();
 }
 
-static jsval_t js_obj_set_flex_align(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<4) return js_mknull();
-  int handle     = (int)js_getnum(args[0]);
+static jsval_t js_obj_set_flex_align(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 4)
+    return js_mknull();
+  int handle = (int)js_getnum(args[0]);
   int main_place = (int)js_getnum(args[1]);
-  int cross_place= (int)js_getnum(args[2]);
-  int track_place= (int)js_getnum(args[3]);
+  int cross_place = (int)js_getnum(args[2]);
+  int track_place = (int)js_getnum(args[3]);
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_flex_align(obj, (lv_flex_align_t)main_place,
-                             (lv_flex_align_t)cross_place,
-                             (lv_flex_align_t)track_place);
+                        (lv_flex_align_t)cross_place,
+                        (lv_flex_align_t)track_place);
   return js_mknull();
 }
 
-static jsval_t js_obj_set_style_clip_corner(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) return js_mknull();
-  int handle  = (int)js_getnum(args[0]);
-  bool en     = (bool)js_getnum(args[1]);
-  int part    = (int)js_getnum(args[2]);
+static jsval_t js_obj_set_style_clip_corner(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+    return js_mknull();
+  int handle = (int)js_getnum(args[0]);
+  bool en = (bool)js_getnum(args[1]);
+  int part = (int)js_getnum(args[2]);
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_style_clip_corner(obj, en, part);
   return js_mknull();
 }
 
-static jsval_t js_obj_set_style_base_dir(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<3) return js_mknull();
-  int handle   = (int)js_getnum(args[0]);
+static jsval_t js_obj_set_style_base_dir(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+    return js_mknull();
+  int handle = (int)js_getnum(args[0]);
   int base_dir = (int)js_getnum(args[1]); // e.g. LV_BASE_DIR_RTL
-  int part     = (int)js_getnum(args[2]);
+  int part = (int)js_getnum(args[2]);
   lv_obj_t *obj = get_lv_obj(handle);
-  if(!obj) return js_mknull();
+  if (!obj)
+    return js_mknull();
   lv_obj_set_style_base_dir(obj, (lv_base_dir_t)base_dir, part);
   return js_mknull();
 }
@@ -1194,703 +1396,833 @@ static jsval_t js_obj_set_style_base_dir(struct js *js, jsval_t *args, int nargs
  * CHART BRIDGING
  *******************************************************/
 
-static jsval_t js_lv_chart_create(struct js *js, jsval_t *args, int nargs) {
-    // Creates a chart object on the current screen
-    lv_obj_t *chart = lv_chart_create(lv_scr_act());
-    // Optionally set default size or alignment
-    lv_obj_set_size(chart, 200, 150);
-    lv_obj_center(chart);
+static jsval_t js_lv_chart_create(struct js *js, jsval_t *args, int nargs)
+{
+  // Creates a chart object on the current screen
+  lv_obj_t *chart = lv_chart_create(lv_scr_act());
+  // Optionally set default size or alignment
+  lv_obj_set_size(chart, 200, 150);
+  lv_obj_center(chart);
 
-    // Store in your handle-based system
-    int handle = store_lv_obj(chart);
-    LOGF("lv_chart_create => handle %d\n", handle);
+  // Store in your handle-based system
+  int handle = store_lv_obj(chart);
+  LOGF("lv_chart_create => handle %d\n", handle);
 
-    // Return handle to JS
-    return js_mknum(handle);
+  // Return handle to JS
+  return js_mknum(handle);
 }
 
-static jsval_t js_lv_chart_set_type(struct js *js, jsval_t *args, int nargs) {
-    // (handle, lv_chart_type int)
-    if(nargs < 2) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int t = (int)js_getnum(args[1]); // e.g. LV_CHART_TYPE_LINE, LV_CHART_TYPE_BAR, etc.
-
-    lv_obj_t *obj = get_lv_obj(h);
-    if(!obj) return js_mknull();
-
-    lv_chart_set_type(obj, (lv_chart_type_t)t);
+static jsval_t js_lv_chart_set_type(struct js *js, jsval_t *args, int nargs)
+{
+  // (handle, lv_chart_type int)
+  if (nargs < 2)
     return js_mknull();
-}
+  int h = (int)js_getnum(args[0]);
+  int t = (int)js_getnum(args[1]); // e.g. LV_CHART_TYPE_LINE, LV_CHART_TYPE_BAR, etc.
 
-static jsval_t js_lv_chart_set_div_line_count(struct js *js, jsval_t *args, int nargs) {
-    // (handle, y_div, x_div)
-    if(nargs < 3) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int y_div = (int)js_getnum(args[1]);
-    int x_div = (int)js_getnum(args[2]);
-
-    lv_obj_t *obj = get_lv_obj(h);
-    if(!obj) return js_mknull();
-
-    lv_chart_set_div_line_count(obj, y_div, x_div);
+  lv_obj_t *obj = get_lv_obj(h);
+  if (!obj)
     return js_mknull();
+
+  lv_chart_set_type(obj, (lv_chart_type_t)t);
+  return js_mknull();
 }
 
-static jsval_t js_lv_chart_set_update_mode(struct js *js, jsval_t *args, int nargs) {
-    // (handle, mode)
-    // e.g. mode = LV_CHART_UPDATE_MODE_SHIFT, LV_CHART_UPDATE_MODE_CIRCULAR
-    if(nargs < 2) return js_mknull();
-    int h    = (int)js_getnum(args[0]);
-    int mode = (int)js_getnum(args[1]);
-
-    lv_obj_t *obj = get_lv_obj(h);
-    if(!obj) return js_mknull();
-
-    lv_chart_set_update_mode(obj, (lv_chart_update_mode_t)mode);
+static jsval_t js_lv_chart_set_div_line_count(struct js *js, jsval_t *args, int nargs)
+{
+  // (handle, y_div, x_div)
+  if (nargs < 3)
     return js_mknull();
-}
+  int h = (int)js_getnum(args[0]);
+  int y_div = (int)js_getnum(args[1]);
+  int x_div = (int)js_getnum(args[2]);
 
-static jsval_t js_lv_chart_set_range(struct js *js, jsval_t *args, int nargs) {
-    // (handle, axis, min, max)
-    // e.g. axis=LV_CHART_AXIS_PRIMARY_Y, min=0, max=100
-    if(nargs < 4) return js_mknull();
-    int h    = (int)js_getnum(args[0]);
-    int axis = (int)js_getnum(args[1]);
-    int mn   = (int)js_getnum(args[2]);
-    int mx   = (int)js_getnum(args[3]);
-
-    lv_obj_t *obj = get_lv_obj(h);
-    if(!obj) return js_mknull();
-
-    lv_chart_set_range(obj, (lv_chart_axis_t)axis, mn, mx);
+  lv_obj_t *obj = get_lv_obj(h);
+  if (!obj)
     return js_mknull();
+
+  lv_chart_set_div_line_count(obj, y_div, x_div);
+  return js_mknull();
 }
 
-static jsval_t js_lv_chart_set_point_count(struct js *js, jsval_t *args, int nargs) {
-    // (handle, count)
-    if(nargs < 2) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int c = (int)js_getnum(args[1]);
-
-    lv_obj_t *obj = get_lv_obj(h);
-    if(!obj) return js_mknull();
-
-    lv_chart_set_point_count(obj, c);
+static jsval_t js_lv_chart_set_update_mode(struct js *js, jsval_t *args, int nargs)
+{
+  // (handle, mode)
+  // e.g. mode = LV_CHART_UPDATE_MODE_SHIFT, LV_CHART_UPDATE_MODE_CIRCULAR
+  if (nargs < 2)
     return js_mknull();
-}
+  int h = (int)js_getnum(args[0]);
+  int mode = (int)js_getnum(args[1]);
 
-static jsval_t js_lv_chart_refresh(struct js *js, jsval_t *args, int nargs) {
-    // (handle)
-    if(nargs < 1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-
-    lv_obj_t *obj = get_lv_obj(h);
-    if(!obj) return js_mknull();
-
-    lv_chart_refresh(obj);
+  lv_obj_t *obj = get_lv_obj(h);
+  if (!obj)
     return js_mknull();
+
+  lv_chart_set_update_mode(obj, (lv_chart_update_mode_t)mode);
+  return js_mknull();
 }
 
-static jsval_t js_lv_chart_add_series(struct js *js, jsval_t *args, int nargs) {
-    // (handle, color, axis)
-    if(nargs < 3) return js_mknull();
-    int h     = (int)js_getnum(args[0]);
-    double col= js_getnum(args[1]);
-    int axis  = (int)js_getnum(args[2]);
-
-    lv_obj_t *obj = get_lv_obj(h);
-    if(!obj) return js_mknull();
-
-    lv_chart_series_t *ser = lv_chart_add_series(obj, lv_color_hex((uint32_t)col), (lv_chart_axis_t)axis);
-    // Return the pointer as a number (NOT safe on 64-bit, but workable for small usage)
-    // Alternatively, you can store it in a separate map if you want handle-based approach for series.
-    intptr_t p = (intptr_t)(ser);
-    return js_mknum((double)p);
-}
-
-static jsval_t js_lv_chart_set_next_value(struct js *js, jsval_t *args, int nargs) {
-    // (chartHandle, seriesPtr, value)
-    if(nargs < 3) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    intptr_t sp = (intptr_t)js_getnum(args[1]);
-    int val = (int)js_getnum(args[2]);
-
-    lv_obj_t *chart = get_lv_obj(h);
-    if(!chart) return js_mknull();
-
-    lv_chart_series_t *ser = (lv_chart_series_t *)sp;
-    lv_chart_set_next_value(chart, ser, val);
+static jsval_t js_lv_chart_set_range(struct js *js, jsval_t *args, int nargs)
+{
+  // (handle, axis, min, max)
+  // e.g. axis=LV_CHART_AXIS_PRIMARY_Y, min=0, max=100
+  if (nargs < 4)
     return js_mknull();
-}
+  int h = (int)js_getnum(args[0]);
+  int axis = (int)js_getnum(args[1]);
+  int mn = (int)js_getnum(args[2]);
+  int mx = (int)js_getnum(args[3]);
 
-static jsval_t js_lv_chart_set_next_value2(struct js *js, jsval_t *args, int nargs) {
-    // (chartHandle, seriesPtr, xVal, yVal)
-    if(nargs < 4) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    intptr_t sp = (intptr_t)js_getnum(args[1]);
-    int xval = (int)js_getnum(args[2]);
-    int yval = (int)js_getnum(args[3]);
-
-    lv_obj_t *chart = get_lv_obj(h);
-    if(!chart) return js_mknull();
-
-    lv_chart_series_t *ser = (lv_chart_series_t *)sp;
-    lv_chart_set_next_value2(chart, ser, xval, yval);
+  lv_obj_t *obj = get_lv_obj(h);
+  if (!obj)
     return js_mknull();
+
+  lv_chart_set_range(obj, (lv_chart_axis_t)axis, mn, mx);
+  return js_mknull();
 }
 
-static jsval_t js_lv_chart_set_axis_tick(struct js *js, jsval_t *args, int nargs) {
-    // (chartH, axis, majorLen, minorLen, majorCnt, minorCnt, label_en, draw_size)
-    if(nargs < 8) return js_mknull();
-    int h       = (int)js_getnum(args[0]);
-    int axis    = (int)js_getnum(args[1]);
-    int majorLen= (int)js_getnum(args[2]);
-    int minorLen= (int)js_getnum(args[3]);
-    int majorCnt= (int)js_getnum(args[4]);
-    int minorCnt= (int)js_getnum(args[5]);
-    bool label  = (bool)js_getnum(args[6]);
-    int drawSiz = (int)js_getnum(args[7]);
-
-    lv_obj_t *chart = get_lv_obj(h);
-    if(!chart) return js_mknull();
-
-    lv_chart_set_axis_tick(chart, (lv_chart_axis_t)axis, majorLen, minorLen,
-                           majorCnt, minorCnt, label, drawSiz);
+static jsval_t js_lv_chart_set_point_count(struct js *js, jsval_t *args, int nargs)
+{
+  // (handle, count)
+  if (nargs < 2)
     return js_mknull();
-}
+  int h = (int)js_getnum(args[0]);
+  int c = (int)js_getnum(args[1]);
 
-static jsval_t js_lv_chart_set_zoom_x(struct js *js, jsval_t *args, int nargs) {
-    // (chartH, zoom)
-    if(nargs < 2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int zm  = (int)js_getnum(args[1]);
-    lv_obj_t *chart = get_lv_obj(h);
-    if(!chart) return js_mknull();
-
-    lv_chart_set_zoom_x(chart, zm);
+  lv_obj_t *obj = get_lv_obj(h);
+  if (!obj)
     return js_mknull();
+
+  lv_chart_set_point_count(obj, c);
+  return js_mknull();
 }
 
-static jsval_t js_lv_chart_set_zoom_y(struct js *js, jsval_t *args, int nargs) {
-    // (chartH, zoom)
-    if(nargs < 2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int zm  = (int)js_getnum(args[1]);
-    lv_obj_t *chart = get_lv_obj(h);
-    if(!chart) return js_mknull();
-
-    lv_chart_set_zoom_y(chart, zm);
+static jsval_t js_lv_chart_refresh(struct js *js, jsval_t *args, int nargs)
+{
+  // (handle)
+  if (nargs < 1)
     return js_mknull();
+  int h = (int)js_getnum(args[0]);
+
+  lv_obj_t *obj = get_lv_obj(h);
+  if (!obj)
+    return js_mknull();
+
+  lv_chart_refresh(obj);
+  return js_mknull();
 }
 
-static jsval_t js_lv_chart_get_y_array(struct js *js, jsval_t *args, int nargs) {
-    // (chartH, seriesPtr) -> returns a pointer number to the array
-    if(nargs < 2) return js_mknull();
-    int h      = (int)js_getnum(args[0]);
-    intptr_t sp= (intptr_t)js_getnum(args[1]);
+static jsval_t js_lv_chart_add_series(struct js *js, jsval_t *args, int nargs)
+{
+  // (handle, color, axis)
+  if (nargs < 3)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  double col = js_getnum(args[1]);
+  int axis = (int)js_getnum(args[2]);
 
-    lv_obj_t *chart = get_lv_obj(h);
-    if(!chart) return js_mknull();
+  lv_obj_t *obj = get_lv_obj(h);
+  if (!obj)
+    return js_mknull();
 
-    lv_chart_series_t *ser = (lv_chart_series_t *)sp;
-    lv_coord_t *arr = lv_chart_get_y_array(chart, ser);
-    // Return pointer as numeric
-    intptr_t ret = (intptr_t)arr;
-    return js_mknum((double)ret);
+  lv_chart_series_t *ser = lv_chart_add_series(obj, lv_color_hex((uint32_t)col), (lv_chart_axis_t)axis);
+  // Return the pointer as a number (NOT safe on 64-bit, but workable for small usage)
+  // Alternatively, you can store it in a separate map if you want handle-based approach for series.
+  intptr_t p = (intptr_t)(ser);
+  return js_mknum((double)p);
+}
+
+static jsval_t js_lv_chart_set_next_value(struct js *js, jsval_t *args, int nargs)
+{
+  // (chartHandle, seriesPtr, value)
+  if (nargs < 3)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  intptr_t sp = (intptr_t)js_getnum(args[1]);
+  int val = (int)js_getnum(args[2]);
+
+  lv_obj_t *chart = get_lv_obj(h);
+  if (!chart)
+    return js_mknull();
+
+  lv_chart_series_t *ser = (lv_chart_series_t *)sp;
+  lv_chart_set_next_value(chart, ser, val);
+  return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_next_value2(struct js *js, jsval_t *args, int nargs)
+{
+  // (chartHandle, seriesPtr, xVal, yVal)
+  if (nargs < 4)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  intptr_t sp = (intptr_t)js_getnum(args[1]);
+  int xval = (int)js_getnum(args[2]);
+  int yval = (int)js_getnum(args[3]);
+
+  lv_obj_t *chart = get_lv_obj(h);
+  if (!chart)
+    return js_mknull();
+
+  lv_chart_series_t *ser = (lv_chart_series_t *)sp;
+  lv_chart_set_next_value2(chart, ser, xval, yval);
+  return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_axis_tick(struct js *js, jsval_t *args, int nargs)
+{
+  // (chartH, axis, majorLen, minorLen, majorCnt, minorCnt, label_en, draw_size)
+  if (nargs < 8)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  int axis = (int)js_getnum(args[1]);
+  int majorLen = (int)js_getnum(args[2]);
+  int minorLen = (int)js_getnum(args[3]);
+  int majorCnt = (int)js_getnum(args[4]);
+  int minorCnt = (int)js_getnum(args[5]);
+  bool label = (bool)js_getnum(args[6]);
+  int drawSiz = (int)js_getnum(args[7]);
+
+  lv_obj_t *chart = get_lv_obj(h);
+  if (!chart)
+    return js_mknull();
+
+  lv_chart_set_axis_tick(chart, (lv_chart_axis_t)axis, majorLen, minorLen,
+                         majorCnt, minorCnt, label, drawSiz);
+  return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_zoom_x(struct js *js, jsval_t *args, int nargs)
+{
+  // (chartH, zoom)
+  if (nargs < 2)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  int zm = (int)js_getnum(args[1]);
+  lv_obj_t *chart = get_lv_obj(h);
+  if (!chart)
+    return js_mknull();
+
+  lv_chart_set_zoom_x(chart, zm);
+  return js_mknull();
+}
+
+static jsval_t js_lv_chart_set_zoom_y(struct js *js, jsval_t *args, int nargs)
+{
+  // (chartH, zoom)
+  if (nargs < 2)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  int zm = (int)js_getnum(args[1]);
+  lv_obj_t *chart = get_lv_obj(h);
+  if (!chart)
+    return js_mknull();
+
+  lv_chart_set_zoom_y(chart, zm);
+  return js_mknull();
+}
+
+static jsval_t js_lv_chart_get_y_array(struct js *js, jsval_t *args, int nargs)
+{
+  // (chartH, seriesPtr) -> returns a pointer number to the array
+  if (nargs < 2)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  intptr_t sp = (intptr_t)js_getnum(args[1]);
+
+  lv_obj_t *chart = get_lv_obj(h);
+  if (!chart)
+    return js_mknull();
+
+  lv_chart_series_t *ser = (lv_chart_series_t *)sp;
+  lv_coord_t *arr = lv_chart_get_y_array(chart, ser);
+  // Return pointer as numeric
+  intptr_t ret = (intptr_t)arr;
+  return js_mknum((double)ret);
 }
 
 // Similarly you can add bridging for lv_chart_set_ext_y_array, lv_chart_set_ext_x_array,
 // lv_chart_get_x_array, lv_chart_get_pressed_point, lv_chart_set_cursor_point, etc.
 // if your examples require them.
 
-
 /********************************************************************************
  * METER
  ********************************************************************************/
-// Example calls: 
-//   lv_meter_create, lv_meter_add_scale, lv_meter_set_scale_ticks, 
+// Example calls:
+//   lv_meter_create, lv_meter_add_scale, lv_meter_set_scale_ticks,
 //   lv_meter_set_scale_major_ticks, lv_meter_set_scale_range
 //   lv_meter_add_arc, lv_meter_add_scale_lines, lv_meter_add_needle_line,
 //   lv_meter_add_needle_img
 //   lv_meter_set_indicator_start_value, lv_meter_set_indicator_end_value, lv_meter_set_indicator_value
 
-static jsval_t js_lv_meter_create(struct js *js, jsval_t *args, int nargs) {
-    // no params
-    lv_obj_t *m = lv_meter_create(lv_scr_act());
-    int handle = store_lv_obj(m);
-    return js_mknum(handle);
+static jsval_t js_lv_meter_create(struct js *js, jsval_t *args, int nargs)
+{
+  // no params
+  lv_obj_t *m = lv_meter_create(lv_scr_act());
+  int handle = store_lv_obj(m);
+  return js_mknum(handle);
 }
 
-static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs) {
-    // (meterHandle) -> scale pointer as number
-    if(nargs<1) return js_mknull();
-    int mh = (int)js_getnum(args[0]);
-    lv_obj_t *mt = get_lv_obj(mh);
-    if(!mt) return js_mknull();
-
-    lv_meter_scale_t *sc = lv_meter_add_scale(mt);
-    // Return pointer as numeric
-    intptr_t p = (intptr_t)sc;
-    return js_mknum((double)p);
-}
-
-static jsval_t js_lv_meter_set_scale_ticks(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, scalePtr, cnt, width, length, color)
-    if(nargs<6) return js_mknull();
-    int mH     = (int)js_getnum(args[0]);
-    intptr_t scP = (intptr_t)js_getnum(args[1]);
-    int cnt    = (int)js_getnum(args[2]);
-    int width  = (int)js_getnum(args[3]);
-    int length = (int)js_getnum(args[4]);
-    double col = js_getnum(args[5]);
-
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_scale_t *sc = (lv_meter_scale_t*) scP;
-    lv_meter_set_scale_ticks(mt, sc, cnt, width, length, lv_color_hex((uint32_t)col));
+static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterHandle) -> scale pointer as number
+  if (nargs < 1)
     return js_mknull();
+  int mh = (int)js_getnum(args[0]);
+  lv_obj_t *mt = get_lv_obj(mh);
+  if (!mt)
+    return js_mknull();
+
+  lv_meter_scale_t *sc = lv_meter_add_scale(mt);
+  // Return pointer as numeric
+  intptr_t p = (intptr_t)sc;
+  return js_mknum((double)p);
 }
 
-static jsval_t js_lv_meter_set_scale_major_ticks(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, scalePtr, freq, width, length, color, label_gap)
-    if(nargs<7) return js_mknull();
-    int mH     = (int)js_getnum(args[0]);
-    intptr_t scP = (intptr_t)js_getnum(args[1]);
-    int freq   = (int)js_getnum(args[2]);
-    int width  = (int)js_getnum(args[3]);
-    int length = (int)js_getnum(args[4]);
-    double col = js_getnum(args[5]);
-    int label_gap = (int)js_getnum(args[6]);
-
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-
-    lv_meter_scale_t *sc = (lv_meter_scale_t*) scP;
-    lv_meter_set_scale_major_ticks(mt, sc, freq, width, length, lv_color_hex((uint32_t)col), label_gap);
+static jsval_t js_lv_meter_set_scale_ticks(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, scalePtr, cnt, width, length, color)
+  if (nargs < 6)
     return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t scP = (intptr_t)js_getnum(args[1]);
+  int cnt = (int)js_getnum(args[2]);
+  int width = (int)js_getnum(args[3]);
+  int length = (int)js_getnum(args[4]);
+  double col = js_getnum(args[5]);
+
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+  lv_meter_set_scale_ticks(mt, sc, cnt, width, length, lv_color_hex((uint32_t)col));
+  return js_mknull();
 }
 
-static jsval_t js_lv_meter_set_scale_range(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, scalePtr, min, max, angle_range, rotation)
-    if(nargs<6) return js_mknull();
-    int mH   = (int)js_getnum(args[0]);
-    intptr_t scP= (intptr_t)js_getnum(args[1]);
-    int minV = (int)js_getnum(args[2]);
-    int maxV = (int)js_getnum(args[3]);
-    int angleRange = (int)js_getnum(args[4]);
-    int rotation   = (int)js_getnum(args[5]);
-
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_scale_t *sc = (lv_meter_scale_t*) scP;
-    lv_meter_set_scale_range(mt, sc, minV, maxV, angleRange, rotation);
+static jsval_t js_lv_meter_set_scale_major_ticks(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, scalePtr, freq, width, length, color, label_gap)
+  if (nargs < 7)
     return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t scP = (intptr_t)js_getnum(args[1]);
+  int freq = (int)js_getnum(args[2]);
+  int width = (int)js_getnum(args[3]);
+  int length = (int)js_getnum(args[4]);
+  double col = js_getnum(args[5]);
+  int label_gap = (int)js_getnum(args[6]);
+
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+
+  lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+  lv_meter_set_scale_major_ticks(mt, sc, freq, width, length, lv_color_hex((uint32_t)col), label_gap);
+  return js_mknull();
+}
+
+static jsval_t js_lv_meter_set_scale_range(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, scalePtr, min, max, angle_range, rotation)
+  if (nargs < 6)
+    return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t scP = (intptr_t)js_getnum(args[1]);
+  int minV = (int)js_getnum(args[2]);
+  int maxV = (int)js_getnum(args[3]);
+  int angleRange = (int)js_getnum(args[4]);
+  int rotation = (int)js_getnum(args[5]);
+
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+  lv_meter_set_scale_range(mt, sc, minV, maxV, angleRange, rotation);
+  return js_mknull();
 }
 
 // meter indicator creation
-static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, scalePtr, width, color, rMod)
-    // returns indicator pointer
-    if(nargs<5) return js_mknull();
-    int mH     = (int)js_getnum(args[0]);
-    intptr_t scP = (intptr_t)js_getnum(args[1]);
-    int width  = (int)js_getnum(args[2]);
-    double col = js_getnum(args[3]);
-    int rMod   = (int)js_getnum(args[4]);
+static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, scalePtr, width, color, rMod)
+  // returns indicator pointer
+  if (nargs < 5)
+    return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t scP = (intptr_t)js_getnum(args[1]);
+  int width = (int)js_getnum(args[2]);
+  double col = js_getnum(args[3]);
+  int rMod = (int)js_getnum(args[4]);
 
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
 
-    lv_meter_indicator_t *ind = lv_meter_add_arc(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
-    intptr_t ret = (intptr_t)ind;
-    return js_mknum((double)ret);
+  lv_meter_indicator_t *ind = lv_meter_add_arc(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
+  intptr_t ret = (intptr_t)ind;
+  return js_mknum((double)ret);
 }
 
-static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, scalePtr, color_main, color_grad, local, width_mod)
-    // returns indicator pointer
-    if(nargs<6) return js_mknull();
-    int mH         = (int)js_getnum(args[0]);
-    intptr_t scP   = (intptr_t)js_getnum(args[1]);
-    double colorM  = js_getnum(args[2]);
-    double colorG  = js_getnum(args[3]);
-    bool local     = (bool)js_getnum(args[4]);
-    int widthMod   = (int)js_getnum(args[5]);
+static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, scalePtr, color_main, color_grad, local, width_mod)
+  // returns indicator pointer
+  if (nargs < 6)
+    return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t scP = (intptr_t)js_getnum(args[1]);
+  double colorM = js_getnum(args[2]);
+  double colorG = js_getnum(args[3]);
+  bool local = (bool)js_getnum(args[4]);
+  int widthMod = (int)js_getnum(args[5]);
 
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
 
-    lv_meter_indicator_t *ind = lv_meter_add_scale_lines(mt, sc,
-        lv_color_hex((uint32_t)colorM),
-        lv_color_hex((uint32_t)colorG),
-        local, widthMod
-    );
-    intptr_t ret = (intptr_t)ind;
-    return js_mknum((double)ret);
+  lv_meter_indicator_t *ind = lv_meter_add_scale_lines(mt, sc,
+                                                       lv_color_hex((uint32_t)colorM),
+                                                       lv_color_hex((uint32_t)colorG),
+                                                       local, widthMod);
+  intptr_t ret = (intptr_t)ind;
+  return js_mknum((double)ret);
 }
 
-static jsval_t js_lv_meter_add_needle_line(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, scalePtr, width, color, rMod)
-    if(nargs<5) return js_mknull();
-    int mH     = (int)js_getnum(args[0]);
-    intptr_t scP= (intptr_t)js_getnum(args[1]);
-    int width  = (int)js_getnum(args[2]);
-    double col = js_getnum(args[3]);
-    int rMod   = (int)js_getnum(args[4]);
+static jsval_t js_lv_meter_add_needle_line(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, scalePtr, width, color, rMod)
+  if (nargs < 5)
+    return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t scP = (intptr_t)js_getnum(args[1]);
+  int width = (int)js_getnum(args[2]);
+  double col = js_getnum(args[3]);
+  int rMod = (int)js_getnum(args[4]);
 
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
 
-    lv_meter_indicator_t *ind = lv_meter_add_needle_line(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
-    intptr_t ret = (intptr_t)ind;
-    return js_mknum((double)ret);
+  lv_meter_indicator_t *ind = lv_meter_add_needle_line(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
+  intptr_t ret = (intptr_t)ind;
+  return js_mknum((double)ret);
 }
 
-static jsval_t js_lv_meter_add_needle_img(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, scalePtr, srcAddr, pivot_x, pivot_y)
-    // returns indicator pointer
-    if(nargs<5) return js_mknull();
-    int mH        = (int)js_getnum(args[0]);
-    intptr_t scP  = (intptr_t)js_getnum(args[1]);
-    // "srcAddr" is an image source pointer or something
-    intptr_t srcPtr= (intptr_t)js_getnum(args[2]);
-    int pivotX    = (int)js_getnum(args[3]);
-    int pivotY    = (int)js_getnum(args[4]);
+static jsval_t js_lv_meter_add_needle_img(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, scalePtr, srcAddr, pivot_x, pivot_y)
+  // returns indicator pointer
+  if (nargs < 5)
+    return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t scP = (intptr_t)js_getnum(args[1]);
+  // "srcAddr" is an image source pointer or something
+  intptr_t srcPtr = (intptr_t)js_getnum(args[2]);
+  int pivotX = (int)js_getnum(args[3]);
+  int pivotY = (int)js_getnum(args[4]);
 
-    // If we have a global or static "LV_IMG_DECLARE(img_hand);" we normally pass &img_hand
-    // from JS. That means we store "img_hand" pointer in a variable. 
-    // For simplicity let's assume srcPtr is the actual pointer to an lv_img_dsc_t.
+  // If we have a global or static "LV_IMG_DECLARE(img_hand);" we normally pass &img_hand
+  // from JS. That means we store "img_hand" pointer in a variable.
+  // For simplicity let's assume srcPtr is the actual pointer to an lv_img_dsc_t.
 
-    const lv_img_dsc_t * src_dsc = (const lv_img_dsc_t *)srcPtr;
+  const lv_img_dsc_t *src_dsc = (const lv_img_dsc_t *)srcPtr;
 
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_scale_t *sc = (lv_meter_scale_t *)scP;
 
-    lv_meter_indicator_t *ind = lv_meter_add_needle_img(mt, sc, src_dsc, pivotX, pivotY);
-    intptr_t ret = (intptr_t)ind;
-    return js_mknum((double)ret);
+  lv_meter_indicator_t *ind = lv_meter_add_needle_img(mt, sc, src_dsc, pivotX, pivotY);
+  intptr_t ret = (intptr_t)ind;
+  return js_mknum((double)ret);
 }
 
 // meter set indicator
-static jsval_t js_lv_meter_set_indicator_start_value(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, indicatorPtr, startVal)
-    if(nargs<3) return js_mknull();
-    int mH      = (int)js_getnum(args[0]);
-    intptr_t indP= (intptr_t)js_getnum(args[1]);
-    int stVal   = (int)js_getnum(args[2]);
-
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_indicator_t *ind = (lv_meter_indicator_t*) indP;
-
-    lv_meter_set_indicator_start_value(mt, ind, stVal);
+static jsval_t js_lv_meter_set_indicator_start_value(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, indicatorPtr, startVal)
+  if (nargs < 3)
     return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t indP = (intptr_t)js_getnum(args[1]);
+  int stVal = (int)js_getnum(args[2]);
+
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_indicator_t *ind = (lv_meter_indicator_t *)indP;
+
+  lv_meter_set_indicator_start_value(mt, ind, stVal);
+  return js_mknull();
 }
 
-static jsval_t js_lv_meter_set_indicator_end_value(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, indicatorPtr, endVal)
-    if(nargs<3) return js_mknull();
-    int mH      = (int)js_getnum(args[0]);
-    intptr_t indP= (intptr_t)js_getnum(args[1]);
-    int endVal  = (int)js_getnum(args[2]);
-
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_indicator_t *ind = (lv_meter_indicator_t*) indP;
-
-    lv_meter_set_indicator_end_value(mt, ind, endVal);
+static jsval_t js_lv_meter_set_indicator_end_value(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, indicatorPtr, endVal)
+  if (nargs < 3)
     return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t indP = (intptr_t)js_getnum(args[1]);
+  int endVal = (int)js_getnum(args[2]);
+
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_indicator_t *ind = (lv_meter_indicator_t *)indP;
+
+  lv_meter_set_indicator_end_value(mt, ind, endVal);
+  return js_mknull();
 }
 
-static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int nargs) {
-    // (meterH, indicatorPtr, val)
-    if(nargs<3) return js_mknull();
-    int mH      = (int)js_getnum(args[0]);
-    intptr_t indP= (intptr_t)js_getnum(args[1]);
-    int val     = (int)js_getnum(args[2]);
-
-    lv_obj_t *mt = get_lv_obj(mH);
-    if(!mt) return js_mknull();
-    lv_meter_indicator_t *ind = (lv_meter_indicator_t*) indP;
-
-    lv_meter_set_indicator_value(mt, ind, val);
+static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int nargs)
+{
+  // (meterH, indicatorPtr, val)
+  if (nargs < 3)
     return js_mknull();
+  int mH = (int)js_getnum(args[0]);
+  intptr_t indP = (intptr_t)js_getnum(args[1]);
+  int val = (int)js_getnum(args[2]);
+
+  lv_obj_t *mt = get_lv_obj(mH);
+  if (!mt)
+    return js_mknull();
+  lv_meter_indicator_t *ind = (lv_meter_indicator_t *)indP;
+
+  lv_meter_set_indicator_value(mt, ind, val);
+  return js_mknull();
 }
 
 /********************************************************************************
  * MSGBOX
  ********************************************************************************/
-static jsval_t js_lv_msgbox_create(struct js *js, jsval_t *args, int nargs) {
-    // (parentH or -1), titleStr, txtStr, an array of const char*(?), add_ok? 
-    // This is tricky because we need a char** for the buttons. Let's do a simpler approach:
-    // We might do: (title, text, btn1, btn2, ...) or the user can pass a single string "btn1,btn2"
-    // For simplicity let's just do an overloaded approach: (title, text, "OK\nClose"), or (NULL for last param)
-    // We can't easily parse an array from Elk JS. Let's do a simpler approach: 
-    // (title, text, "OK,Close", is_modal_bool)
-    if(nargs<4) return js_mknull();
+static jsval_t js_lv_msgbox_create(struct js *js, jsval_t *args, int nargs)
+{
+  // (parentH or -1), titleStr, txtStr, an array of const char*(?), add_ok?
+  // This is tricky because we need a char** for the buttons. Let's do a simpler approach:
+  // We might do: (title, text, btn1, btn2, ...) or the user can pass a single string "btn1,btn2"
+  // For simplicity let's just do an overloaded approach: (title, text, "OK\nClose"), or (NULL for last param)
+  // We can't easily parse an array from Elk JS. Let's do a simpler approach:
+  // (title, text, "OK,Close", is_modal_bool)
+  if (nargs < 4)
+    return js_mknull();
 
-    const char* title = js_str(js, args[0]);
-    const char* msg   = js_str(js, args[1]);
-    const char* btns  = js_str(js, args[2]);
-    bool addModal     = (bool)js_getnum(args[3]);
+  const char *title = js_str(js, args[0]);
+  const char *msg = js_str(js, args[1]);
+  const char *btns = js_str(js, args[2]);
+  bool addModal = (bool)js_getnum(args[3]);
 
-    // parse the "OK,Close" into a static array of char*
-    // E.g. we can do a quick split
-    static const char * defBtns[16];
-    memset(defBtns, 0, sizeof(defBtns));
+  // parse the "OK,Close" into a static array of char*
+  // E.g. we can do a quick split
+  static const char *defBtns[16];
+  memset(defBtns, 0, sizeof(defBtns));
 
-    char tmp[256];
-    strncpy(tmp, btns ? btns : "", sizeof(tmp)-1);
-    tmp[sizeof(tmp)-1] = '\0';
+  char tmp[256];
+  strncpy(tmp, btns ? btns : "", sizeof(tmp) - 1);
+  tmp[sizeof(tmp) - 1] = '\0';
 
-    int idx=0;
-    char *token = strtok(tmp, ",");
-    while(token && idx< (int)(sizeof(defBtns)/sizeof(defBtns[0]) -1 )) {
-        defBtns[idx++] = token;
-        token = strtok(NULL, ",");
-    }
-    defBtns[idx] = NULL; // terminator
+  int idx = 0;
+  char *token = strtok(tmp, ",");
+  while (token && idx < (int)(sizeof(defBtns) / sizeof(defBtns[0]) - 1))
+  {
+    defBtns[idx++] = token;
+    token = strtok(NULL, ",");
+  }
+  defBtns[idx] = NULL; // terminator
 
-    lv_obj_t * mb = lv_msgbox_create(NULL, title, msg, defBtns[0] ? defBtns : NULL, addModal);
-    int handle = store_lv_obj(mb);
-    return js_mknum(handle);
+  lv_obj_t *mb = lv_msgbox_create(NULL, title, msg, defBtns[0] ? defBtns : NULL, addModal);
+  int handle = store_lv_obj(mb);
+  return js_mknum(handle);
 }
 
-static jsval_t js_lv_msgbox_get_active_btn_text(struct js *js, jsval_t *args, int nargs) {
-    // (msgboxH) -> string
-    if(nargs<1) return js_mkstr(js, "", 0);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *mb = get_lv_obj(h);
-    if(!mb) return js_mkstr(js,"",0);
+static jsval_t js_lv_msgbox_get_active_btn_text(struct js *js, jsval_t *args, int nargs)
+{
+  // (msgboxH) -> string
+  if (nargs < 1)
+    return js_mkstr(js, "", 0);
+  int h = (int)js_getnum(args[0]);
+  lv_obj_t *mb = get_lv_obj(h);
+  if (!mb)
+    return js_mkstr(js, "", 0);
 
-    const char* t = lv_msgbox_get_active_btn_text(mb);
-    if(!t) t = "";
-    return js_mkstr(js, t, strlen(t));
+  const char *t = lv_msgbox_get_active_btn_text(mb);
+  if (!t)
+    t = "";
+  return js_mkstr(js, t, strlen(t));
 }
 
 /********************************************************************************
  * SPAN
  ********************************************************************************/
-static jsval_t js_lv_spangroup_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t * spg = lv_spangroup_create(lv_scr_act());
-    int handle = store_lv_obj(spg);
-    return js_mknum(handle);
+static jsval_t js_lv_spangroup_create(struct js *js, jsval_t *args, int nargs)
+{
+  lv_obj_t *spg = lv_spangroup_create(lv_scr_act());
+  int handle = store_lv_obj(spg);
+  return js_mknum(handle);
 }
 
-static jsval_t js_lv_spangroup_set_align(struct js *js, jsval_t *args, int nargs) {
-    // (spangroupH, alignEnum=LV_TEXT_ALIGN_LEFT/CENTER/RIGHT/AUTO)
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int alg = (int)js_getnum(args[1]);
-    lv_obj_t *spg = get_lv_obj(h);
-    if(!spg) return js_mknull();
-
-    lv_spangroup_set_align(spg, (lv_text_align_t)alg);
+static jsval_t js_lv_spangroup_set_align(struct js *js, jsval_t *args, int nargs)
+{
+  // (spangroupH, alignEnum=LV_TEXT_ALIGN_LEFT/CENTER/RIGHT/AUTO)
+  if (nargs < 2)
     return js_mknull();
-}
-
-static jsval_t js_lv_spangroup_set_overflow(struct js *js, jsval_t *args, int nargs) {
-    // (spangroupH, overflowEnum=LV_SPAN_OVERFLOW_CLIP/ELLIPSIS)
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int ovf = (int)js_getnum(args[1]);
-    lv_obj_t *spg = get_lv_obj(h);
-    if(!spg) return js_mknull();
-
-    lv_spangroup_set_overflow(spg, (lv_span_overflow_t)ovf);
+  int h = (int)js_getnum(args[0]);
+  int alg = (int)js_getnum(args[1]);
+  lv_obj_t *spg = get_lv_obj(h);
+  if (!spg)
     return js_mknull();
+
+  lv_spangroup_set_align(spg, (lv_text_align_t)alg);
+  return js_mknull();
 }
 
-static jsval_t js_lv_spangroup_set_indent(struct js *js, jsval_t *args, int nargs) {
-    // (spangroupH, indentPX)
-    if(nargs<2) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    int indent = (int)js_getnum(args[1]);
-    lv_obj_t *spg = get_lv_obj(h);
-    if(!spg) return js_mknull();
-
-    lv_spangroup_set_indent(spg, indent);
+static jsval_t js_lv_spangroup_set_overflow(struct js *js, jsval_t *args, int nargs)
+{
+  // (spangroupH, overflowEnum=LV_SPAN_OVERFLOW_CLIP/ELLIPSIS)
+  if (nargs < 2)
     return js_mknull();
-}
-
-static jsval_t js_lv_spangroup_set_mode(struct js *js, jsval_t *args, int nargs) {
-    // (spangroupH, mode=LV_SPAN_MODE_FIXED/NOWRAP/BREAK)
-    if(nargs<2) return js_mknull();
-    int h   = (int)js_getnum(args[0]);
-    int md  = (int)js_getnum(args[1]);
-    lv_obj_t *spg = get_lv_obj(h);
-    if(!spg) return js_mknull();
-
-    lv_spangroup_set_mode(spg, (lv_span_mode_t)md);
+  int h = (int)js_getnum(args[0]);
+  int ovf = (int)js_getnum(args[1]);
+  lv_obj_t *spg = get_lv_obj(h);
+  if (!spg)
     return js_mknull();
+
+  lv_spangroup_set_overflow(spg, (lv_span_overflow_t)ovf);
+  return js_mknull();
 }
 
-static jsval_t js_lv_spangroup_new_span(struct js *js, jsval_t *args, int nargs) {
-    // (spangroupH) -> pointer
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *spg = get_lv_obj(h);
-    if(!spg) return js_mknull();
-
-    lv_span_t * sp = lv_spangroup_new_span(spg);
-    intptr_t ret = (intptr_t)sp;
-    return js_mknum((double)ret);
-}
-
-static jsval_t js_lv_span_set_text(struct js *js, jsval_t *args, int nargs) {
-    // (spanPtr, text)
-    if(nargs<2) return js_mknull();
-    intptr_t spP = (intptr_t)js_getnum(args[0]);
-    const char* txt = js_str(js, args[1]);
-    if(!txt) return js_mknull();
-
-    lv_span_t * sp = (lv_span_t *)spP;
-    lv_span_set_text(sp, txt);
+static jsval_t js_lv_spangroup_set_indent(struct js *js, jsval_t *args, int nargs)
+{
+  // (spangroupH, indentPX)
+  if (nargs < 2)
     return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  int indent = (int)js_getnum(args[1]);
+  lv_obj_t *spg = get_lv_obj(h);
+  if (!spg)
+    return js_mknull();
+
+  lv_spangroup_set_indent(spg, indent);
+  return js_mknull();
 }
 
-static jsval_t js_lv_span_set_text_static(struct js *js, jsval_t *args, int nargs) {
-    // (spanPtr, text) => static
-    if(nargs<2) return js_mknull();
-    intptr_t spP = (intptr_t)js_getnum(args[0]);
-    const char* txt = js_str(js, args[1]);
-    if(!txt) return js_mknull();
-
-    lv_span_t * sp = (lv_span_t *)spP;
-    lv_span_set_text_static(sp, txt);
+static jsval_t js_lv_spangroup_set_mode(struct js *js, jsval_t *args, int nargs)
+{
+  // (spangroupH, mode=LV_SPAN_MODE_FIXED/NOWRAP/BREAK)
+  if (nargs < 2)
     return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  int md = (int)js_getnum(args[1]);
+  lv_obj_t *spg = get_lv_obj(h);
+  if (!spg)
+    return js_mknull();
+
+  lv_spangroup_set_mode(spg, (lv_span_mode_t)md);
+  return js_mknull();
 }
 
-static jsval_t js_lv_spangroup_refr_mode(struct js *js, jsval_t *args, int nargs) {
-    // (spangroupH)
-    if(nargs<1) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *spg = get_lv_obj(h);
-    if(!spg) return js_mknull();
-
-    lv_spangroup_refr_mode(spg);
+static jsval_t js_lv_spangroup_new_span(struct js *js, jsval_t *args, int nargs)
+{
+  // (spangroupH) -> pointer
+  if (nargs < 1)
     return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  lv_obj_t *spg = get_lv_obj(h);
+  if (!spg)
+    return js_mknull();
+
+  lv_span_t *sp = lv_spangroup_new_span(spg);
+  intptr_t ret = (intptr_t)sp;
+  return js_mknum((double)ret);
+}
+
+static jsval_t js_lv_span_set_text(struct js *js, jsval_t *args, int nargs)
+{
+  // (spanPtr, text)
+  if (nargs < 2)
+    return js_mknull();
+  intptr_t spP = (intptr_t)js_getnum(args[0]);
+  const char *txt = js_str(js, args[1]);
+  if (!txt)
+    return js_mknull();
+
+  lv_span_t *sp = (lv_span_t *)spP;
+  lv_span_set_text(sp, txt);
+  return js_mknull();
+}
+
+static jsval_t js_lv_span_set_text_static(struct js *js, jsval_t *args, int nargs)
+{
+  // (spanPtr, text) => static
+  if (nargs < 2)
+    return js_mknull();
+  intptr_t spP = (intptr_t)js_getnum(args[0]);
+  const char *txt = js_str(js, args[1]);
+  if (!txt)
+    return js_mknull();
+
+  lv_span_t *sp = (lv_span_t *)spP;
+  lv_span_set_text_static(sp, txt);
+  return js_mknull();
+}
+
+static jsval_t js_lv_spangroup_refr_mode(struct js *js, jsval_t *args, int nargs)
+{
+  // (spangroupH)
+  if (nargs < 1)
+    return js_mknull();
+  int h = (int)js_getnum(args[0]);
+  lv_obj_t *spg = get_lv_obj(h);
+  if (!spg)
+    return js_mknull();
+
+  lv_spangroup_refr_mode(spg);
+  return js_mknull();
 }
 
 /*******************************************************
  * LINE BRIDGING
  *******************************************************/
 
-static jsval_t js_lv_line_create(struct js *js, jsval_t *args, int nargs) {
-    lv_obj_t *line = lv_line_create(lv_scr_act());
-    int handle = store_lv_obj(line);
-    LOGF("lv_line_create => handle %d\n", handle);
-    return js_mknum(handle);
+static jsval_t js_lv_line_create(struct js *js, jsval_t *args, int nargs)
+{
+  lv_obj_t *line = lv_line_create(lv_scr_act());
+  int handle = store_lv_obj(line);
+  LOGF("lv_line_create => handle %d\n", handle);
+  return js_mknum(handle);
 }
 
 // Setting points requires us to parse an array of {x,y} from JS or something
 // For simplicity, here's a bridging that receives e.g. (lineH, x0, y0, x1, y1, x2, y2, ...)
-static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) {
-    // Must have at least (lineH, x0, y0)
-    if(nargs < 3) return js_mknull();
-    int h = (int)js_getnum(args[0]);
-
-    // The rest are coordinate pairs
-    int pairCount = (nargs - 1) / 2; // minus 1 for the handle, then each 2 = one point
-    if(pairCount < 1) return js_mknull();
-
-    lv_obj_t *line = get_lv_obj(h);
-    if(!line) return js_mknull();
-
-    static lv_point_t points[32]; // up to 16 points
-    if(pairCount > 16) pairCount = 16; // clamp
-
-    int idx = 1; // start reading from arg[1]
-    for(int i=0; i<pairCount; i++) {
-        int x = (int)js_getnum(args[idx++]);
-        int y = (int)js_getnum(args[idx++]);
-        points[i].x = x;
-        points[i].y = y;
-    }
-
-    lv_line_set_points(line, points, pairCount);
+static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs)
+{
+  // Must have at least (lineH, x0, y0)
+  if (nargs < 3)
     return js_mknull();
+  int h = (int)js_getnum(args[0]);
+
+  // The rest are coordinate pairs
+  int pairCount = (nargs - 1) / 2; // minus 1 for the handle, then each 2 = one point
+  if (pairCount < 1)
+    return js_mknull();
+
+  lv_obj_t *line = get_lv_obj(h);
+  if (!line)
+    return js_mknull();
+
+  static lv_point_t points[32]; // up to 16 points
+  if (pairCount > 16)
+    pairCount = 16; // clamp
+
+  int idx = 1; // start reading from arg[1]
+  for (int i = 0; i < pairCount; i++)
+  {
+    int x = (int)js_getnum(args[idx++]);
+    int y = (int)js_getnum(args[idx++]);
+    points[i].x = x;
+    points[i].y = y;
+  }
+
+  lv_line_set_points(line, points, pairCount);
+  return js_mknull();
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~ 1) HTTP ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Helper function to read the HTTP response body
-String readHttpResponseBody(WiFiClient &client) {
-    String headers;
-    String body;
-    bool chunked = false;
+String readHttpResponseBody(WiFiClient &client)
+{
+  String headers;
+  String body;
+  bool chunked = false;
 
-    // 1) Read headers line by line until a blank line
-    while (client.connected()) {
-        String line = client.readStringUntil('\n');
-        if (line == "\r") {
-            // End of headers
-            break;
-        }
-        headers += line + "\n";
-        if (line.indexOf("Transfer-Encoding: chunked") >= 0) {
-            chunked = true;
-        }
+  // 1) Read headers line by line until a blank line
+  while (client.connected())
+  {
+    String line = client.readStringUntil('\n');
+    if (line == "\r")
+    {
+      // End of headers
+      break;
     }
-
-    // 2) Read the body
-    if (chunked) {
-        while (true) {
-            // Read chunk size
-            String sizeLine = client.readStringUntil('\n');
-            sizeLine.trim();
-            int chunkSize = strtol(sizeLine.c_str(), NULL, 16);
-            if (chunkSize <= 0) {
-                // No more chunks
-                client.readStringUntil('\n'); // Read trailing \r\n
-                break;
-            }
-
-            // Read the chunk data
-            char buf[256];
-            int bytesRead = 0;
-            while (bytesRead < chunkSize) {
-                int toRead = chunkSize - bytesRead;
-                if (toRead > sizeof(buf)) toRead = sizeof(buf);
-                int n = client.readBytes(buf, toRead);
-                if (n <= 0) break; // Timeout or error
-                body += String(buf).substring(0, n);
-                bytesRead += n;
-            }
-
-            client.readStringUntil('\n'); // Read trailing \r\n
-        }
-    } else {
-        // Read until the connection is closed
-        while (client.connected() || client.available()) {
-            if (client.available()) {
-                char c = client.read();
-                body += c;
-            } else {
-                vTaskDelay(pdMS_TO_TICKS(1));
-            }
-        }
+    headers += line + "\n";
+    if (line.indexOf("Transfer-Encoding: chunked") >= 0)
+    {
+      chunked = true;
     }
+  }
 
-    return body;
+  // 2) Read the body
+  if (chunked)
+  {
+    while (true)
+    {
+      // Read chunk size
+      String sizeLine = client.readStringUntil('\n');
+      sizeLine.trim();
+      int chunkSize = strtol(sizeLine.c_str(), NULL, 16);
+      if (chunkSize <= 0)
+      {
+        // No more chunks
+        client.readStringUntil('\n'); // Read trailing \r\n
+        break;
+      }
+
+      // Read the chunk data
+      char buf[256];
+      int bytesRead = 0;
+      while (bytesRead < chunkSize)
+      {
+        int toRead = chunkSize - bytesRead;
+        if (toRead > sizeof(buf))
+          toRead = sizeof(buf);
+        int n = client.readBytes(buf, toRead);
+        if (n <= 0)
+          break; // Timeout or error
+        body += String(buf).substring(0, n);
+        bytesRead += n;
+      }
+
+      client.readStringUntil('\n'); // Read trailing \r\n
+    }
+  }
+  else
+  {
+    // Read until the connection is closed
+    while (client.connected() || client.available())
+    {
+      if (client.available())
+      {
+        char c = client.read();
+        body += c;
+      }
+      else
+      {
+        vTaskDelay(pdMS_TO_TICKS(1));
+      }
+    }
+  }
+
+  return body;
 }
 
 // Bridging function to parse JSON and extract a value for a given key
-static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) {
-      LOG("js_parse_json_value: Not enough arguments");
-      return js_mkstr(js, "", 0);
+static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+  {
+    LOG("js_parse_json_value: Not enough arguments");
+    return js_mkstr(js, "", 0);
   }
 
   // Retrieve JSON string
   size_t json_len;
-  char* jsonStr_cstr = js_getstr(js, args[0], &json_len);
-  if (!jsonStr_cstr) {
-      LOG("js_parse_json_value: Argument 1 is not a string");
-      return js_mkstr(js, "", 0);
+  char *jsonStr_cstr = js_getstr(js, args[0], &json_len);
+  if (!jsonStr_cstr)
+  {
+    LOG("js_parse_json_value: Argument 1 is not a string");
+    return js_mkstr(js, "", 0);
   }
   String jsonStr(jsonStr_cstr, json_len);
 
@@ -1898,40 +2230,45 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
 
   // Retrieve key string
   size_t key_len;
-  char* key_cstr = js_getstr(js, args[1], &key_len);
-  if (!key_cstr) {
-      LOG("js_parse_json_value: Argument 2 is not a string");
-      return js_mkstr(js, "", 0);
+  char *key_cstr = js_getstr(js, args[1], &key_len);
+  if (!key_cstr)
+  {
+    LOG("js_parse_json_value: Argument 2 is not a string");
+    return js_mkstr(js, "", 0);
   }
   String keyStr(key_cstr, key_len);
 
   LOGF("js_parse_json_value: Retrieved key string (%d bytes): %s\n", key_len, keyStr.c_str());
 
   // Strip surrounding quotes if present
-  if (keyStr.startsWith("\"") && keyStr.endsWith("\"") && keyStr.length() >= 2) {
-      keyStr = keyStr.substring(1, keyStr.length() - 1);
-      LOGF("js_parse_json_value: Stripped quotes from key. New key: '%s'\n", keyStr.c_str());
+  if (keyStr.startsWith("\"") && keyStr.endsWith("\"") && keyStr.length() >= 2)
+  {
+    keyStr = keyStr.substring(1, keyStr.length() - 1);
+    LOGF("js_parse_json_value: Stripped quotes from key. New key: '%s'\n", keyStr.c_str());
   }
 
   // Parse JSON using ArduinoJson
   StaticJsonDocument<1024> doc; // Adjust size as needed
   DeserializationError error = deserializeJson(doc, jsonStr);
-  if (error) {
-      Serial.print("js_parse_json_value: JSON parse failed: ");
-      LOG(error.c_str());
-      return js_mkstr(js, "", 0);
+  if (error)
+  {
+    Serial.print("js_parse_json_value: JSON parse failed: ");
+    LOG(error.c_str());
+    return js_mkstr(js, "", 0);
   }
 
   // Check if JSON is an object
-  if (!doc.is<JsonObject>()) {
-      LOG("js_parse_json_value: Parsed JSON is not an object");
-      return js_mkstr(js, "", 0);
+  if (!doc.is<JsonObject>())
+  {
+    LOG("js_parse_json_value: Parsed JSON is not an object");
+    return js_mkstr(js, "", 0);
   }
 
   // Debugging: Print all key-value pairs
   LOG("js_parse_json_value: Parsed JSON keys and values:");
   JsonObject obj = doc.as<JsonObject>();
-  for (JsonPair kv : obj) {
+  for (JsonPair kv : obj)
+  {
     String valStr = kv.value().as<String>();
     LOGF("Key: %s, Value: %s\n", kv.key().c_str(), valStr.c_str());
   }
@@ -1940,22 +2277,30 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
   JsonVariant value = obj[keyStr.c_str()];
 
   // Check if the key exists
-  if (value.isNull()) {
-      LOGF("js_parse_json_value: Key '%s' not found or null\n", keyStr.c_str());
-      return js_mkstr(js, "", 0);
+  if (value.isNull())
+  {
+    LOGF("js_parse_json_value: Key '%s' not found or null\n", keyStr.c_str());
+    return js_mkstr(js, "", 0);
   }
 
   // Convert the value to string, regardless of its type
   String resultStr;
-  if (value.is<const char*>()) {
-      resultStr = String(value.as<const char*>());
-  } else if (value.is<double>()) {
-      resultStr = String(value.as<double>());
-  } else if (value.is<bool>()) {
-      resultStr = value.as<bool>() ? "true" : "false";
-  } else {
-      // For other types, attempt to stringify
-      resultStr = String(value.as<String>());
+  if (value.is<const char *>())
+  {
+    resultStr = String(value.as<const char *>());
+  }
+  else if (value.is<double>())
+  {
+    resultStr = String(value.as<double>());
+  }
+  else if (value.is<bool>())
+  {
+    resultStr = value.as<bool>() ? "true" : "false";
+  }
+  else
+  {
+    // For other types, attempt to stringify
+    resultStr = String(value.as<String>());
   }
 
   LOGF("js_parse_json_value: Extracted '%s': %s\n", keyStr.c_str(), resultStr.c_str());
@@ -1965,166 +2310,194 @@ static jsval_t js_parse_json_value(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Bridging function to perform string index search
-static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs) {
-    if (nargs < 2) {
-        LOG("str_index_of: Not enough arguments");
-        return js_mknum(-1);
-    }
+static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+  {
+    LOG("str_index_of: Not enough arguments");
+    return js_mknum(-1);
+  }
 
-    // Retrieve haystack string
-    size_t haystack_len;
-    char* haystack_cstr = js_getstr(js, args[0], &haystack_len);
-    if (!haystack_cstr) {
-        LOG("str_index_of: Argument 1 is not a string");
-        return js_mknum(-1);
-    }
-    String haystackStr(haystack_cstr, haystack_len);
+  // Retrieve haystack string
+  size_t haystack_len;
+  char *haystack_cstr = js_getstr(js, args[0], &haystack_len);
+  if (!haystack_cstr)
+  {
+    LOG("str_index_of: Argument 1 is not a string");
+    return js_mknum(-1);
+  }
+  String haystackStr(haystack_cstr, haystack_len);
 
-    // Retrieve needle string
-    size_t needle_len;
-    char* needle_cstr = js_getstr(js, args[1], &needle_len);
-    if (!needle_cstr) {
-        LOG("str_index_of: Argument 2 is not a string");
-        return js_mknum(-1);
-    }
-    String needleStr(needle_cstr, needle_len);
+  // Retrieve needle string
+  size_t needle_len;
+  char *needle_cstr = js_getstr(js, args[1], &needle_len);
+  if (!needle_cstr)
+  {
+    LOG("str_index_of: Argument 2 is not a string");
+    return js_mknum(-1);
+  }
+  String needleStr(needle_cstr, needle_len);
 
-    LOGF("str_index_of: Retrieved haystack ('%s') and needle ('%s')\n", haystackStr.c_str(), needleStr.c_str());
+  LOGF("str_index_of: Retrieved haystack ('%s') and needle ('%s')\n", haystackStr.c_str(), needleStr.c_str());
 
-    // Optional: Strip surrounding quotes if present
-    if (haystackStr.startsWith("\"") && haystackStr.endsWith("\"") && haystackStr.length() >= 2) {
-        haystackStr = haystackStr.substring(1, haystackStr.length() - 1);
-        LOGF("str_index_of: Stripped quotes from haystack. New haystack: '%s'\n", haystackStr.c_str());
-    }
+  // Optional: Strip surrounding quotes if present
+  if (haystackStr.startsWith("\"") && haystackStr.endsWith("\"") && haystackStr.length() >= 2)
+  {
+    haystackStr = haystackStr.substring(1, haystackStr.length() - 1);
+    LOGF("str_index_of: Stripped quotes from haystack. New haystack: '%s'\n", haystackStr.c_str());
+  }
 
-    if (needleStr.startsWith("\"") && needleStr.endsWith("\"") && needleStr.length() >= 2) {
-        needleStr = needleStr.substring(1, needleStr.length() - 1);
-        LOGF("str_index_of: Stripped quotes from needle. New needle: '%s'\n", needleStr.c_str());
-    }
+  if (needleStr.startsWith("\"") && needleStr.endsWith("\"") && needleStr.length() >= 2)
+  {
+    needleStr = needleStr.substring(1, needleStr.length() - 1);
+    LOGF("str_index_of: Stripped quotes from needle. New needle: '%s'\n", needleStr.c_str());
+  }
 
-    LOGF("str_index_of: Searching for '%s' in '%s'\n", needleStr.c_str(), haystackStr.c_str());
+  LOGF("str_index_of: Searching for '%s' in '%s'\n", needleStr.c_str(), haystackStr.c_str());
 
-    int index = haystackStr.indexOf(needleStr);
-    if (index == -1) {
-        LOG("str_index_of: Needle not found");
-        return js_mknum(-1);
-    }
+  int index = haystackStr.indexOf(needleStr);
+  if (index == -1)
+  {
+    LOG("str_index_of: Needle not found");
+    return js_mknum(-1);
+  }
 
-    LOGF("str_index_of: Found at index %d\n", index);
-    return js_mknum(index);
+  LOGF("str_index_of: Found at index %d\n", index);
+  return js_mknum(index);
 }
 
 // Bridging function to perform string substring extraction
-static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
-    if (nargs < 3) {
-        LOG("str_substring: Not enough arguments");
-        return js_mkstr(js, "", 0);
+static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+  {
+    LOG("str_substring: Not enough arguments");
+    return js_mkstr(js, "", 0);
+  }
+
+  // Retrieve string
+  size_t str_len;
+  char *str_cstr = js_getstr(js, args[0], &str_len);
+  if (!str_cstr)
+  {
+    LOG("str_substring: Argument 1 is not a string");
+    return js_mkstr(js, "", 0);
+  }
+  String strStr(str_cstr, str_len);
+
+  // Check if arguments 2 and 3 are numbers
+  if (js_type(args[1]) != JS_NUM || js_type(args[2]) != JS_NUM)
+  {
+    LOG("str_substring: Arguments 2 and 3 must be numbers");
+    return js_mkstr(js, "", 0);
+  }
+
+  // Extract numerical values
+  int start = (int)js_getnum(args[1]);
+  int length = (int)js_getnum(args[2]);
+
+  LOGF("str_substring: Retrieved string ('%s'), start (%d), length (%d)\n", strStr.c_str(), start, length);
+
+  // Optional: Strip surrounding quotes if present
+  if (strStr.startsWith("\"") && strStr.endsWith("\"") && strStr.length() >= 2)
+  {
+    strStr = strStr.substring(1, strStr.length() - 1);
+    LOGF("str_substring: Stripped quotes from string. New string: '%s'\n", strStr.c_str());
+  }
+
+  // Handle negative length (extract until end)
+  if (length < 0)
+  {
+    strStr = strStr.substring(start);
+  }
+  else
+  {
+    // Ensure that start + length does not exceed string length
+    int end = start + length;
+    if (end > strStr.length())
+    {
+      end = strStr.length();
     }
+    strStr = strStr.substring(start, end);
+  }
 
-    // Retrieve string
-    size_t str_len;
-    char* str_cstr = js_getstr(js, args[0], &str_len);
-    if (!str_cstr) {
-        LOG("str_substring: Argument 1 is not a string");
-        return js_mkstr(js, "", 0);
-    }
-    String strStr(str_cstr, str_len);
-
-    // Check if arguments 2 and 3 are numbers
-    if (js_type(args[1]) != JS_NUM || js_type(args[2]) != JS_NUM) {
-        LOG("str_substring: Arguments 2 and 3 must be numbers");
-        return js_mkstr(js, "", 0);
-    }
-
-    // Extract numerical values
-    int start  = (int)js_getnum(args[1]);
-    int length = (int)js_getnum(args[2]);
-
-    LOGF("str_substring: Retrieved string ('%s'), start (%d), length (%d)\n", strStr.c_str(), start, length);
-
-    // Optional: Strip surrounding quotes if present
-    if (strStr.startsWith("\"") && strStr.endsWith("\"") && strStr.length() >= 2) {
-        strStr = strStr.substring(1, strStr.length() - 1);
-        LOGF("str_substring: Stripped quotes from string. New string: '%s'\n", strStr.c_str());
-    }
-
-    // Handle negative length (extract until end)
-    if (length < 0) {
-        strStr = strStr.substring(start);
-    } else {
-        // Ensure that start + length does not exceed string length
-        int end = start + length;
-        if (end > strStr.length()) {
-            end = strStr.length();
-        }
-        strStr = strStr.substring(start, end);
-    }
-
-    LOGF("str_substring: Extracted substring '%s' with length %d\n", strStr.c_str(), length);
-    return js_mkstr(js, strStr.c_str(), strStr.length());
+  LOGF("str_substring: Extracted substring '%s' with length %d\n", strStr.c_str(), length);
+  return js_mkstr(js, strStr.c_str(), strStr.length());
 }
 
-
-static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<1) return js_mkstr(js,"",0);
-  const char* rawUrl = js_str(js, args[0]);
-  if(!rawUrl) return js_mkstr(js, "", 0);
+static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+    return js_mkstr(js, "", 0);
+  const char *rawUrl = js_str(js, args[0]);
+  if (!rawUrl)
+    return js_mkstr(js, "", 0);
 
   // Convert to Arduino String
   String url(rawUrl);
 
   // Strip quotes if needed
-  if(url.startsWith("\"") && url.endsWith("\"")) {
-    url.remove(0,1);
-    url.remove(url.length()-1,1);
+  if (url.startsWith("\"") && url.endsWith("\""))
+  {
+    url.remove(0, 1);
+    url.remove(url.length() - 1, 1);
   }
 
   LOG("js_http_get => Using SSL for: " + url);
 
   // 1) Remove "https://" prefix (assuming always https)
   const String HTTPS_PREFIX = "https://";
-  if(url.startsWith(HTTPS_PREFIX)) {
+  if (url.startsWith(HTTPS_PREFIX))
+  {
     url.remove(0, HTTPS_PREFIX.length());
   }
 
   // 2) Extract host + path
   int slashPos = url.indexOf('/');
   String host, path;
-  if(slashPos < 0) {
+  if (slashPos < 0)
+  {
     host = url;
     path = "/";
-  } else {
+  }
+  else
+  {
     host = url.substring(0, slashPos);
     path = url.substring(slashPos);
   }
-  
+
   LOG("Parsed host='" + host + "', path='" + path + "'");
 
   // 3) WiFiClientSecure
   WiFiClientSecure client;
-  if (g_httpCAcert) {
+  if (g_httpCAcert)
+  {
     // If user loaded a cert from SD, use it
     client.setCACert(g_httpCAcert);
     LOG("Using user-supplied CA cert (secure)");
-  } else {
+  }
+  else
+  {
     // Otherwise, skip validation
     client.setInsecure();
     LOG("No CA cert => setInsecure() (unsecure)");
   }
 
   LOGF("Connecting to '%s':443...\n", host.c_str());
-  if(!client.connect(host.c_str(), 443)) {
+  if (!client.connect(host.c_str(), 443))
+  {
     LOG("Connection failed!");
     return js_mkstr(js, "", 0);
   }
   LOG("Connected => sending GET request");
-  
+
   // 4) Construct the GET request + custom headers
   client.print(String("GET ") + path + " HTTP/1.1\r\n");
   client.print(String("Host: ") + host + "\r\n");
-  
+
   // Send any stored headers from g_http_headers
-  for (auto &hdr : g_http_headers) {
+  for (auto &hdr : g_http_headers)
+  {
     // e.g. "Authorization: Bearer 12345\r\n"
     client.print(hdr.first);
     client.print(": ");
@@ -2137,49 +2510,58 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
   // 5) Read full response
   String response = readHttpResponseBody(client);
   client.stop();
-  
+
   LOGF("Done reading. response size=%d\n", response.length());
   LOG("Full response content:\n<<<");
-  LOG(response);  // <--- add this!
+  LOG(response); // <--- add this!
   LOG(">>> End of response");
-  
+
   // Return entire raw HTTP response
   return js_mkstr(js, response.c_str(), response.length());
 }
 
-static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 2) return js_mkstr(js,"",0);
-  const char* rawUrl = js_str(js, args[0]);
-  const char* body   = js_str(js, args[1]);
-  if(!rawUrl || !body) return js_mkstr(js, "", 0);
+static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mkstr(js, "", 0);
+  const char *rawUrl = js_str(js, args[0]);
+  const char *body = js_str(js, args[1]);
+  if (!rawUrl || !body)
+    return js_mkstr(js, "", 0);
 
   // Convert to Arduino Strings for easy manipulation
   String url(rawUrl);
   String jsonBody(body);
 
   // Strip quotes if any
-  if(url.startsWith("\"") && url.endsWith("\"")) {
-    url.remove(0,1);
-    url.remove(url.length()-1,1);
+  if (url.startsWith("\"") && url.endsWith("\""))
+  {
+    url.remove(0, 1);
+    url.remove(url.length() - 1, 1);
   }
-  if(jsonBody.startsWith("\"") && jsonBody.endsWith("\"")) {
-    jsonBody.remove(0,1);
-    jsonBody.remove(jsonBody.length()-1,1);
+  if (jsonBody.startsWith("\"") && jsonBody.endsWith("\""))
+  {
+    jsonBody.remove(0, 1);
+    jsonBody.remove(jsonBody.length() - 1, 1);
   }
 
   // We'll assume "https://"
   const String HTTPS_PREFIX = "https://";
-  if(url.startsWith(HTTPS_PREFIX)) {
+  if (url.startsWith(HTTPS_PREFIX))
+  {
     url.remove(0, HTTPS_PREFIX.length());
   }
 
   // Find first slash => host + path
   int slashPos = url.indexOf('/');
   String host, path;
-  if(slashPos < 0) {
+  if (slashPos < 0)
+  {
     host = url;
     path = "/";
-  } else {
+  }
+  else
+  {
     host = url.substring(0, slashPos);
     path = url.substring(slashPos);
   }
@@ -2191,17 +2573,21 @@ static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
 
   // WiFiClientSecure
   WiFiClientSecure client;
-  if (g_httpCAcert) {
+  if (g_httpCAcert)
+  {
     client.setCACert(g_httpCAcert);
     LOG("Using user-supplied CA cert (POST)");
-  } else {
+  }
+  else
+  {
     client.setInsecure();
     LOG("No CA => setInsecure() (POST)");
   }
 
   // Connect on port 443
   LOGF("Connecting to '%s':443...\n", host.c_str());
-  if(!client.connect(host.c_str(), 443)) {
+  if (!client.connect(host.c_str(), 443))
+  {
     LOG("Connection failed (POST)!");
     return js_mkstr(js, "", 0);
   }
@@ -2232,39 +2618,47 @@ static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
   // Read entire response
   String response = readHttpResponseBody(client);
   client.stop();
-  
+
   LOGF("Done POST. response size=%d\n", response.length());
-  
+
   // Return entire raw HTTP response
   return js_mkstr(js, response.c_str(), response.length());
 }
 
-static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 1) return js_mkstr(js,"",0);
-  const char* rawUrl = js_str(js, args[0]);
-  if(!rawUrl) return js_mkstr(js, "", 0);
+static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+    return js_mkstr(js, "", 0);
+  const char *rawUrl = js_str(js, args[0]);
+  if (!rawUrl)
+    return js_mkstr(js, "", 0);
 
   String url(rawUrl);
 
   // Remove quotes if any
-  if(url.startsWith("\"") && url.endsWith("\"")) {
-    url.remove(0,1);
-    url.remove(url.length()-1,1);
+  if (url.startsWith("\"") && url.endsWith("\""))
+  {
+    url.remove(0, 1);
+    url.remove(url.length() - 1, 1);
   }
 
   // Assume https://
   const String HTTPS_PREFIX = "https://";
-  if(url.startsWith(HTTPS_PREFIX)) {
+  if (url.startsWith(HTTPS_PREFIX))
+  {
     url.remove(0, HTTPS_PREFIX.length());
   }
 
   // Split host/path
   int slashPos = url.indexOf('/');
   String host, path;
-  if(slashPos < 0) {
+  if (slashPos < 0)
+  {
     host = url;
     path = "/";
-  } else {
+  }
+  else
+  {
     host = url.substring(0, slashPos);
     path = url.substring(slashPos);
   }
@@ -2275,17 +2669,21 @@ static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
 
   // WiFiClientSecure
   WiFiClientSecure client;
-  if (g_httpCAcert) {
+  if (g_httpCAcert)
+  {
     client.setCACert(g_httpCAcert);
     LOG("Using user-supplied CA cert (DELETE)");
-  } else {
+  }
+  else
+  {
     client.setInsecure();
     LOG("No CA => setInsecure() (DELETE)");
   }
 
   // Connect
   LOGF("Connecting to '%s':443...\n", host.c_str());
-  if(!client.connect(host.c_str(), 443)) {
+  if (!client.connect(host.c_str(), 443))
+  {
     LOG("Connection failed (DELETE)!");
     return js_mkstr(js, "", 0);
   }
@@ -2306,31 +2704,36 @@ static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
   // read entire response
   String body = readHttpResponseBody(client);
   client.stop();
-  
+
   LOGF("Done DELETE. response size=%d\n", body.length());
-  
+
   // Return entire raw HTTP response
   return js_mkstr(js, body.c_str(), body.length());
 }
 
-static jsval_t js_http_set_header(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mkfalse();
+static jsval_t js_http_set_header(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mkfalse();
 
-  const char* key   = js_str(js, args[0]);
-  const char* value = js_str(js, args[1]);
-  if (!key || !value) return js_mkfalse();
+  const char *key = js_str(js, args[0]);
+  const char *value = js_str(js, args[1]);
+  if (!key || !value)
+    return js_mkfalse();
 
   // Convert to Arduino Strings for easy storage
   String k(key), v(value);
 
   // Optionally strip leading/trailing quotes if needed
-  if(k.startsWith("\"") && k.endsWith("\"")) {
-    k.remove(0,1);
-    k.remove(k.length()-1,1);
+  if (k.startsWith("\"") && k.endsWith("\""))
+  {
+    k.remove(0, 1);
+    k.remove(k.length() - 1, 1);
   }
-  if(v.startsWith("\"") && v.endsWith("\"")) {
-    v.remove(0,1);
-    v.remove(v.length()-1,1);
+  if (v.startsWith("\"") && v.endsWith("\""))
+  {
+    v.remove(0, 1);
+    v.remove(v.length() - 1, 1);
   }
 
   // Append to our global vector
@@ -2339,45 +2742,54 @@ static jsval_t js_http_set_header(struct js *js, jsval_t *args, int nargs) {
   return js_mktrue();
 }
 
-static jsval_t js_http_clear_headers(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_http_clear_headers(struct js *js, jsval_t *args, int nargs)
+{
   g_http_headers.clear();
   return js_mktrue();
 }
 
-static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 1) return js_mkfalse();  
-  const char* rawPath = js_str(js, args[0]);
-  if(!rawPath) return js_mkfalse();
+static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+    return js_mkfalse();
+  const char *rawPath = js_str(js, args[0]);
+  if (!rawPath)
+    return js_mkfalse();
 
   // Strip quotes if present
   String path(rawPath);
-  if(path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length()-1);
+  if (path.startsWith("\"") && path.endsWith("\""))
+  {
+    path = path.substring(1, path.length() - 1);
   }
 
   // Open file from SD
   File f = SD_MMC.open(path, FILE_READ);
-  if(!f) {
+  if (!f)
+  {
     LOGF("Failed to open CA cert file: %s\n", path.c_str());
     return js_mkfalse();
   }
 
   size_t size = f.size();
-  if(size == 0) {
+  if (size == 0)
+  {
     LOGF("CA file is empty: %s\n", path.c_str());
     f.close();
     return js_mkfalse();
   }
 
   // Reallocate or free old buffer
-  if(g_httpCAcert) {
+  if (g_httpCAcert)
+  {
     free(g_httpCAcert);
     g_httpCAcert = nullptr;
   }
 
   // Allocate enough bytes (include space for trailing '\0')
-  g_httpCAcert = (char*)malloc(size + 1);
-  if(!g_httpCAcert) {
+  g_httpCAcert = (char *)malloc(size + 1);
+  if (!g_httpCAcert)
+  {
     LOG("Not enough RAM to store CA cert!");
     f.close();
     return js_mkfalse();
@@ -2386,7 +2798,7 @@ static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nar
   // Read the file
   size_t bytesRead = f.readBytes(g_httpCAcert, size);
   f.close();
-  g_httpCAcert[bytesRead] = '\0';  // Null-terminate
+  g_httpCAcert[bytesRead] = '\0'; // Null-terminate
 
   LOGF("Loaded CA cert (%u bytes) from SD file: %s\n", (unsigned)bytesRead, path.c_str());
   return js_mktrue();
@@ -2394,13 +2806,17 @@ static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nar
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~ 4) Extended SD ops ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // We already have sd_list_dir, sd_read_file, sd_write_file. Add file delete:
-static jsval_t js_sd_delete_file(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<1) return js_mkfalse();
-  const char* path = js_str(js, args[0]);
-  if(!path) return js_mkfalse();
+static jsval_t js_sd_delete_file(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+    return js_mkfalse();
+  const char *path = js_str(js, args[0]);
+  if (!path)
+    return js_mkfalse();
 
   String fullPath = String(path);
-  if(SD_MMC.exists(fullPath)) {
+  if (SD_MMC.exists(fullPath))
+  {
     bool ok = SD_MMC.remove(fullPath);
     return ok ? js_mktrue() : js_mkfalse();
   }
@@ -2414,35 +2830,43 @@ static jsval_t js_sd_delete_file(struct js *js, jsval_t *args, int nargs) {
 //   if( ble_is_connected() ) { ... }
 
 // Callbacks for NimBLE
-class MyServerCallbacks : public NimBLEServerCallbacks {
- public:
-  void onConnect(NimBLEServer* pServer) {
+class MyServerCallbacks : public NimBLEServerCallbacks
+{
+public:
+  void onConnect(NimBLEServer *pServer)
+  {
     g_bleConnected = true;
     LOG("BLE device connected");
   }
 
-  void onDisconnect(NimBLEServer* pServer) {
+  void onDisconnect(NimBLEServer *pServer)
+  {
     g_bleConnected = false;
     LOG("BLE device disconnected");
     pServer->startAdvertising();
   }
 };
 
-class MyCharCallbacks : public NimBLECharacteristicCallbacks {
- public:
-  void onWrite(NimBLECharacteristic* pCharacteristic) {
+class MyCharCallbacks : public NimBLECharacteristicCallbacks
+{
+public:
+  void onWrite(NimBLECharacteristic *pCharacteristic)
+  {
     std::string rxData = pCharacteristic->getValue();
     LOGF("BLE Received: %s\n", rxData.c_str());
   }
 };
 
 // ble_init(devName, serviceUUID, charUUID)
-static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 3) return js_mkfalse();
-  const char* devName  = js_str(js, args[0]);
-  const char* svcUUID  = js_str(js, args[1]);
-  const char* charUUID = js_str(js, args[2]);
-  if(!devName || !svcUUID || !charUUID) return js_mkfalse();
+static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 3)
+    return js_mkfalse();
+  const char *devName = js_str(js, args[0]);
+  const char *svcUUID = js_str(js, args[1]);
+  const char *charUUID = js_str(js, args[2]);
+  if (!devName || !svcUUID || !charUUID)
+    return js_mkfalse();
 
   // Initialize NimBLE
   NimBLEDevice::init(devName);
@@ -2452,13 +2876,12 @@ static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs) {
   g_bleServer->setCallbacks(new MyServerCallbacks());
 
   // Create a BLE service
-  NimBLEService* pService = g_bleServer->createService(svcUUID);
+  NimBLEService *pService = g_bleServer->createService(svcUUID);
 
   // Create a BLE Characteristic
   g_bleChar = pService->createCharacteristic(
       charUUID,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
-  );
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   g_bleChar->setCallbacks(new MyCharCallbacks());
 
   // Start the service
@@ -2471,16 +2894,21 @@ static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs) {
 }
 
 // ble_is_connected() => bool
-static jsval_t js_ble_is_connected(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_ble_is_connected(struct js *js, jsval_t *args, int nargs)
+{
   return g_bleConnected ? js_mktrue() : js_mkfalse();
 }
 
 // ble_write(str)
-static jsval_t js_ble_write(struct js *js, jsval_t *args, int nargs) {
-  if(!g_bleChar) return js_mkfalse();
-  if(nargs < 1) return js_mkfalse();
-  const char* data = js_str(js, args[0]);
-  if(!data) return js_mkfalse();
+static jsval_t js_ble_write(struct js *js, jsval_t *args, int nargs)
+{
+  if (!g_bleChar)
+    return js_mkfalse();
+  if (nargs < 1)
+    return js_mkfalse();
+  const char *data = js_str(js, args[0]);
+  if (!data)
+    return js_mkfalse();
 
   g_bleChar->setValue(data);
   g_bleChar->notify();
@@ -2488,17 +2916,20 @@ static jsval_t js_ble_write(struct js *js, jsval_t *args, int nargs) {
 }
 
 // MQTT message callback from PubSubClient
-void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+void onMqttMessage(char *topic, byte *payload, unsigned int length)
+{
   LOGF("[MQTT] Message arrived on topic '%s'\n", topic);
 
   // If we have a non-empty callback name, build a snippet and eval
-  if (g_mqttCallbackName[0] != '\0') {
+  if (g_mqttCallbackName[0] != '\0')
+  {
     // Convert char* topic and payload to a C++ string
     String topicStr(topic);
     String msgStr;
     msgStr.reserve(length);
-    for (unsigned int i = 0; i < length; i++) {
-      msgStr += (char) payload[i];
+    for (unsigned int i = 0; i < length; i++)
+    {
+      msgStr += (char)payload[i];
     }
 
     // Build snippet: myCallback('topicString','payloadString')
@@ -2515,7 +2946,8 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     // Evaluate snippet
     jsval_t res = js_eval(js, snippet, strlen(snippet));
     // Optionally check if res is error
-    if (js_type(res) == JS_ERR) {
+    if (js_type(res) == JS_ERR)
+    {
       Serial.print("[MQTT] Callback error: ");
       LOG(js_str(js, res));
     }
@@ -2527,12 +2959,15 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 //------------------------------------------
 
 // mqtt_init(broker, port)
-static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 2) return js_mkfalse();
-  const char* broker = js_str(js, args[0]);
-  int port           = (int)js_getnum(args[1]);
+static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mkfalse();
+  const char *broker = js_str(js, args[0]);
+  int port = (int)js_getnum(args[1]);
 
-  if(!broker || port <= 0) return js_mkfalse();
+  if (!broker || port <= 0)
+    return js_mkfalse();
 
   g_mqttClient.setServer(broker, port);
   g_mqttClient.setCallback(onMqttMessage);
@@ -2542,44 +2977,58 @@ static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
 }
 
 // mqtt_connect(clientID, user, pass)
-static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 1) return js_mkfalse();
-  const char* clientID = js_str(js, args[0]);
-  const char* user     = (nargs >= 2) ? js_str(js, args[1]) : nullptr;
-  const char* pass     = (nargs >= 3) ? js_str(js, args[2]) : nullptr;
+static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+    return js_mkfalse();
+  const char *clientID = js_str(js, args[0]);
+  const char *user = (nargs >= 2) ? js_str(js, args[1]) : nullptr;
+  const char *pass = (nargs >= 3) ? js_str(js, args[2]) : nullptr;
 
   bool ok = false;
-  if(user && pass && strlen(user) && strlen(pass)) {
+  if (user && pass && strlen(user) && strlen(pass))
+  {
     ok = g_mqttClient.connect(clientID, user, pass);
-  } else {
+  }
+  else
+  {
     ok = g_mqttClient.connect(clientID);
   }
 
-  if(ok) {
+  if (ok)
+  {
     LOG("[MQTT] Connected successfully");
     return js_mktrue();
-  } else {
+  }
+  else
+  {
     LOGF("[MQTT] Connect failed, rc=%d\n", g_mqttClient.state());
     return js_mkfalse();
   }
 }
 
 // mqtt_publish(topic, message)
-static jsval_t js_mqtt_publish(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 2) return js_mkfalse();
-  const char* topic   = js_str(js, args[0]);
-  const char* message = js_str(js, args[1]);
-  if(!topic || !message) return js_mkfalse();
+static jsval_t js_mqtt_publish(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 2)
+    return js_mkfalse();
+  const char *topic = js_str(js, args[0]);
+  const char *message = js_str(js, args[1]);
+  if (!topic || !message)
+    return js_mkfalse();
 
   bool ok = g_mqttClient.publish(topic, message);
   return ok ? js_mktrue() : js_mkfalse();
 }
 
 // mqtt_subscribe(topic)
-static jsval_t js_mqtt_subscribe(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 1) return js_mkfalse();
-  const char* topic = js_str(js, args[0]);
-  if(!topic) return js_mkfalse();
+static jsval_t js_mqtt_subscribe(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+    return js_mkfalse();
+  const char *topic = js_str(js, args[0]);
+  if (!topic)
+    return js_mkfalse();
 
   bool ok = g_mqttClient.subscribe(topic);
   LOGF("[MQTT] Subscribed to '%s'? => %s\n", topic, ok ? "OK" : "FAIL");
@@ -2587,25 +3036,29 @@ static jsval_t js_mqtt_subscribe(struct js *js, jsval_t *args, int nargs) {
 }
 
 // mqtt_loop()
-static jsval_t js_mqtt_loop(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_mqtt_loop(struct js *js, jsval_t *args, int nargs)
+{
   g_mqttClient.loop();
   return js_mknull();
 }
 
 // mqtt_on_message("myCallback")
-static jsval_t js_mqtt_on_message(struct js *js, jsval_t *args, int nargs) {
-  if(nargs < 1) return js_mkfalse();
+static jsval_t js_mqtt_on_message(struct js *js, jsval_t *args, int nargs)
+{
+  if (nargs < 1)
+    return js_mkfalse();
 
   // Check if user passed a string naming the function
   size_t len = 0;
   char *str = js_getstr(js, args[0], &len);
-  if(!str || len == 0 || len >= sizeof(g_mqttCallbackName)) {
+  if (!str || len == 0 || len >= sizeof(g_mqttCallbackName))
+  {
     return js_mkfalse();
   }
 
   // Copy that name to our global
   memset(g_mqttCallbackName, 0, sizeof(g_mqttCallbackName));
-  memcpy(g_mqttCallbackName, str, len);  // not zero-terminated by default
+  memcpy(g_mqttCallbackName, str, len); // not zero-terminated by default
   g_mqttCallbackName[len] = '\0';
 
   Serial.print("[MQTT] JS callback name set to: ");
@@ -2614,7 +3067,8 @@ static jsval_t js_mqtt_on_message(struct js *js, jsval_t *args, int nargs) {
 }
 
 // This function tries to connect to your MQTT broker
-bool doMqttConnect() {
+bool doMqttConnect()
+{
   // Example: If you stored broker/port in global variables or from prior init:
   // extern const char* g_mqttBroker;
   // extern int         g_mqttPort;
@@ -2624,7 +3078,8 @@ bool doMqttConnect() {
 
   // Attempt to connect with e.g. a default clientID (or user/pass if needed)
   bool ok = g_mqttClient.connect("WebScreenClient");
-  if(!ok) {
+  if (!ok)
+  {
     // Print the reason code: g_mqttClient.state()
     LOGF("[MQTT] Connect fail, rc=%d\n", g_mqttClient.state());
     return false;
@@ -2638,7 +3093,8 @@ bool doMqttConnect() {
 }
 
 // This function tries to reconnect Wi-Fi if Wi-Fi is down
-bool doWiFiReconnect() {
+bool doWiFiReconnect()
+{
   LOG("[WiFi] Checking connection...");
 
   // If you have an SSID/pass stored
@@ -2648,8 +3104,10 @@ bool doWiFiReconnect() {
 
   // We'll do a quick wait for up to ~3 seconds, just for example:
   // (Tune to your needs)
-  for (int i = 0; i < 15; i++) {
-    if (WiFi.status() == WL_CONNECTED) {
+  for (int i = 0; i < 15; i++)
+  {
+    if (WiFi.status() == WL_CONNECTED)
+    {
       Serial.print("[WiFi] Reconnected. IP=");
       LOG(WiFi.localIP());
       return true;
@@ -2661,12 +3119,15 @@ bool doWiFiReconnect() {
 }
 
 // Call this regularly to maintain Wi-Fi + MQTT
-void wifiMqttMaintainLoop() {
+void wifiMqttMaintainLoop()
+{
   // 1) Check if Wi-Fi is alive
-  if (WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED)
+  {
     unsigned long now = millis();
     // Try reconnect every 10 seconds
-    if(now - lastWiFiReconnectAttempt > 10000) {
+    if (now - lastWiFiReconnectAttempt > 10000)
+    {
       lastWiFiReconnectAttempt = now;
       LOG("[WiFi] Connection lost, attempting recon...");
       doWiFiReconnect();
@@ -2676,13 +3137,16 @@ void wifiMqttMaintainLoop() {
   }
 
   // 2) If Wi-Fi is up, handle MQTT
-  if(!g_mqttClient.connected()) {
+  if (!g_mqttClient.connected())
+  {
     unsigned long now = millis();
-    if(now - lastMqttReconnectAttempt > 10000) {
+    if (now - lastMqttReconnectAttempt > 10000)
+    {
       lastMqttReconnectAttempt = now;
       LOG("[MQTT] Lost MQTT, trying reconnect...");
-      if(doMqttConnect()) {
-        lastMqttReconnectAttempt = 0; 
+      if (doMqttConnect())
+      {
+        lastMqttReconnectAttempt = 0;
       }
     }
   }
@@ -2694,132 +3158,134 @@ void wifiMqttMaintainLoop() {
 /******************************************************************************
  * I) Register All JS Functions
  ******************************************************************************/
-struct JsBinding {
-  const char* name;
+struct JsBinding
+{
+  const char *name;
   // note: struct js* here, not "js*"
-  jsval_t (*fn)(struct js*, jsval_t*, int);
+  jsval_t (*fn)(struct js *, jsval_t *, int);
 };
 
 static constexpr JsBinding kBindings[] = {
-  { "print",        js_print   },
-  { "wifi_connect", js_wifi_connect   },
-  { "wifi_status",  js_wifi_status   },
-  { "wifi_get_ip",  js_wifi_get_ip   },
-  { "delay",        js_delay   },
-  { "str_index_of",   js_str_index_of   },
-  { "str_substring",  js_str_substring   },
-  { "http_get",    js_http_get   },
-  { "http_post",   js_http_post   },
-  { "http_delete", js_http_delete   },
-  { "http_set_ca_cert_from_sd", js_http_set_ca_cert_from_sd   },
-  { "parse_json_value", js_parse_json_value   },
-  { "http_set_header", js_http_set_header   },
-  { "http_clear_headers", js_http_clear_headers   },
-  { "sd_read_file", js_sd_read_file   },
-  { "sd_write_file",js_sd_write_file   },
-  { "sd_list_dir",  js_sd_list_dir   },
-  { "sd_delete_file", js_sd_delete_file   },
-  { "ble_init",         js_ble_init   },
-  { "ble_is_connected", js_ble_is_connected   },
-  { "ble_write",        js_ble_write   },
-  { "show_gif_from_sd", js_show_gif_from_sd   },
-  { "draw_label",   js_lvgl_draw_label   },
-  { "draw_rect",    js_lvgl_draw_rect   },
-  { "show_image",   js_lvgl_show_image   },
-  { "create_label", js_create_label   },
-  { "label_set_text", js_label_set_text   },
-  { "create_image",          js_create_image   },
-  { "create_image_from_ram", js_create_image_from_ram   },
-  { "rotate_obj",            js_rotate_obj   },
-  { "move_obj",              js_move_obj   },
-  { "animate_obj",           js_animate_obj   },
-  { "create_style",              js_create_style   },
-  { "obj_add_style",             js_obj_add_style   },
-  { "style_set_radius",          js_style_set_radius   },
-  { "style_set_bg_opa",          js_style_set_bg_opa   },
-  { "style_set_bg_color",        js_style_set_bg_color   },
-  { "style_set_border_color",    js_style_set_border_color   },
-  { "style_set_border_width",    js_style_set_border_width   },
-  { "style_set_border_opa",      js_style_set_border_opa   },
-  { "style_set_border_side",     js_style_set_border_side   },
-  { "style_set_outline_width",   js_style_set_outline_width   },
-  { "style_set_outline_color",   js_style_set_outline_color   },
-  { "style_set_outline_pad",     js_style_set_outline_pad   },
-  { "style_set_shadow_width",    js_style_set_shadow_width   },
-  { "style_set_shadow_color",    js_style_set_shadow_color   },
-  { "style_set_shadow_ofs_x",    js_style_set_shadow_ofs_x   },
-  { "style_set_shadow_ofs_y",    js_style_set_shadow_ofs_y   },
-  { "style_set_img_recolor",     js_style_set_img_recolor   },
-  { "style_set_img_recolor_opa", js_style_set_img_recolor_opa   },
-  { "style_set_transform_angle",  js_style_set_transform_angle   },
-  { "style_set_text_color",      js_style_set_text_color   },
-  { "style_set_text_letter_space", js_style_set_text_letter_space   },
-  { "style_set_text_line_space", js_style_set_text_line_space   },
-  { "style_set_text_font",       js_style_set_text_font   },
-  { "style_set_text_align",      js_style_set_text_align   },
-  { "style_set_text_decor",      js_style_set_text_decor   },
-  { "style_set_line_color",      js_style_set_line_color   },
-  { "style_set_line_width",      js_style_set_line_width   },
-  { "style_set_line_rounded",    js_style_set_line_rounded   },
-  { "style_set_pad_all",         js_style_set_pad_all   },
-  { "style_set_pad_left",        js_style_set_pad_left   },
-  { "style_set_pad_right",       js_style_set_pad_right   },
-  { "style_set_pad_top",         js_style_set_pad_top   },
-  { "style_set_pad_bottom",      js_style_set_pad_bottom   },
-  { "style_set_pad_ver",         js_style_set_pad_ver   },
-  { "style_set_pad_hor",         js_style_set_pad_hor   },
-  { "style_set_width",           js_style_set_width   },
-  { "style_set_height",          js_style_set_height   },
-  { "style_set_x",               js_style_set_x   },
-  { "style_set_y",               js_style_set_y   },
-  { "obj_set_size",        js_obj_set_size   },
-  { "obj_align",           js_obj_align   },
-  { "obj_set_scroll_snap_x",   js_obj_set_scroll_snap_x   },
-  { "obj_set_scroll_snap_y",   js_obj_set_scroll_snap_y   },
-  { "obj_add_flag",            js_obj_add_flag   },
-  { "obj_clear_flag",          js_obj_clear_flag   },
-  { "obj_set_scroll_dir",      js_obj_set_scroll_dir   },
-  { "obj_set_scrollbar_mode",  js_obj_set_scrollbar_mode   },
-  { "obj_set_flex_flow",       js_obj_set_flex_flow   },
-  { "obj_set_flex_align",      js_obj_set_flex_align   },
-  { "obj_set_style_clip_corner", js_obj_set_style_clip_corner   },
-  { "obj_set_style_base_dir",  js_obj_set_style_base_dir   },
-  { "lv_meter_create",                   js_lv_meter_create   },
-  { "lv_meter_add_scale",                js_lv_meter_add_scale   },
-  { "lv_meter_set_scale_ticks",          js_lv_meter_set_scale_ticks   },
-  { "lv_meter_set_scale_major_ticks",    js_lv_meter_set_scale_major_ticks   },
-  { "lv_meter_set_scale_range",          js_lv_meter_set_scale_range   },
-  { "lv_meter_add_arc",                  js_lv_meter_add_arc   },
-  { "lv_meter_add_scale_lines",          js_lv_meter_add_scale_lines   },
-  { "lv_meter_add_needle_line",          js_lv_meter_add_needle_line   },
-  { "lv_meter_add_needle_img",           js_lv_meter_add_needle_img   },
-  { "lv_meter_set_indicator_start_value",js_lv_meter_set_indicator_start_value   },
-  { "lv_meter_set_indicator_end_value",  js_lv_meter_set_indicator_end_value   },
-  { "lv_meter_set_indicator_value",      js_lv_meter_set_indicator_value   },
-  { "lv_msgbox_create",            js_lv_msgbox_create   },
-  { "lv_msgbox_get_active_btn_text", js_lv_msgbox_get_active_btn_text   },
-  { "lv_spangroup_create",      js_lv_spangroup_create   },
-  { "lv_spangroup_set_align",   js_lv_spangroup_set_align   },
-  { "lv_spangroup_set_overflow",js_lv_spangroup_set_overflow   },
-  { "lv_spangroup_set_indent",  js_lv_spangroup_set_indent   },
-  { "lv_spangroup_set_mode",    js_lv_spangroup_set_mode   },
-  { "lv_spangroup_new_span",    js_lv_spangroup_new_span   },
-  { "lv_span_set_text",         js_lv_span_set_text   },
-  { "lv_span_set_text_static",  js_lv_span_set_text_static   },
-  { "lv_spangroup_refr_mode",   js_lv_spangroup_refr_mode   },
-  { "lv_line_create",          js_lv_line_create   },
-  { "lv_line_set_points",      js_lv_line_set_points   },
-  { "mqtt_init",       js_mqtt_init   },
-  { "mqtt_connect",    js_mqtt_connect   },
-  { "mqtt_publish",    js_mqtt_publish   },
-  { "mqtt_subscribe",  js_mqtt_subscribe   },
-  { "mqtt_loop",       js_mqtt_loop   },
-  { "mqtt_on_message", js_mqtt_on_message   }
-};
+    {"print", js_print},
+    {"wifi_connect", js_wifi_connect},
+    {"wifi_status", js_wifi_status},
+    {"wifi_get_ip", js_wifi_get_ip},
+    {"delay", js_delay},
+    {"str_index_of", js_str_index_of},
+    {"str_substring", js_str_substring},
+    {"http_get", js_http_get},
+    {"http_post", js_http_post},
+    {"http_delete", js_http_delete},
+    {"http_set_ca_cert_from_sd", js_http_set_ca_cert_from_sd},
+    {"parse_json_value", js_parse_json_value},
+    {"http_set_header", js_http_set_header},
+    {"http_clear_headers", js_http_clear_headers},
+    {"sd_read_file", js_sd_read_file},
+    {"sd_write_file", js_sd_write_file},
+    {"sd_list_dir", js_sd_list_dir},
+    {"sd_delete_file", js_sd_delete_file},
+    {"ble_init", js_ble_init},
+    {"ble_is_connected", js_ble_is_connected},
+    {"ble_write", js_ble_write},
+    {"show_gif_from_sd", js_show_gif_from_sd},
+    {"draw_label", js_lvgl_draw_label},
+    {"draw_rect", js_lvgl_draw_rect},
+    {"show_image", js_lvgl_show_image},
+    {"create_label", js_create_label},
+    {"label_set_text", js_label_set_text},
+    {"create_image", js_create_image},
+    {"create_image_from_ram", js_create_image_from_ram},
+    {"rotate_obj", js_rotate_obj},
+    {"move_obj", js_move_obj},
+    {"animate_obj", js_animate_obj},
+    {"create_style", js_create_style},
+    {"obj_add_style", js_obj_add_style},
+    {"style_set_radius", js_style_set_radius},
+    {"style_set_bg_opa", js_style_set_bg_opa},
+    {"style_set_bg_color", js_style_set_bg_color},
+    {"style_set_border_color", js_style_set_border_color},
+    {"style_set_border_width", js_style_set_border_width},
+    {"style_set_border_opa", js_style_set_border_opa},
+    {"style_set_border_side", js_style_set_border_side},
+    {"style_set_outline_width", js_style_set_outline_width},
+    {"style_set_outline_color", js_style_set_outline_color},
+    {"style_set_outline_pad", js_style_set_outline_pad},
+    {"style_set_shadow_width", js_style_set_shadow_width},
+    {"style_set_shadow_color", js_style_set_shadow_color},
+    {"style_set_shadow_ofs_x", js_style_set_shadow_ofs_x},
+    {"style_set_shadow_ofs_y", js_style_set_shadow_ofs_y},
+    {"style_set_img_recolor", js_style_set_img_recolor},
+    {"style_set_img_recolor_opa", js_style_set_img_recolor_opa},
+    {"style_set_transform_angle", js_style_set_transform_angle},
+    {"style_set_text_color", js_style_set_text_color},
+    {"style_set_text_letter_space", js_style_set_text_letter_space},
+    {"style_set_text_line_space", js_style_set_text_line_space},
+    {"style_set_text_font", js_style_set_text_font},
+    {"style_set_text_align", js_style_set_text_align},
+    {"style_set_text_decor", js_style_set_text_decor},
+    {"style_set_line_color", js_style_set_line_color},
+    {"style_set_line_width", js_style_set_line_width},
+    {"style_set_line_rounded", js_style_set_line_rounded},
+    {"style_set_pad_all", js_style_set_pad_all},
+    {"style_set_pad_left", js_style_set_pad_left},
+    {"style_set_pad_right", js_style_set_pad_right},
+    {"style_set_pad_top", js_style_set_pad_top},
+    {"style_set_pad_bottom", js_style_set_pad_bottom},
+    {"style_set_pad_ver", js_style_set_pad_ver},
+    {"style_set_pad_hor", js_style_set_pad_hor},
+    {"style_set_width", js_style_set_width},
+    {"style_set_height", js_style_set_height},
+    {"style_set_x", js_style_set_x},
+    {"style_set_y", js_style_set_y},
+    {"obj_set_size", js_obj_set_size},
+    {"obj_align", js_obj_align},
+    {"obj_set_scroll_snap_x", js_obj_set_scroll_snap_x},
+    {"obj_set_scroll_snap_y", js_obj_set_scroll_snap_y},
+    {"obj_add_flag", js_obj_add_flag},
+    {"obj_clear_flag", js_obj_clear_flag},
+    {"obj_set_scroll_dir", js_obj_set_scroll_dir},
+    {"obj_set_scrollbar_mode", js_obj_set_scrollbar_mode},
+    {"obj_set_flex_flow", js_obj_set_flex_flow},
+    {"obj_set_flex_align", js_obj_set_flex_align},
+    {"obj_set_style_clip_corner", js_obj_set_style_clip_corner},
+    {"obj_set_style_base_dir", js_obj_set_style_base_dir},
+    {"lv_meter_create", js_lv_meter_create},
+    {"lv_meter_add_scale", js_lv_meter_add_scale},
+    {"lv_meter_set_scale_ticks", js_lv_meter_set_scale_ticks},
+    {"lv_meter_set_scale_major_ticks", js_lv_meter_set_scale_major_ticks},
+    {"lv_meter_set_scale_range", js_lv_meter_set_scale_range},
+    {"lv_meter_add_arc", js_lv_meter_add_arc},
+    {"lv_meter_add_scale_lines", js_lv_meter_add_scale_lines},
+    {"lv_meter_add_needle_line", js_lv_meter_add_needle_line},
+    {"lv_meter_add_needle_img", js_lv_meter_add_needle_img},
+    {"lv_meter_set_indicator_start_value", js_lv_meter_set_indicator_start_value},
+    {"lv_meter_set_indicator_end_value", js_lv_meter_set_indicator_end_value},
+    {"lv_meter_set_indicator_value", js_lv_meter_set_indicator_value},
+    {"lv_msgbox_create", js_lv_msgbox_create},
+    {"lv_msgbox_get_active_btn_text", js_lv_msgbox_get_active_btn_text},
+    {"lv_spangroup_create", js_lv_spangroup_create},
+    {"lv_spangroup_set_align", js_lv_spangroup_set_align},
+    {"lv_spangroup_set_overflow", js_lv_spangroup_set_overflow},
+    {"lv_spangroup_set_indent", js_lv_spangroup_set_indent},
+    {"lv_spangroup_set_mode", js_lv_spangroup_set_mode},
+    {"lv_spangroup_new_span", js_lv_spangroup_new_span},
+    {"lv_span_set_text", js_lv_span_set_text},
+    {"lv_span_set_text_static", js_lv_span_set_text_static},
+    {"lv_spangroup_refr_mode", js_lv_spangroup_refr_mode},
+    {"lv_line_create", js_lv_line_create},
+    {"lv_line_set_points", js_lv_line_set_points},
+    {"mqtt_init", js_mqtt_init},
+    {"mqtt_connect", js_mqtt_connect},
+    {"mqtt_publish", js_mqtt_publish},
+    {"mqtt_subscribe", js_mqtt_subscribe},
+    {"mqtt_loop", js_mqtt_loop},
+    {"mqtt_on_message", js_mqtt_on_message}};
 
-void register_js_functions() {
+void register_js_functions()
+{
   auto glob = js_glob(js);
-  for(auto &b : kBindings) {
+  for (auto &b : kBindings)
+  {
     js_set(js, glob, b.name, js_mkfun(b.fn));
   }
 }
@@ -2827,10 +3293,12 @@ void register_js_functions() {
 //------------------------------------------------------------------------------
 // K) The elk_task -- runs Elk + bridging in a separate FreeRTOS task
 //------------------------------------------------------------------------------
-static void elk_task(void *pvParam) {
+static void elk_task(void *pvParam)
+{
   // 1) Create Elk
   js = js_create(elk_memory, sizeof(elk_memory));
-  if(!js) {
+  if (!js)
+  {
     LOG("Failed to initialize Elk in elk_task");
     // Delete this task if you want
     vTaskDelete(NULL);
@@ -2841,16 +3309,20 @@ static void elk_task(void *pvParam) {
   register_js_functions();
 
   // 3) Load & execute your script using the filename from the configuration
-  if(!load_and_execute_js_script(g_script_filename.c_str())) {
+  if (!load_and_execute_js_script(g_script_filename.c_str()))
+  {
     LOGF("Failed to load and execute JavaScript script from %s\n", g_script_filename.c_str());
     // Optionally handle the error
-  } else {
+  }
+  else
+  {
     LOG("Script executed successfully in elk_task");
   }
 
   // 4) Now keep running lv_timer_handler() or your lvgl_loop
   // so that the UI remains active
-  for(;;) {
+  for (;;)
+  {
     // Check Wi-Fi and MQTT, handle reconnections
     wifiMqttMaintainLoop();
     lv_timer_handler();

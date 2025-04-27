@@ -18,7 +18,7 @@
 #define SEND_BUF_SIZE (0x4000)
 
 #define TFT_TE 9
-#define TFT_SDO 8 
+#define TFT_SDO 8
 
 #define TFT_DC 7
 #define TFT_RES 17
@@ -41,9 +41,9 @@
 #define PIN_BUTTON_2 21
 
 // Define SD card pins.
-#define PIN_SD_CMD 13  // CMD
-#define PIN_SD_CLK 11  // CLK
-#define PIN_SD_D0  12  // Data0
+#define PIN_SD_CMD 13 // CMD
+#define PIN_SD_CLK 11 // CLK
+#define PIN_SD_D0 12  // Data0
 
-#define INPUT_PIN 33   // Input (power button)
-#define OUTPUT_PIN 1   // Latching
+#define INPUT_PIN 33 // Input (power button)
+#define OUTPUT_PIN 1 // Latching

@@ -1,14 +1,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <FS.h>
-#include <SD_MMC.h>
+#include <FS.h>           // Needed for File type
+#include <SD_MMC.h>       // Needed for SD_MMC object/methods
+#include <ArduinoJson.h>  // Needed for JSON parsing
 
-#include "pins_config.h"     // For PIN_SD_CMD, etc.
-#include "fallback.h"        // Fallback header
-#include "dynamic_js.h"      // Dynamic (Elk + JS) header
-#include "globals.h"
-
-#include <ArduinoJson.h>
+#include "pins_config.h" // Needed for SD pins
+#include "globals.h"     // For LOG, g_script_filename
+#include "fallback.h"    // For fallback mode functions
+#include "dynamic_js.h"  // For dynamic mode functions
 
 // Global flag to decide fallback vs dynamic
 static bool useFallback = false;

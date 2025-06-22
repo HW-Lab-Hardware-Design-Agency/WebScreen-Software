@@ -9,11 +9,15 @@
 #include "globals.h"
 
 #include <ArduinoJson.h>
+#include "globals.h"
+
+// Define and initialize the new global flag
+bool g_mqtt_enabled = false;
 
 // Global flag to decide fallback vs dynamic
 static bool useFallback = false;
 
-static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, String &outScript) {
+static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, String &outScript, bool &outMqttEnabled) {
   File f = SD_MMC.open(path);
   if (!f) {
     LOG("No JSON file");
@@ -32,12 +36,10 @@ static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, S
   // Extract Wi-Fi settings
   outSSID = doc["settings"]["wifi"]["ssid"] | "";
   outPASS = doc["settings"]["wifi"]["pass"] | "";
-  if (outSSID.isEmpty() || outPASS.isEmpty()) {
-    LOG("SSID or PASS empty in JSON");
-    return false;
-  }
 
-  // Extract the script filename (default to "app.js" if not provided)
+  outMqttEnabled = doc["settings"]["mqtt"]["enabled"] | false;
+
+  // Extract the script filename
   outScript = doc["script"] | "app.js";
 
   // Update 'last_read' if desired
@@ -78,11 +80,18 @@ void setup() {
 
   // Optionally read /webscreen.json for Wi-Fi
   String s, p, scriptFile;
-  if(!readConfigJSON("/webscreen.json", s, p, scriptFile)) {
+  if(!readConfigJSON("/webscreen.json", s, p, scriptFile, g_mqtt_enabled)) {
     LOG("Failed to read /webscreen.json => fallback");
     useFallback = true;
     fallback_setup();
     return;
+  }
+
+  // Log the MQTT status
+  if (g_mqtt_enabled) {
+    LOG("MQTT feature is enabled via config.");
+  } else {
+    LOG("MQTT feature is disabled.");
   }
 
   // Ensure the script filename starts with a '/'

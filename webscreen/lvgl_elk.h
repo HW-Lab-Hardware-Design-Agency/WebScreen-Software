@@ -3180,12 +3180,10 @@ static void elk_task(void *pvParam) {
   // 4) Now keep running lv_timer_handler() or your lvgl_loop
   // so that the UI remains active
   for(;;) {
-    // Check Wi-Fi and MQTT, handle reconnections
-    wifiMqttMaintainLoop();
+    if (g_mqtt_enabled) {
+      wifiMqttMaintainLoop();
+    }
     lv_timer_handler();
     vTaskDelay(pdMS_TO_TICKS(5));
   }
-
-  // If you ever want to exit the task, do:
-  // vTaskDelete(NULL);
 }

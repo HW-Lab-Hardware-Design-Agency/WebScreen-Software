@@ -8,6 +8,7 @@
 #include <NimBLEDevice.h>
 
 #include <WiFi.h>           // WiFi library that also provides WiFiClient
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>   // For MQTT
 
@@ -356,6 +357,57 @@ static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
+// LVGL Timer Bridging Functions
+
+// This C++ function will be the callback for LVGL. It will execute a JS function.
+static void elk_timer_cb(lv_timer_t *timer) {
+  char *func_name = (char *)timer->user_data;
+
+  if (func_name != NULL && js != NULL) {
+    // Construct a snippet of JavaScript to call the function, e.g., "my_func();"
+    char snippet[64];
+    snprintf(snippet, sizeof(snippet), "%s();", func_name);
+
+    // Use js_eval to execute the function call.
+    jsval_t res = js_eval(js, snippet, strlen(snippet));
+    if (js_type(res) == JS_ERR) {
+      LOGF("[TIMER CB] Error executing JS function '%s': %s\n", func_name, js_str(js, res));
+    }
+  }
+}
+
+// This is the function we will expose to JavaScript.
+// It creates an LVGL timer that will call our C++ callback.
+static jsval_t js_create_timer(struct js *js, jsval_t *args, int nargs) {
+  // Expects: function name (string), period in ms (number)
+  if (nargs < 2) {
+    LOG("create_timer expects: function_name, period_ms");
+    return js_mknull();
+  }
+
+  size_t func_name_len;
+  char *func_name_str = js_getstr(js, args[0], &func_name_len);
+  double period = js_getnum(args[1]);
+
+  if (!func_name_str || func_name_len == 0) {
+    return js_mknull();
+  }
+
+  char *name_for_timer = (char *)malloc(func_name_len + 1);
+  if (!name_for_timer) {
+    LOG("Failed to allocate memory for timer callback name");
+    return js_mknull();
+  }
+  memcpy(name_for_timer, func_name_str, func_name_len);
+  name_for_timer[func_name_len] = '\0';
+
+  // Create the LVGL timer
+  lv_timer_create(elk_timer_cb, (uint32_t)period, name_for_timer);
+  
+  LOGF("Created LVGL timer to call JS function '%s' every %dms\n", name_for_timer, (int)period);
+  return js_mknull();
+}
+
 // sd_read_file(path)
 static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
@@ -428,6 +480,50 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
   }
   root.close();
   return js_mkstr(js, fileList, fileListLen);
+}
+
+// Helper function to convert a JS string to a JS number
+static jsval_t js_to_number(struct js *js, jsval_t *args, int nargs) {
+  if (nargs != 1) {
+    return js_mknum(0); // Return 0 if no argument
+  }
+
+  // If it's already a number, just return it.
+  if (js_type(args[0]) == JS_NUM) {
+    return args[0];
+  }
+
+  // Get the string value from the JS argument
+  size_t len;
+  const char *str = js_getstr(js, args[0], &len);
+  if (!str) {
+    return js_mknum(0); // Return 0 if not a valid string
+  }
+
+  // Convert the C-string to a double and return as a JS number
+  return js_mknum(atof(str));
+}
+
+// Helper function to convert a JS number to a JS string
+static jsval_t js_number_to_string(struct js *js, jsval_t *args, int nargs) {
+  if (nargs != 1) {
+    return js_mkstr(js, "", 0);
+  }
+
+  uint8_t type = js_type(args[0]);
+
+  if (type == JS_NUM) {
+    char buf[32];
+    double num = js_getnum(args[0]);
+    // Using "%.17g" is how the Elk engine itself formats numbers
+    snprintf(buf, sizeof(buf), "%.17g", num);
+    return js_mkstr(js, buf, strlen(buf));
+  } else if (type == JS_STR) {
+    // If it's already a string (like from parse_json_value), just return it
+    return args[0];
+  }
+
+  return js_mkstr(js, "", 0);
 }
 
 /******************************************************************************
@@ -3011,6 +3107,9 @@ void register_js_functions() {
   js_set(js, global, "wifi_status",  js_mkfun(js_wifi_status));
   js_set(js, global, "wifi_get_ip",  js_mkfun(js_wifi_get_ip));
   js_set(js, global, "delay",        js_mkfun(js_delay));
+  js_set(js, global, "create_timer", js_mkfun(js_create_timer));
+  js_set(js, global, "toNumber", js_mkfun(js_to_number));
+  js_set(js, global, "numberToString", js_mkfun(js_number_to_string));
 
   // bridging for indexOf / substring
   js_set(js, global, "str_index_of",   js_mkfun(js_str_index_of));
@@ -3180,12 +3279,10 @@ static void elk_task(void *pvParam) {
   // 4) Now keep running lv_timer_handler() or your lvgl_loop
   // so that the UI remains active
   for(;;) {
-    // Check Wi-Fi and MQTT, handle reconnections
-    wifiMqttMaintainLoop();
+    if (g_mqtt_enabled) {
+      wifiMqttMaintainLoop();
+    }
     lv_timer_handler();
     vTaskDelay(pdMS_TO_TICKS(5));
   }
-
-  // If you ever want to exit the task, do:
-  // vTaskDelete(NULL);
 }

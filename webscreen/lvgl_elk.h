@@ -559,32 +559,44 @@ bool load_gif_into_ram(const char *path) {
 }
 
 static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {
-  if(nargs<1) {
-    LOG("show_gif_from_sd: expects path");
+  // Check if we have enough arguments (path, x, y)
+  if(nargs < 3) {
+    LOG("show_gif_from_sd: expects path, x, y");
     return js_mknull();
   }
+  
+  // Argument 0: Get the path string
   const char* rawPath = js_str(js, args[0]);
   if(!rawPath) return js_mknull();
 
-  // Strip quotes
+  // Strip quotes from the path
   String path(rawPath);
   if (path.startsWith("\"") && path.endsWith("\"")) {
     path = path.substring(1, path.length()-1);
   }
 
+  // Argument 1 & 2: Get the x and y coordinates
+  int x = (int)js_getnum(args[1]);
+  int y = (int)js_getnum(args[2]);
+
+  // Load the specified GIF file into RAM
   if(!load_gif_into_ram(path.c_str())) {
     LOG("Could not load GIF into RAM");
     return js_mknull();
   }
 
+  // Create the LVGL gif object
   lv_obj_t *gif = lv_gif_create(lv_scr_act());
-  lv_gif_set_src(gif, "M:mygif");   // memory-based
-  lv_obj_align(gif, LV_ALIGN_CENTER, 0, 0);
+  // Set the source to the in-memory driver 'M'
+  lv_gif_set_src(gif, "M:mygif");
+  
+  // Set the position using the x and y coordinates from JavaScript
+  lv_obj_set_pos(gif, x, y);
 
-  LOGF("Showing GIF from memory driver (file was %s)\n", path.c_str());
+  // Update the log to show the new coordinates
+  LOGF("Showing GIF from memory driver (file was %s) at (%d,%d)\n", path.c_str(), x, y);
   return js_mknull();
 }
-
 
 /******************************************************************************
  * J) Load + Execute JS from SD

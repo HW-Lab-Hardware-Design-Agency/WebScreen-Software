@@ -61,12 +61,18 @@ The project uses an SD card file named `webscreen.json` to configure settings. A
 {
   "settings": {
     "wifi": {
-      "ssid": "ssid",
-      "pass": "pass"
+      "ssid": "your_ssid",
+      "pass": "your_pass"
+    },
+    "mqtt": {
+      "enabled": false
     }
   },
-  "script": "timeapi_app.js",
-  "last_read": 2
+  "screen": {
+    "background": "#2980b9",
+    "foreground": "#00fff1"
+  },
+  "script": "timeapi_app.js"
 }
 ```
 

@@ -690,9 +690,12 @@ bool load_and_execute_js_script(const char* path) {
  ******************************************************************************/
 static const lv_font_t* get_font_for_size(int size) {
     // Map the integer size to specific built-in Montserrat fonts
-    if(size == 14)  return &lv_font_montserrat_14;
+    if(size == 20)  return &lv_font_montserrat_20;
     if(size == 28)  return &lv_font_montserrat_28;
+    if(size == 34)  return &lv_font_montserrat_34;
     if(size == 40)  return &lv_font_montserrat_40;
+    if(size == 44)  return &lv_font_montserrat_44;
+    if(size == 48)  return &lv_font_montserrat_48;
     // Fallback:
     return &lv_font_montserrat_14;
 }

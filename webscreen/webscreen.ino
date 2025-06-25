@@ -17,7 +17,19 @@ bool g_mqtt_enabled = false;
 // Global flag to decide fallback vs dynamic
 static bool useFallback = false;
 
-static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, String &outScript, bool &outMqttEnabled) {
+// Define global color variables with default values
+uint32_t g_bg_color = 0x000000; // Default: black
+uint32_t g_fg_color = 0xFFFFFF; // Default: white
+
+static bool readConfigJSON(
+    const char* path, 
+    String &outSSID, 
+    String &outPASS, 
+    String &outScript, 
+    bool &outMqttEnabled,
+    uint32_t &outBgColor,
+    uint32_t &outFgColor
+) {
   File f = SD_MMC.open(path);
   if (!f) {
     LOG("No JSON file");
@@ -42,21 +54,13 @@ static bool readConfigJSON(const char* path, String &outSSID, String &outPASS, S
   // Extract the script filename
   outScript = doc["script"] | "app.js";
 
-  // Update 'last_read' if desired
-  time_t now;
-  time(&now);
-  doc["last_read"] = (unsigned long)now;
+  const char* bgColorStr = doc["screen"]["background"] | "#000000";
+  const char* fgColorStr = doc["screen"]["foreground"] | "#FFFFFF";
 
-  // Optionally write back the updated JSON
-  String updated;
-  serializeJson(doc, updated);
-  f = SD_MMC.open(path, FILE_WRITE);
-  if (!f) {
-    LOG("Failed to open JSON for writing");
-    return false;
-  }
-  f.print(updated);
-  f.close();
+  // Convert hex color string (e.g., "#RRGGBB") to a 32-bit integer
+  // We use strtol with base 16 and skip the leading '#' character.
+  outBgColor = strtol(bgColorStr + 1, NULL, 16);
+  outFgColor = strtol(fgColorStr + 1, NULL, 16);
 
   return true;
 }
@@ -80,7 +84,7 @@ void setup() {
 
   // Optionally read /webscreen.json for Wi-Fi
   String s, p, scriptFile;
-  if(!readConfigJSON("/webscreen.json", s, p, scriptFile, g_mqtt_enabled)) {
+  if(!readConfigJSON("/webscreen.json", s, p, scriptFile, g_mqtt_enabled, g_bg_color, g_fg_color)) {
     LOG("Failed to read /webscreen.json => fallback");
     useFallback = true;
     fallback_setup();

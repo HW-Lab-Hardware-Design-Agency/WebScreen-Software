@@ -281,6 +281,15 @@ void init_lvgl_display() {
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register(&disp_drv);
 
+  lv_obj_t * scr = lv_scr_act();
+  
+  // Set the screen background color directly on the screen object
+  lv_obj_set_style_bg_color(scr, lv_color_hex(g_bg_color), 0);
+  
+  // Set the default text color for any labels created on the screen
+  // (This will be inherited by children unless they have their own color set)
+  lv_obj_set_style_text_color(scr, lv_color_hex(g_fg_color), 0);
+
   LOG("LVGL + Display initialized.");
 }
 

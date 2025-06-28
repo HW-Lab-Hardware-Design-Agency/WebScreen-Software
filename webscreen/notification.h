@@ -1,8 +1,8 @@
-#ifndef NOTIFICATION_H
-#define NOTIFICATION_H
+#ifndef LV_LVGL_H_INCLUDE_SIMPLE
+#define LV_LVGL_H_INCLUDE_SIMPLE
 
 #include "lvgl.h"
 
-extern const lv_img_dsc_t notification;
+extern const lv_image_dsc_t notification;
 
 #endif // NOTIFICATION_H

@@ -1,3 +1,4 @@
+#include <lv_conf.h>
 #include <Arduino.h>
 #include <WiFi.h>
 #include <FS.h>

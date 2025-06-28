@@ -1753,55 +1753,6 @@ static jsval_t js_lv_scale_set_image_needle_value(struct js *js, jsval_t *args, 
     return js_mknull();
 }
 
-
-/********************************************************************************
- * MSGBOX
- ********************************************************************************/
-static jsval_t js_lv_msgbox_create(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<3) return js_mknull();
-
-    const char* title = js_str(js, args[0]);
-    const char* msg   = js_str(js, args[1]);
-    const char* btns  = js_str(js, args[2]);
-
-    lv_obj_t * mb = lv_msgbox_create(NULL);
-    lv_msgbox_add_title(mb, title);
-    lv_msgbox_add_text(mb, msg);
-    lv_msgbox_add_close_button(mb);
-
-    if (btns && strlen(btns) > 0) {
-        char tmp[256];
-        strncpy(tmp, btns, sizeof(tmp)-1);
-        tmp[sizeof(tmp)-1] = '\0';
-
-        char *token = strtok(tmp, ",");
-        while(token) {
-            lv_msgbox_add_footer_button(mb, token);
-            token = strtok(NULL, ",");
-        }
-    }
-
-    int handle = store_lv_obj(mb);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_msgbox_get_selected_button_text(struct js *js, jsval_t *args, int nargs) {
-    if(nargs<1) return js_mkstr(js, "", 0);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *mb = get_lv_obj(h);
-    if(!mb) return js_mkstr(js,"",0);
-
-    lv_obj_t * btn = lv_msgbox_get_selected_button(mb);
-    if(!btn) return js_mkstr(js, "", 0);
-
-    lv_obj_t * label = lv_obj_get_child(btn, 0);
-    if(!label) return js_mkstr(js, "", 0);
-
-    const char* t = lv_label_get_text(label);
-    if(!t) t = "";
-    return js_mkstr(js, t, strlen(t));
-}
-
 /********************************************************************************
  * SPAN
  ********************************************************************************/
@@ -2764,9 +2715,6 @@ void register_js_functions() {
   js_set(js, global, "lv_scale_section_set_range", js_mkfun(js_lv_scale_section_set_range));
   js_set(js, global, "lv_scale_set_line_needle_value", js_mkfun(js_lv_scale_set_line_needle_value));
   js_set(js, global, "lv_scale_set_image_needle_value", js_mkfun(js_lv_scale_set_image_needle_value));
-
-  js_set(js, global, "lv_msgbox_create",            js_mkfun(js_lv_msgbox_create));
-  js_set(js, global, "lv_msgbox_get_selected_button_text", js_mkfun(js_lv_msgbox_get_selected_button_text));
 
   js_set(js, global, "lv_spangroup_create",      js_mkfun(js_lv_spangroup_create));
   js_set(js, global, "lv_spangroup_set_align",   js_mkfun(js_lv_spangroup_set_align));

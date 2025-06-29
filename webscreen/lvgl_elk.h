@@ -2050,57 +2050,6 @@ static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int
 }
 
 /********************************************************************************
- * MSGBOX
- ********************************************************************************/
-static jsval_t js_lv_msgbox_create(struct js *js, jsval_t *args, int nargs) {
-    // (parentH or -1), titleStr, txtStr, an array of const char*(?), add_ok? 
-    // This is tricky because we need a char** for the buttons. Let's do a simpler approach:
-    // We might do: (title, text, btn1, btn2, ...) or the user can pass a single string "btn1,btn2"
-    // For simplicity let's just do an overloaded approach: (title, text, "OK\nClose"), or (NULL for last param)
-    // We can't easily parse an array from Elk JS. Let's do a simpler approach: 
-    // (title, text, "OK,Close", is_modal_bool)
-    if(nargs<4) return js_mknull();
-
-    const char* title = js_str(js, args[0]);
-    const char* msg   = js_str(js, args[1]);
-    const char* btns  = js_str(js, args[2]);
-    bool addModal     = (bool)js_getnum(args[3]);
-
-    // parse the "OK,Close" into a static array of char*
-    // E.g. we can do a quick split
-    static const char * defBtns[16];
-    memset(defBtns, 0, sizeof(defBtns));
-
-    char tmp[256];
-    strncpy(tmp, btns ? btns : "", sizeof(tmp)-1);
-    tmp[sizeof(tmp)-1] = '\0';
-
-    int idx=0;
-    char *token = strtok(tmp, ",");
-    while(token && idx< (int)(sizeof(defBtns)/sizeof(defBtns[0]) -1 )) {
-        defBtns[idx++] = token;
-        token = strtok(NULL, ",");
-    }
-    defBtns[idx] = NULL; // terminator
-
-    lv_obj_t * mb = lv_msgbox_create(NULL, title, msg, defBtns[0] ? defBtns : NULL, addModal);
-    int handle = store_lv_obj(mb);
-    return js_mknum(handle);
-}
-
-static jsval_t js_lv_msgbox_get_active_btn_text(struct js *js, jsval_t *args, int nargs) {
-    // (msgboxH) -> string
-    if(nargs<1) return js_mkstr(js, "", 0);
-    int h = (int)js_getnum(args[0]);
-    lv_obj_t *mb = get_lv_obj(h);
-    if(!mb) return js_mkstr(js,"",0);
-
-    const char* t = lv_msgbox_get_active_btn_text(mb);
-    if(!t) t = "";
-    return js_mkstr(js, t, strlen(t));
-}
-
-/********************************************************************************
  * SPAN
  ********************************************************************************/
 static jsval_t js_lv_spangroup_create(struct js *js, jsval_t *args, int nargs) {
@@ -3247,10 +3196,6 @@ void register_js_functions() {
   js_set(js, global, "lv_meter_set_indicator_start_value",js_mkfun(js_lv_meter_set_indicator_start_value));
   js_set(js, global, "lv_meter_set_indicator_end_value",  js_mkfun(js_lv_meter_set_indicator_end_value));
   js_set(js, global, "lv_meter_set_indicator_value",      js_mkfun(js_lv_meter_set_indicator_value));
-
-  //==================== MSGBOX ==========================
-  js_set(js, global, "lv_msgbox_create",            js_mkfun(js_lv_msgbox_create));
-  js_set(js, global, "lv_msgbox_get_active_btn_text", js_mkfun(js_lv_msgbox_get_active_btn_text));
 
   //==================== SPAN ============================
   js_set(js, global, "lv_spangroup_create",      js_mkfun(js_lv_spangroup_create));

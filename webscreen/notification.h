@@ -1,8 +1,10 @@
-#ifndef LV_LVGL_H_INCLUDE_SIMPLE
-#define LV_LVGL_H_INCLUDE_SIMPLE
+#ifndef NOTIFICATION_H
+#define NOTIFICATION_H
 
-#include "lvgl.h"
+#include <lvgl.h>
 
-extern const lv_image_dsc_t notification;
+// Expose the raw data array and its size
+extern const uint8_t notification_map[];
+extern const size_t notification_map_size;
 
 #endif // NOTIFICATION_H

@@ -6,9 +6,10 @@
 #include "notification.h"
 #include "globals.h"
 #include "tick.h"
+#include "lvgl_elk.h" // We need init_mem_fs() and its globals
 
 static lv_obj_t* fb_label = nullptr;
-static lv_obj_t* fb_gif   = nullptr;
+static lv_obj_t* fb_image_anim = nullptr;
 
 static lv_color_t* fbBuf = nullptr;
 
@@ -36,7 +37,7 @@ static void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, u
   lv_anim_set_completed_cb(&a, [](lv_anim_t *anim) {
     lv_obj_t *obj = (lv_obj_t *)anim->var;
     lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(fb_image_anim, LV_OBJ_FLAG_HIDDEN);
   });
 
   lv_anim_start(&a);
@@ -48,6 +49,8 @@ void fallback_setup() {
   lv_init();
   start_lvgl_tick();
 
+  init_mem_fs(); // This registers the 'M:' driver for our C array
+
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, HIGH);
 
@@ -56,7 +59,7 @@ void fallback_setup() {
 
   fbBuf = (lv_color_t*) ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
   if(!fbBuf) {
-    LOG("FALLBACK: Failed to allocate buffer");
+    LOG("FALLBACK: Failed to allocate display buffer");
     return;
   }
 
@@ -88,12 +91,24 @@ void fallback_setup() {
 
   create_scroll_animation(fb_label, 240, -lv_obj_get_height(fb_label), 10000);
 
-  fb_gif = lv_image_create(lv_screen_active());
-  lv_image_set_src(fb_gif, &notification);
-  lv_obj_align(fb_gif, LV_ALIGN_CENTER, 0, 0);
+  // --- GIF SETUP ---
+  // 1. Point the memory filesystem's global buffer to your C array data.
+  g_gifBuffer = (uint8_t *)notification_map;
+  g_gifSize = notification_map_size;
+
+  // 2. Create an image widget.
+  fb_image_anim = lv_image_create(lv_screen_active());
+
+  // 3. Set the source using the memory driver path.
+  //    LVGL will automatically use its GIF decoder and allocate memory from the
+  //    large pool we defined in lv_conf.h.
+  lv_image_set_src(fb_image_anim, "M:/notification.gif");
+  lv_obj_align(fb_image_anim, LV_ALIGN_CENTER, 0, 0);
+
+  // --- End of GIF Setup ---
 
   lv_obj_remove_flag(fb_label, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(fb_image_anim, LV_OBJ_FLAG_HIDDEN);
 }
 
 void fallback_loop() {
@@ -104,7 +119,7 @@ void fallback_loop() {
     lv_label_set_text(fb_label, line.c_str());
     lv_obj_align(fb_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_remove_flag(fb_label, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(fb_image_anim, LV_OBJ_FLAG_HIDDEN);
 
     create_scroll_animation(fb_label, 240, -lv_obj_get_height(fb_label), 10000);
   }

@@ -95,7 +95,6 @@ static bool readConfigJSON(
 
 void setup() {
   Serial.begin(115200);
-  vTaskDelay(pdMS_TO_TICKS(2000));
 
   pinMode(OUTPUT_PIN, OUTPUT);
   digitalWrite(OUTPUT_PIN, HIGH);
@@ -107,7 +106,7 @@ void setup() {
     fallback_setup();
     return;
   }
-
+  
   String s, p, scriptFile;
   if(!readConfigJSON("/webscreen.json", s, p, scriptFile, g_mqtt_enabled, g_bg_color, g_fg_color)) {
     LOG("Failed to read /webscreen.json => starting fallback mode.");

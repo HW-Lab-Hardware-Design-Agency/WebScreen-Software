@@ -1,0 +1,136 @@
+#######################################
+# WebScreen Library Keywords
+# Arduino IDE Syntax Highlighting
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+WebScreen	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+# Core methods
+begin	KEYWORD2
+loop	KEYWORD2
+end	KEYWORD2
+
+# Configuration methods
+setWiFi	KEYWORD2
+setMQTT	KEYWORD2
+setScript	KEYWORD2
+setDisplay	KEYWORD2
+
+# Status methods
+isRunning	KEYWORD2
+isJavaScriptMode	KEYWORD2
+isWiFiConnected	KEYWORD2
+isMQTTConnected	KEYWORD2
+getStatus	KEYWORD2
+getUptime	KEYWORD2
+getFreeMemory	KEYWORD2
+
+# Network methods
+httpGet	KEYWORD2
+httpPost	KEYWORD2
+mqttPublish	KEYWORD2
+mqttSubscribe	KEYWORD2
+
+# Display methods
+setBrightness	KEYWORD2
+getBrightness	KEYWORD2
+setDisplayPower	KEYWORD2
+isDisplayOn	KEYWORD2
+setFallbackText	KEYWORD2
+
+# Utility methods
+printSystemInfo	KEYWORD2
+selfTest	KEYWORD2
+saveConfig	KEYWORD2
+loadConfig	KEYWORD2
+restart	KEYWORD2
+
+# Global functions
+getWebScreenVersion	KEYWORD2
+isWebScreenHardware	KEYWORD2
+webScreenQuickSetup	KEYWORD2
+
+# Hardware functions
+webscreen_hardware_init	KEYWORD2
+webscreen_hardware_handle_button	KEYWORD2
+webscreen_hardware_set_led	KEYWORD2
+webscreen_hardware_get_temperature	KEYWORD2
+webscreen_hardware_is_healthy	KEYWORD2
+
+# Runtime functions
+webscreen_runtime_start_javascript	KEYWORD2
+webscreen_runtime_start_fallback	KEYWORD2
+webscreen_runtime_loop_javascript	KEYWORD2
+webscreen_runtime_loop_fallback	KEYWORD2
+webscreen_runtime_is_javascript_active	KEYWORD2
+webscreen_runtime_execute_javascript	KEYWORD2
+
+# Network functions
+webscreen_wifi_connect	KEYWORD2
+webscreen_wifi_is_connected	KEYWORD2
+webscreen_wifi_get_status	KEYWORD2
+webscreen_wifi_get_ip_address	KEYWORD2
+webscreen_http_get	KEYWORD2
+webscreen_http_post	KEYWORD2
+webscreen_mqtt_init	KEYWORD2
+webscreen_mqtt_connect	KEYWORD2
+webscreen_mqtt_publish	KEYWORD2
+webscreen_mqtt_subscribe	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+# Configuration constants
+WEBSCREEN_VERSION_STRING	LITERAL1
+WEBSCREEN_DISPLAY_WIDTH	LITERAL1
+WEBSCREEN_DISPLAY_HEIGHT	LITERAL1
+WEBSCREEN_WIFI_CONNECTION_TIMEOUT_MS	LITERAL1
+WEBSCREEN_HTTP_TIMEOUT_MS	LITERAL1
+WEBSCREEN_JS_HEAP_SIZE_KB	LITERAL1
+
+# Pin definitions
+WEBSCREEN_PIN_LED	LITERAL1
+WEBSCREEN_PIN_BUTTON	LITERAL1
+WEBSCREEN_PIN_OUTPUT	LITERAL1
+WEBSCREEN_TFT_CS	LITERAL1
+WEBSCREEN_TFT_DC	LITERAL1
+WEBSCREEN_TFT_RST	LITERAL1
+WEBSCREEN_SD_CMD	LITERAL1
+WEBSCREEN_SD_CLK	LITERAL1
+WEBSCREEN_SD_D0	LITERAL1
+
+# Feature enables
+WEBSCREEN_ENABLE_WIFI	LITERAL1
+WEBSCREEN_ENABLE_MQTT	LITERAL1
+WEBSCREEN_ENABLE_BLE	LITERAL1
+WEBSCREEN_ENABLE_JAVASCRIPT	LITERAL1
+WEBSCREEN_ENABLE_FALLBACK_APP	LITERAL1
+
+# Legacy compatibility
+PIN_LED	LITERAL1
+INPUT_PIN	LITERAL1
+OUTPUT_PIN	LITERAL1
+TFT_CS	LITERAL1
+TFT_DC	LITERAL1
+TFT_RST	LITERAL1
+PIN_SD_CMD	LITERAL1
+PIN_SD_CLK	LITERAL1
+PIN_SD_D0	LITERAL1
+
+#######################################
+# WebScreen Specific Types (KEYWORD1)
+#######################################
+
+webscreen_config_t	KEYWORD1
+webscreen_app_state_t	KEYWORD1
+webscreen_log_level_t	LITERAL1
+webscreen_error_code_t	LITERAL1

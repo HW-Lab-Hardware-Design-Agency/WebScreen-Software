@@ -33,8 +33,6 @@ typedef struct
   uint8_t data[4];
   uint8_t len;
 } lcd_cmd_t;
-
-
 void rm67162_init(void);
 
 // Set the display window size

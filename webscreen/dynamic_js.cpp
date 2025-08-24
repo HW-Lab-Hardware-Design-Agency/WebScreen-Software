@@ -10,8 +10,6 @@
 #include "globals.h"
 
 String g_script_filename = "/app.js";
-
-
 void dynamic_js_setup() {
   LOG("DYNAMIC_JS: Setting up Elk + script scenario...");
 
@@ -24,8 +22,6 @@ void dynamic_js_setup() {
 
   LOG("DYNAMIC_JS: setup done!");
 }
-
-
 void dynamic_js_loop() {
   webscreen_runtime_loop_javascript();
 }

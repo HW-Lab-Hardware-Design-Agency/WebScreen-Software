@@ -14,11 +14,11 @@
 extern "C" {
 #endif
 
-// ============================================================================
-// HARDWARE INITIALIZATION
-// ============================================================================
+  // ============================================================================
+  // HARDWARE INITIALIZATION
+  // ============================================================================
 
-/**
+  /**
  * @brief Initialize all hardware components
  * 
  * Initializes display, pins, and other hardware in the correct order.
@@ -27,17 +27,17 @@ extern "C" {
  * @return true if initialization successful, false otherwise
  */
 
-bool webscreen_hardware_init(void);
+  bool webscreen_hardware_init(void);
 
-/**
+  /**
  * @brief Shutdown all hardware components
  * 
  * Safely shuts down all hardware to prepare for power off or restart.
  */
 
-void webscreen_hardware_shutdown(void);
+  void webscreen_hardware_shutdown(void);
 
-/**
+  /**
  * @brief Initialize SD card with robust retry logic
  * 
  * Attempts to mount the SD card with multiple speeds and retries.
@@ -46,157 +46,157 @@ void webscreen_hardware_shutdown(void);
  * @return true if SD card mounted successfully, false otherwise
  */
 
-bool webscreen_hardware_init_sd_card(void);
+  bool webscreen_hardware_init_sd_card(void);
 
-// ============================================================================
-// DISPLAY FUNCTIONS
-// ============================================================================
+  // ============================================================================
+  // DISPLAY FUNCTIONS
+  // ============================================================================
 
-/**
+  /**
  * @brief Initialize the display
  * @return true if successful, false otherwise
  */
 
-bool webscreen_display_init(void);
+  bool webscreen_display_init(void);
 
-/**
+  /**
  * @brief Set display brightness
  * @param brightness Brightness level (0-255)
  * @return true if successful, false otherwise
  */
 
-bool webscreen_display_set_brightness(uint8_t brightness);
+  bool webscreen_display_set_brightness(uint8_t brightness);
 
-/**
+  /**
  * @brief Get current display brightness
  * @return Current brightness level (0-255)
  */
 
-uint8_t webscreen_display_get_brightness(void);
+  uint8_t webscreen_display_get_brightness(void);
 
-/**
+  /**
  * @brief Set display rotation
  * @param rotation Rotation value (0-3)
  * @return true if successful, false otherwise
  */
 
-bool webscreen_display_set_rotation(uint8_t rotation);
+  bool webscreen_display_set_rotation(uint8_t rotation);
 
-/**
+  /**
  * @brief Turn display on or off
  * @param on true to turn on, false to turn off
  */
 
-void webscreen_display_power(bool on);
+  void webscreen_display_power(bool on);
 
-/**
+  /**
  * @brief Check if display is currently on
  * @return true if display is on, false if off
  */
 
-bool webscreen_display_is_on(void);
+  bool webscreen_display_is_on(void);
 
-// ============================================================================
-// BUTTON HANDLING
-// ============================================================================
+  // ============================================================================
+  // BUTTON HANDLING
+  // ============================================================================
 
-/**
+  /**
  * @brief Handle power button press
  * 
  * Checks button state and handles press/release events.
  * Should be called regularly from main loop.
  */
 
-void webscreen_hardware_handle_button(void);
+  void webscreen_hardware_handle_button(void);
 
-/**
+  /**
  * @brief Check if button is currently pressed
  * @return true if button is pressed, false otherwise
  */
 
-bool webscreen_hardware_button_pressed(void);
+  bool webscreen_hardware_button_pressed(void);
 
-/**
+  /**
  * @brief Set button callback function
  * @param callback Function to call when button is pressed
  */
 
-void webscreen_hardware_set_button_callback(void (*callback)(bool pressed));
+  void webscreen_hardware_set_button_callback(void (*callback)(bool pressed));
 
-// ============================================================================
-// POWER MANAGEMENT
-// ============================================================================
+  // ============================================================================
+  // POWER MANAGEMENT
+  // ============================================================================
 
-/**
+  /**
  * @brief Get battery voltage (if available)
  * @return Battery voltage in millivolts, or 0 if not available
  */
 
-uint16_t webscreen_hardware_get_battery_voltage(void);
+  uint16_t webscreen_hardware_get_battery_voltage(void);
 
-/**
+  /**
  * @brief Enable or disable power saving mode
  * @param enable true to enable power saving, false for normal operation
  */
 
-void webscreen_hardware_set_power_saving(bool enable);
+  void webscreen_hardware_set_power_saving(bool enable);
 
-/**
+  /**
  * @brief Put system into deep sleep
  * @param duration_ms Sleep duration in milliseconds (0 = indefinite)
  */
 
-void webscreen_hardware_deep_sleep(uint32_t duration_ms);
+  void webscreen_hardware_deep_sleep(uint32_t duration_ms);
 
-// ============================================================================
-// LED CONTROL
-// ============================================================================
+  // ============================================================================
+  // LED CONTROL
+  // ============================================================================
 
-/**
+  /**
  * @brief Set LED state
  * @param on true to turn LED on, false to turn off
  */
 
-void webscreen_hardware_set_led(bool on);
+  void webscreen_hardware_set_led(bool on);
 
-/**
+  /**
  * @brief Blink LED
  * @param count Number of blinks
  * @param duration_ms Duration of each blink in milliseconds
  */
 
-void webscreen_hardware_blink_led(uint8_t count, uint16_t duration_ms);
+  void webscreen_hardware_blink_led(uint8_t count, uint16_t duration_ms);
 
-// ============================================================================
-// SYSTEM MONITORING
-// ============================================================================
+  // ============================================================================
+  // SYSTEM MONITORING
+  // ============================================================================
 
-/**
+  /**
  * @brief Get system temperature (if available)
  * @return Temperature in Celsius, or NaN if not available
  */
 
-float webscreen_hardware_get_temperature(void);
+  float webscreen_hardware_get_temperature(void);
 
-/**
+  /**
  * @brief Check if hardware is healthy
  * @return true if all hardware is functioning correctly
  */
 
-bool webscreen_hardware_is_healthy(void);
+  bool webscreen_hardware_is_healthy(void);
 
-/**
+  /**
  * @brief Print hardware status to serial
  */
 
-void webscreen_hardware_print_status(void);
+  void webscreen_hardware_print_status(void);
 
-/**
+  /**
  * @brief Run hardware self-test
  * @return true if all tests pass, false if any failures
  */
 
-bool webscreen_hardware_self_test(void);
+  bool webscreen_hardware_self_test(void);
 
 #ifdef __cplusplus
 }

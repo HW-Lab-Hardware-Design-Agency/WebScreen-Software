@@ -18,7 +18,6 @@ static bool useFallback = false;
 uint32_t g_bg_color = 0x000000;
 uint32_t g_fg_color = 0xFFFFFF;
 
-
 void setup() {
   Serial.begin(115200);
 
@@ -75,7 +74,6 @@ void setup() {
   useFallback = false;
   dynamic_js_setup();
 }
-
 
 void loop() {
   if (useFallback) {

@@ -58,8 +58,6 @@ struct RamImage {
 };
 
 static RamImage g_ram_images[MAX_RAM_IMAGES];
-
-
 void init_ram_images() {
   for (int i = 0; i < MAX_RAM_IMAGES; i++) {
     g_ram_images[i].used = false;
@@ -130,8 +128,6 @@ static lv_fs_res_t my_tell_cb(lv_fs_drv_t *drv, void *file_p, uint32_t *pos_p) {
   *pos_p = fp->file.position();
   return LV_FS_RES_OK;
 }
-
-
 void init_lv_fs() {
   static lv_fs_drv_t fs_drv;
   lv_fs_drv_init(&fs_drv);
@@ -209,8 +205,6 @@ static lv_fs_res_t my_mem_tell_cb(lv_fs_drv_t *drv, void *file_p, uint32_t *pos_
   *pos_p = mf->pos;
   return LV_FS_RES_OK;
 }
-
-
 void init_mem_fs() {
   static lv_fs_drv_t mem_drv;
   lv_fs_drv_init(&mem_drv);
@@ -232,8 +226,6 @@ void init_mem_fs() {
  ******************************************************************************/
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf = NULL;
-
-
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {  // Calculate width/height from the area
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -244,8 +236,6 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
   // Tell LVGL flush is done
   lv_disp_flush_ready(disp);
 }
-
-
 void init_lvgl_display() {
   LOG("Initializing display...");
 
@@ -294,8 +284,6 @@ void init_lvgl_display() {
 
   LOG("LVGL + Display initialized.");
 }
-
-
 void lvgl_loop() {  // Call LVGL's timer handler
   lv_timer_handler();
 }
@@ -658,8 +646,6 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   LOG("Image loaded into PSRAM successfully");
   return true;
 }
-
-
 bool load_and_execute_js_script(const char *path) {
   LOGF("Loading JavaScript script from: %s\n", path);
 
@@ -812,13 +798,9 @@ static void release_lv_obj(int h) {
 uint8_t get_red(lv_color_t color) {
   return (color.full >> 11) & 0x1F;  // 5 bits
 }
-
-
 uint8_t get_green(lv_color_t color) {
   return (color.full >> 5) & 0x3F;  // 6 bits
 }
-
-
 uint8_t get_blue(lv_color_t color) {
   return color.full & 0x1F;  // 5 bits
 }

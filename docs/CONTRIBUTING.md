@@ -4,7 +4,7 @@ Thank you for considering contributing to WebScreen! Whether you’re a seasoned
 
 ## Introduction
 
-WebScreen is an open-source ESP32-based platform that runs dynamic JavaScript applications using the Elk engine and LVGL for rich user interfaces. With support for secure HTTPS connections (via full chain certificates), BLE, MQTT, and flexible SD card–based app selection, WebScreen empowers users to build custom applications easily.
+WebScreen is an open-source ESP32-S3 based platform that runs dynamic JavaScript applications using the Elk engine and LVGL for rich user interfaces. The system features a modular architecture with robust SD card support, WiFi connectivity, MQTT integration, and a comprehensive JavaScript API for building embedded applications.
 
 Your contributions—whether they’re bug fixes, new features, documentation improvements, or testing—are highly welcome.
 

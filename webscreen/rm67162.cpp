@@ -88,6 +88,7 @@ static void lcd_send_cmd(uint32_t cmd, uint8_t *dat, uint32_t len) {
 #endif
 }
 
+
 void rm67162_init(void) {
   pinMode(TFT_CS, OUTPUT);
   pinMode(TFT_RES, OUTPUT);
@@ -138,7 +139,7 @@ void rm67162_init(void) {
     const lcd_cmd_t *lcd_init = rm67162_qspi_init;
     for (int i = 0; i < sizeof(rm67162_qspi_init) / sizeof(lcd_cmd_t); i++)
 #else
-    const lcd_cmd_t *lcd_init = rm67162_spi_init;
+      const lcd_cmd_t *lcd_init = rm67162_spi_init;
     for (int i = 0; i < sizeof(rm67162_spi_init) / sizeof(lcd_cmd_t); i++)
 #endif
     {
@@ -151,6 +152,7 @@ void rm67162_init(void) {
     }
   }
 }
+
 
 void lcd_setRotation(uint8_t r) {
   uint8_t gbr = TFT_MAD_RGB;
@@ -172,6 +174,7 @@ void lcd_setRotation(uint8_t r) {
   lcd_send_cmd(TFT_MADCTL, &gbr, 1);
 }
 
+
 void lcd_address_set(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2) {
   lcd_cmd_t t[3] = {
     { 0x2a, { uint8_t(x1 >> 8), (uint8_t)x1, (uint8_t)(x2 >> 8), (uint8_t)x2 }, 0x04 },
@@ -183,6 +186,7 @@ void lcd_address_set(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2) {
     lcd_send_cmd(t[i].cmd, t[i].data, t[i].len);
   }
 }
+
 
 void lcd_fill(uint16_t xsta,
               uint16_t ysta,
@@ -201,10 +205,12 @@ void lcd_fill(uint16_t xsta,
   free(color_p);
 }
 
+
 void lcd_DrawPoint(uint16_t x, uint16_t y, uint16_t color) {
   lcd_address_set(x, y, x + 1, y + 1);
   lcd_PushColors(&color, 1);
 }
+
 
 void lcd_PushColors(uint16_t x,
                     uint16_t y,
@@ -258,6 +264,7 @@ void lcd_PushColors(uint16_t x,
 #endif
 }
 
+
 void lcd_PushColors(uint16_t *data, uint32_t len) {
 #if LCD_USB_QSPI_DREVER == 1
   bool first_send = 1;
@@ -301,6 +308,7 @@ void lcd_PushColors(uint16_t *data, uint32_t len) {
   TFT_CS_H;
 #endif
 }
+
 
 void lcd_sleep() {
   lcd_send_cmd(0x10, NULL, 0);

@@ -1,6 +1,5 @@
 #pragma once
 
-/***********************config*************************/
 #define LCD_USB_QSPI_DREVER 1
 
 #define SPI_FREQUENCY 75000000
@@ -11,14 +10,12 @@
 #define EXAMPLE_LCD_V_RES 240
 #define LVGL_LCD_BUF_SIZE (EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES)
 
-/***********************config*************************/
-
 #define TFT_WIDTH 240
 #define TFT_HEIGHT 536
 #define SEND_BUF_SIZE (0x4000)
 
 #define TFT_TE 9
-#define TFT_SDO 8 
+#define TFT_SDO 8
 
 #define TFT_DC 7
 #define TFT_RES 17
@@ -40,10 +37,9 @@
 #define PIN_BUTTON_1 0
 #define PIN_BUTTON_2 21
 
-// Define SD card pins.
-#define PIN_SD_CMD 13  // CMD
-#define PIN_SD_CLK 11  // CLK
-#define PIN_SD_D0  12  // Data0
+#define PIN_SD_CMD 13
+#define PIN_SD_CLK 11
+#define PIN_SD_D0 12
 
-#define INPUT_PIN 33   // Input (power button)
-#define OUTPUT_PIN 1   // Latching
+#define INPUT_PIN 33
+#define OUTPUT_PIN 1

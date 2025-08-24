@@ -7,8 +7,6 @@
 
 #include "webscreen_network.h"
 #include "webscreen_main.h"
-
-// Network state
 static bool g_network_initialized = false;
 static bool g_wifi_auto_reconnect = true;
 static String g_wifi_ssid = "";
@@ -16,12 +14,8 @@ static String g_wifi_password = "";
 static uint32_t g_wifi_connection_time = 0;
 static uint32_t g_bytes_sent = 0;
 static uint32_t g_bytes_received = 0;
-
-// HTTP client
 static HTTPClient g_http_client;
 static WiFiClientSecure g_wifi_client_secure;
-
-// MQTT state (if enabled)
 #if WEBSCREEN_ENABLE_MQTT
 static PubSubClient g_mqtt_client;
 static String g_mqtt_broker = "";
@@ -30,52 +24,43 @@ static String g_mqtt_client_id = "";
 static void (*g_mqtt_callback)(const char*, const char*) = nullptr;
 #endif
 
-// ============================================================================
-// NETWORK INITIALIZATION
-// ============================================================================
 
-bool webscreen_network_init(const webscreen_config_t* config) {
-    if (!config) {
+bool webscreen_network_init(const webscreen_config_t* config) {    if (!config) {
         return false;
     }
     
     WEBSCREEN_DEBUG_PRINTLN("Initializing network...");
     
-    // Store WiFi configuration
+    
     g_wifi_ssid = config->wifi.ssid;
     g_wifi_password = config->wifi.password;
     g_wifi_auto_reconnect = config->wifi.auto_reconnect;
     
-    if (!config->wifi.enabled || g_wifi_ssid.length() == 0) {
-        WEBSCREEN_DEBUG_PRINTLN("WiFi disabled or no SSID configured");
+    if (!config->wifi.enabled || g_wifi_ssid.length() == 0) {        WEBSCREEN_DEBUG_PRINTLN("WiFi disabled or no SSID configured");
         return false;
     }
     
-    // Initialize WiFi
+    
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(g_wifi_auto_reconnect);
     
-    // Connect to WiFi
+    
     if (!webscreen_wifi_connect(g_wifi_ssid.c_str(), g_wifi_password.c_str(), 
-                               config->wifi.connection_timeout)) {
-        WEBSCREEN_DEBUG_PRINTLN("Initial WiFi connection failed");
+                               config->wifi.connection_timeout)) {        WEBSCREEN_DEBUG_PRINTLN("Initial WiFi connection failed");
         return false;
     }
     
-    // Initialize HTTP client
+    
     g_http_client.setTimeout(WEBSCREEN_HTTP_TIMEOUT_MS);
     
 #if WEBSCREEN_ENABLE_MQTT
-    // Initialize MQTT if enabled
-    if (config->mqtt.enabled && strlen(config->mqtt.broker) > 0) {
-        g_mqtt_broker = config->mqtt.broker;
+    
+    if (config->mqtt.enabled && strlen(config->mqtt.broker) > 0) {        g_mqtt_broker = config->mqtt.broker;
         g_mqtt_port = config->mqtt.port;
         g_mqtt_client_id = config->mqtt.client_id;
         
-        if (!webscreen_mqtt_init(g_mqtt_broker.c_str(), g_mqtt_port, g_mqtt_client_id.c_str())) {
-            WEBSCREEN_DEBUG_PRINTLN("MQTT initialization failed");
-        } else if (!webscreen_mqtt_connect(config->mqtt.username, config->mqtt.password)) {
-            WEBSCREEN_DEBUG_PRINTLN("MQTT connection failed");
+        if (!webscreen_mqtt_init(g_mqtt_broker.c_str(), g_mqtt_port, g_mqtt_client_id.c_str())) {            WEBSCREEN_DEBUG_PRINTLN("MQTT initialization failed");
+        } else if (!webscreen_mqtt_connect(config->mqtt.username, config->mqtt.password)) {            WEBSCREEN_DEBUG_PRINTLN("MQTT connection failed");
         }
     }
 #endif
@@ -85,15 +70,14 @@ bool webscreen_network_init(const webscreen_config_t* config) {
     return true;
 }
 
-void webscreen_network_loop(void) {
-    if (!g_network_initialized) {
+
+void webscreen_network_loop(void) {    if (!g_network_initialized) {
         return;
     }
     
-    // Check WiFi connection
-    if (WiFi.status() != WL_CONNECTED && g_wifi_auto_reconnect) {
-        static uint32_t last_reconnect_attempt = 0;
-        if (WEBSCREEN_MILLIS() - last_reconnect_attempt > 10000) { // Try every 10 seconds
+    
+    if (WiFi.status() != WL_CONNECTED && g_wifi_auto_reconnect) {        static uint32_t last_reconnect_attempt = 0;
+        if (WEBSCREEN_MILLIS() - last_reconnect_attempt > 10000) { 
             last_reconnect_attempt = WEBSCREEN_MILLIS();
             WEBSCREEN_DEBUG_PRINTLN("WiFi disconnected, attempting reconnection...");
             webscreen_wifi_connect(g_wifi_ssid.c_str(), g_wifi_password.c_str(), 5000);
@@ -101,13 +85,11 @@ void webscreen_network_loop(void) {
     }
     
 #if WEBSCREEN_ENABLE_MQTT
-    // Process MQTT messages
-    if (g_mqtt_client.connected()) {
-        webscreen_mqtt_loop();
-    } else if (g_mqtt_broker.length() > 0) {
-        // Try to reconnect MQTT
+    
+    if (g_mqtt_client.connected()) {        webscreen_mqtt_loop();
+    } else if (g_mqtt_broker.length() > 0) {        
         static uint32_t last_mqtt_reconnect = 0;
-        if (WEBSCREEN_MILLIS() - last_mqtt_reconnect > 30000) { // Try every 30 seconds
+        if (WEBSCREEN_MILLIS() - last_mqtt_reconnect > 30000) { 
             last_mqtt_reconnect = WEBSCREEN_MILLIS();
             WEBSCREEN_DEBUG_PRINTLN("MQTT disconnected, attempting reconnection...");
             webscreen_mqtt_connect(nullptr, nullptr);
@@ -116,8 +98,8 @@ void webscreen_network_loop(void) {
 #endif
 }
 
-void webscreen_network_shutdown(void) {
-    if (!g_network_initialized) {
+
+void webscreen_network_shutdown(void) {    if (!g_network_initialized) {
         return;
     }
     
@@ -133,12 +115,33 @@ void webscreen_network_shutdown(void) {
     WEBSCREEN_DEBUG_PRINTLN("Network shutdown complete");
 }
 
-// ============================================================================
-// WIFI MANAGEMENT
-// ============================================================================
 
-bool webscreen_wifi_connect(const char* ssid, const char* password, uint32_t timeout_ms) {
-    if (!ssid) {
+bool webscreen_network_connect_wifi(const char* ssid, const char* password, uint32_t timeout_ms) {    if (!ssid || strlen(ssid) == 0) {
+        WEBSCREEN_DEBUG_PRINTLN("No WiFi SSID provided");
+        return false;
+    }
+    
+    WEBSCREEN_DEBUG_PRINTF("Connecting to WiFi: %s\n", ssid);
+    
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    
+    unsigned long startMs = WEBSCREEN_MILLIS();
+    while(WiFi.status() != WL_CONNECTED && (WEBSCREEN_MILLIS() - startMs) < timeout_ms) {        vTaskDelay(pdMS_TO_TICKS(250));
+        Serial.print(".");
+    }
+    WEBSCREEN_DEBUG_PRINTLN(); 
+    
+    if(WiFi.status() != WL_CONNECTED) {        WEBSCREEN_DEBUG_PRINTLN("WiFi connection failed or timed out");
+        return false;
+    }
+    
+    WEBSCREEN_DEBUG_PRINTF("WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    return true;
+}
+
+
+bool webscreen_wifi_connect(const char* ssid, const char* password, uint32_t timeout_ms) {    if (!ssid) {
         return false;
     }
     
@@ -148,38 +151,35 @@ bool webscreen_wifi_connect(const char* ssid, const char* password, uint32_t tim
     
     uint32_t start_time = WEBSCREEN_MILLIS();
     while (WiFi.status() != WL_CONNECTED && 
-           (WEBSCREEN_MILLIS() - start_time) < timeout_ms) {
-        WEBSCREEN_DELAY(250);
+           (WEBSCREEN_MILLIS() - start_time) < timeout_ms) {        WEBSCREEN_DELAY(250);
         WEBSCREEN_DEBUG_PRINT(".");
     }
     WEBSCREEN_DEBUG_PRINTLN();
     
-    if (WiFi.status() == WL_CONNECTED) {
-        g_wifi_connection_time = WEBSCREEN_MILLIS();
+    if (WiFi.status() == WL_CONNECTED) {        g_wifi_connection_time = WEBSCREEN_MILLIS();
         WEBSCREEN_DEBUG_PRINTF("WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
         WEBSCREEN_DEBUG_PRINTF("Signal strength: %d dBm\n", WiFi.RSSI());
         return true;
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("WiFi connection failed. Status: %d\n", WiFi.status());
+    } else {        WEBSCREEN_DEBUG_PRINTF("WiFi connection failed. Status: %d\n", WiFi.status());
         return false;
     }
 }
 
-void webscreen_wifi_disconnect(void) {
-    WiFi.disconnect();
+
+void webscreen_wifi_disconnect(void) {    WiFi.disconnect();
     WEBSCREEN_DEBUG_PRINTLN("WiFi disconnected");
 }
 
-bool webscreen_wifi_is_connected(void) {
-    return (WiFi.status() == WL_CONNECTED);
+
+bool webscreen_wifi_is_connected(void) {    return (WiFi.status() == WL_CONNECTED);
 }
 
-int webscreen_wifi_get_status(void) {
-    return WiFi.status();
+
+int webscreen_wifi_get_status(void) {    return WiFi.status();
 }
 
-bool webscreen_wifi_get_ip_address(char* ip_str) {
-    if (!ip_str || !webscreen_wifi_is_connected()) {
+
+bool webscreen_wifi_get_ip_address(char* ip_str) {    if (!ip_str || !webscreen_wifi_is_connected()) {
         return false;
     }
     
@@ -187,29 +187,24 @@ bool webscreen_wifi_get_ip_address(char* ip_str) {
     return true;
 }
 
-int32_t webscreen_wifi_get_rssi(void) {
-    if (!webscreen_wifi_is_connected()) {
+
+int32_t webscreen_wifi_get_rssi(void) {    if (!webscreen_wifi_is_connected()) {
         return 0;
     }
     return WiFi.RSSI();
 }
 
-void webscreen_wifi_set_auto_reconnect(bool enable) {
-    g_wifi_auto_reconnect = enable;
+
+void webscreen_wifi_set_auto_reconnect(bool enable) {    g_wifi_auto_reconnect = enable;
     WiFi.setAutoReconnect(enable);
 }
 
-// ============================================================================
-// HTTP CLIENT
-// ============================================================================
 
-int webscreen_http_get(const char* url, char* response_buffer, size_t buffer_size) {
-    if (!url || !response_buffer || buffer_size == 0) {
+int webscreen_http_get(const char* url, char* response_buffer, size_t buffer_size) {    if (!url || !response_buffer || buffer_size == 0) {
         return -1;
     }
     
-    if (!webscreen_wifi_is_connected()) {
-        WEBSCREEN_DEBUG_PRINTLN("HTTP GET failed: WiFi not connected");
+    if (!webscreen_wifi_is_connected()) {        WEBSCREEN_DEBUG_PRINTLN("HTTP GET failed: WiFi not connected");
         return -2;
     }
     
@@ -218,8 +213,7 @@ int webscreen_http_get(const char* url, char* response_buffer, size_t buffer_siz
     g_http_client.begin(url);
     int http_code = g_http_client.GET();
     
-    if (http_code > 0) {
-        String payload = g_http_client.getString();
+    if (http_code > 0) {        String payload = g_http_client.getString();
         size_t copy_length = min(payload.length(), buffer_size - 1);
         strncpy(response_buffer, payload.c_str(), copy_length);
         response_buffer[copy_length] = '\0';
@@ -227,8 +221,7 @@ int webscreen_http_get(const char* url, char* response_buffer, size_t buffer_siz
         g_bytes_received += payload.length();
         
         WEBSCREEN_DEBUG_PRINTF("HTTP GET response: %d (%d bytes)\n", http_code, payload.length());
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("HTTP GET failed: %s\n", g_http_client.errorToString(http_code).c_str());
+    } else {        WEBSCREEN_DEBUG_PRINTF("HTTP GET failed: %s\n", g_http_client.errorToString(http_code).c_str());
         response_buffer[0] = '\0';
     }
     
@@ -236,14 +229,13 @@ int webscreen_http_get(const char* url, char* response_buffer, size_t buffer_siz
     return http_code;
 }
 
+
 int webscreen_http_post(const char* url, const char* data, const char* content_type,
-                       char* response_buffer, size_t buffer_size) {
-    if (!url || !data || !response_buffer || buffer_size == 0) {
+                       char* response_buffer, size_t buffer_size) {    if (!url || !data || !response_buffer || buffer_size == 0) {
         return -1;
     }
     
-    if (!webscreen_wifi_is_connected()) {
-        WEBSCREEN_DEBUG_PRINTLN("HTTP POST failed: WiFi not connected");
+    if (!webscreen_wifi_is_connected()) {        WEBSCREEN_DEBUG_PRINTLN("HTTP POST failed: WiFi not connected");
         return -2;
     }
     
@@ -254,8 +246,7 @@ int webscreen_http_post(const char* url, const char* data, const char* content_t
     
     int http_code = g_http_client.POST(data);
     
-    if (http_code > 0) {
-        String payload = g_http_client.getString();
+    if (http_code > 0) {        String payload = g_http_client.getString();
         size_t copy_length = min(payload.length(), buffer_size - 1);
         strncpy(response_buffer, payload.c_str(), copy_length);
         response_buffer[copy_length] = '\0';
@@ -264,8 +255,7 @@ int webscreen_http_post(const char* url, const char* data, const char* content_t
         g_bytes_received += payload.length();
         
         WEBSCREEN_DEBUG_PRINTF("HTTP POST response: %d (%d bytes)\n", http_code, payload.length());
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("HTTP POST failed: %s\n", g_http_client.errorToString(http_code).c_str());
+    } else {        WEBSCREEN_DEBUG_PRINTF("HTTP POST failed: %s\n", g_http_client.errorToString(http_code).c_str());
         response_buffer[0] = '\0';
     }
     
@@ -273,19 +263,18 @@ int webscreen_http_post(const char* url, const char* data, const char* content_t
     return http_code;
 }
 
-void webscreen_http_set_timeout(uint32_t timeout_ms) {
-    g_http_client.setTimeout(timeout_ms);
+
+void webscreen_http_set_timeout(uint32_t timeout_ms) {    g_http_client.setTimeout(timeout_ms);
 }
 
-bool webscreen_http_set_ca_cert_from_sd(const char* cert_file) {
-    if (!cert_file || !SD_MMC.exists(cert_file)) {
+
+bool webscreen_http_set_ca_cert_from_sd(const char* cert_file) {    if (!cert_file || !SD_MMC.exists(cert_file)) {
         WEBSCREEN_DEBUG_PRINTF("Certificate file not found: %s\n", cert_file);
         return false;
     }
     
     File cert = SD_MMC.open(cert_file, FILE_READ);
-    if (!cert) {
-        WEBSCREEN_DEBUG_PRINTF("Failed to open certificate file: %s\n", cert_file);
+    if (!cert) {        WEBSCREEN_DEBUG_PRINTF("Failed to open certificate file: %s\n", cert_file);
         return false;
     }
     
@@ -297,25 +286,21 @@ bool webscreen_http_set_ca_cert_from_sd(const char* cert_file) {
     return true;
 }
 
-void webscreen_http_add_header(const char* name, const char* value) {
-    if (name && value) {
+
+void webscreen_http_add_header(const char* name, const char* value) {    if (name && value) {
         g_http_client.addHeader(name, value);
     }
 }
 
-void webscreen_http_clear_headers(void) {
-    g_http_client.end();
-    // Headers are cleared when the client is ended
-}
 
-// ============================================================================
-// MQTT CLIENT
-// ============================================================================
+void webscreen_http_clear_headers(void) {    g_http_client.end();
+    
+}
 
 #if WEBSCREEN_ENABLE_MQTT
 
-bool webscreen_mqtt_init(const char* broker, uint16_t port, const char* client_id) {
-    if (!broker || !client_id) {
+
+bool webscreen_mqtt_init(const char* broker, uint16_t port, const char* client_id) {    if (!broker || !client_id) {
         return false;
     }
     
@@ -327,8 +312,8 @@ bool webscreen_mqtt_init(const char* broker, uint16_t port, const char* client_i
     return true;
 }
 
-bool webscreen_mqtt_connect(const char* username, const char* password) {
-    if (!webscreen_wifi_is_connected()) {
+
+bool webscreen_mqtt_connect(const char* username, const char* password) {    if (!webscreen_wifi_is_connected()) {
         WEBSCREEN_DEBUG_PRINTLN("MQTT connect failed: WiFi not connected");
         return false;
     }
@@ -336,122 +321,102 @@ bool webscreen_mqtt_connect(const char* username, const char* password) {
     WEBSCREEN_DEBUG_PRINTF("Connecting to MQTT broker: %s\n", g_mqtt_broker.c_str());
     
     bool connected;
-    if (username && password) {
-        connected = g_mqtt_client.connect(g_mqtt_client_id.c_str(), username, password);
-    } else {
-        connected = g_mqtt_client.connect(g_mqtt_client_id.c_str());
+    if (username && password) {        connected = g_mqtt_client.connect(g_mqtt_client_id.c_str(), username, password);
+    } else {        connected = g_mqtt_client.connect(g_mqtt_client_id.c_str());
     }
     
-    if (connected) {
-        WEBSCREEN_DEBUG_PRINTLN("MQTT connected");
+    if (connected) {        WEBSCREEN_DEBUG_PRINTLN("MQTT connected");
         
-        // Set callback if one was registered
-        if (g_mqtt_callback) {
-            g_mqtt_client.setCallback([](char* topic, byte* payload, unsigned int length) {
-                payload[length] = '\0'; // Null-terminate
-                if (g_mqtt_callback) {
-                    g_mqtt_callback(topic, (char*)payload);
+        
+        if (g_mqtt_callback) {            g_mqtt_client.setCallback([](char* topic, byte* payload, unsigned int length) {
+                payload[length] = '\0'; 
+                if (g_mqtt_callback) {                    g_mqtt_callback(topic, (char*)payload);
                 }
             });
         }
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("MQTT connection failed, rc=%d\n", g_mqtt_client.state());
+    } else {        WEBSCREEN_DEBUG_PRINTF("MQTT connection failed, rc=%d\n", g_mqtt_client.state());
     }
     
     return connected;
 }
 
-void webscreen_mqtt_disconnect(void) {
-    if (g_mqtt_client.connected()) {
+
+void webscreen_mqtt_disconnect(void) {    if (g_mqtt_client.connected()) {
         g_mqtt_client.disconnect();
         WEBSCREEN_DEBUG_PRINTLN("MQTT disconnected");
     }
 }
 
-bool webscreen_mqtt_is_connected(void) {
-    return g_mqtt_client.connected();
+
+bool webscreen_mqtt_is_connected(void) {    return g_mqtt_client.connected();
 }
 
-bool webscreen_mqtt_publish(const char* topic, const char* payload, bool retain) {
-    if (!topic || !payload || !g_mqtt_client.connected()) {
+
+bool webscreen_mqtt_publish(const char* topic, const char* payload, bool retain) {    if (!topic || !payload || !g_mqtt_client.connected()) {
         return false;
     }
     
     bool result = g_mqtt_client.publish(topic, payload, retain);
-    if (result) {
-        g_bytes_sent += strlen(payload);
+    if (result) {        g_bytes_sent += strlen(payload);
         WEBSCREEN_DEBUG_PRINTF("MQTT published: [%s] %s\n", topic, payload);
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("MQTT publish failed: [%s]\n", topic);
+    } else {        WEBSCREEN_DEBUG_PRINTF("MQTT publish failed: [%s]\n", topic);
     }
     
     return result;
 }
 
-bool webscreen_mqtt_subscribe(const char* topic, uint8_t qos) {
-    if (!topic || !g_mqtt_client.connected()) {
+
+bool webscreen_mqtt_subscribe(const char* topic, uint8_t qos) {    if (!topic || !g_mqtt_client.connected()) {
         return false;
     }
     
     bool result = g_mqtt_client.subscribe(topic, qos);
-    if (result) {
-        WEBSCREEN_DEBUG_PRINTF("MQTT subscribed: %s (QoS %d)\n", topic, qos);
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("MQTT subscribe failed: %s\n", topic);
+    if (result) {        WEBSCREEN_DEBUG_PRINTF("MQTT subscribed: %s (QoS %d)\n", topic, qos);
+    } else {        WEBSCREEN_DEBUG_PRINTF("MQTT subscribe failed: %s\n", topic);
     }
     
     return result;
 }
 
-bool webscreen_mqtt_unsubscribe(const char* topic) {
-    if (!topic || !g_mqtt_client.connected()) {
+
+bool webscreen_mqtt_unsubscribe(const char* topic) {    if (!topic || !g_mqtt_client.connected()) {
         return false;
     }
     
     bool result = g_mqtt_client.unsubscribe(topic);
-    if (result) {
-        WEBSCREEN_DEBUG_PRINTF("MQTT unsubscribed: %s\n", topic);
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("MQTT unsubscribe failed: %s\n", topic);
+    if (result) {        WEBSCREEN_DEBUG_PRINTF("MQTT unsubscribed: %s\n", topic);
+    } else {        WEBSCREEN_DEBUG_PRINTF("MQTT unsubscribe failed: %s\n", topic);
     }
     
     return result;
 }
 
-void webscreen_mqtt_set_callback(void (*callback)(const char* topic, const char* payload)) {
-    g_mqtt_callback = callback;
+
+void webscreen_mqtt_set_callback(void (*callback)(const char* topic, const char* payload)) {    g_mqtt_callback = callback;
 }
 
-void webscreen_mqtt_loop(void) {
-    if (g_mqtt_client.connected()) {
+
+void webscreen_mqtt_loop(void) {    if (g_mqtt_client.connected()) {
         g_mqtt_client.loop();
     }
 }
 
-#endif // WEBSCREEN_ENABLE_MQTT
+#endif 
 
-// ============================================================================
-// NETWORK UTILITIES
-// ============================================================================
 
-bool webscreen_network_is_available(void) {
-    return webscreen_wifi_is_connected();
+bool webscreen_network_is_available(void) {    return webscreen_wifi_is_connected();
 }
 
-const char* webscreen_network_get_status(void) {
-    static String status;
+const char* webscreen_network_get_status(void) {    static String status;
     
-    if (!g_network_initialized) {
-        return "Network not initialized";
+    if (!g_network_initialized) {        return "Network not initialized";
     }
     
     status = "WiFi: ";
-    if (webscreen_wifi_is_connected()) {
-        status += "Connected (";
+    if (webscreen_wifi_is_connected()) {        status += "Connected (";
         status += WiFi.localIP().toString();
         status += ")";
-    } else {
-        status += "Disconnected";
+    } else {        status += "Disconnected";
     }
     
 #if WEBSCREEN_ENABLE_MQTT
@@ -462,13 +427,12 @@ const char* webscreen_network_get_status(void) {
     return status.c_str();
 }
 
-void webscreen_network_print_status(void) {
-    WEBSCREEN_DEBUG_PRINTLN("\n=== NETWORK STATUS ===");
+
+void webscreen_network_print_status(void) {    WEBSCREEN_DEBUG_PRINTLN("\n=== NETWORK STATUS ===");
     WEBSCREEN_DEBUG_PRINTF("Initialized: %s\n", g_network_initialized ? "Yes" : "No");
     WEBSCREEN_DEBUG_PRINTF("WiFi Status: %s\n", webscreen_network_get_status());
     
-    if (webscreen_wifi_is_connected()) {
-        WEBSCREEN_DEBUG_PRINTF("SSID: %s\n", WiFi.SSID().c_str());
+    if (webscreen_wifi_is_connected()) {        WEBSCREEN_DEBUG_PRINTF("SSID: %s\n", WiFi.SSID().c_str());
         WEBSCREEN_DEBUG_PRINTF("IP Address: %s\n", WiFi.localIP().toString().c_str());
         WEBSCREEN_DEBUG_PRINTF("Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
         WEBSCREEN_DEBUG_PRINTF("DNS: %s\n", WiFi.dnsIP().toString().c_str());
@@ -483,6 +447,7 @@ void webscreen_network_print_status(void) {
     WEBSCREEN_DEBUG_PRINTLN("======================\n");
 }
 
+
 bool webscreen_network_test_connectivity(const char* test_url) {
     const char* url = test_url ? test_url : "http://httpbin.org/get";
     
@@ -496,13 +461,12 @@ bool webscreen_network_test_connectivity(const char* test_url) {
     return success;
 }
 
+
 void webscreen_network_get_stats(uint32_t* bytes_sent, 
                                 uint32_t* bytes_received,
-                                uint32_t* connection_uptime) {
-    if (bytes_sent) *bytes_sent = g_bytes_sent;
+                                uint32_t* connection_uptime) {    if (bytes_sent) *bytes_sent = g_bytes_sent;
     if (bytes_received) *bytes_received = g_bytes_received;
-    if (connection_uptime) {
-        *connection_uptime = webscreen_wifi_is_connected() ? 
+    if (connection_uptime) {        *connection_uptime = webscreen_wifi_is_connected() ? 
                            (WEBSCREEN_MILLIS() - g_wifi_connection_time) : 0;
     }
 }

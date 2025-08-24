@@ -58,11 +58,11 @@
 #define WEBSCREEN_SERIAL_BUFFER_SIZE 256
 
 // Memory Allocation Thresholds
-#define WEBSCREEN_PSRAM_THRESHOLD_KB 32  // Use PSRAM for allocations > 32KB
+#define WEBSCREEN_PSRAM_THRESHOLD_KB 32          // Use PSRAM for allocations > 32KB
 #define WEBSCREEN_MEMORY_WARNING_THRESHOLD 0.85  // Warn when 85% memory used
 
 // JavaScript Engine
-#define WEBSCREEN_JS_HEAP_SIZE_KB 512    // JavaScript heap size (KB)
+#define WEBSCREEN_JS_HEAP_SIZE_KB 512           // JavaScript heap size (KB)
 #define WEBSCREEN_JS_MAX_EXECUTION_TIME_MS 100  // Max script execution time
 
 // ============================================================================
@@ -78,7 +78,7 @@
 #define WEBSCREEN_HTTP_TIMEOUT_MS 10000
 #define WEBSCREEN_HTTP_MAX_RESPONSE_SIZE 32768
 
-// MQTT Client  
+// MQTT Client
 #define WEBSCREEN_MQTT_KEEPALIVE_SEC 60
 #define WEBSCREEN_MQTT_MAX_PACKET_SIZE 1024
 
@@ -127,9 +127,9 @@
 #define WEBSCREEN_LVGL_INDEV_READ_PERIOD_MS 30
 
 // LVGL Features (aligned with lv_conf.h)
-#define WEBSCREEN_LVGL_USE_PSRAM 1       // Use PSRAM for LVGL buffers
-#define WEBSCREEN_LVGL_DOUBLE_BUFFER 1   // Enable double buffering if PSRAM available
-#define WEBSCREEN_LVGL_COLOR_DEPTH 16    // 16-bit color depth
+#define WEBSCREEN_LVGL_USE_PSRAM 1      // Use PSRAM for LVGL buffers
+#define WEBSCREEN_LVGL_DOUBLE_BUFFER 1  // Enable double buffering if PSRAM available
+#define WEBSCREEN_LVGL_COLOR_DEPTH 16   // 16-bit color depth
 
 // ============================================================================
 // ARDUINO COMPATIBILITY
@@ -156,18 +156,18 @@
 
 // Debug vs Release builds
 #ifdef WEBSCREEN_DEBUG
-  #define WEBSCREEN_LOG_LEVEL 0  // Debug level
-  #define WEBSCREEN_ENABLE_ASSERTIONS 1
+#define WEBSCREEN_LOG_LEVEL 0  // Debug level
+#define WEBSCREEN_ENABLE_ASSERTIONS 1
 #else
-  #define WEBSCREEN_LOG_LEVEL 2  // Info level
-  #define WEBSCREEN_ENABLE_ASSERTIONS 0
+#define WEBSCREEN_LOG_LEVEL 2  // Info level
+#define WEBSCREEN_ENABLE_ASSERTIONS 0
 #endif
 
 // Performance builds
 #ifdef WEBSCREEN_PERFORMANCE
-  #define WEBSCREEN_DISABLE_DEBUG_OUTPUT 1
-  #define WEBSCREEN_OPTIMIZE_MEMORY 1
-  #define WEBSCREEN_LOOP_DELAY_MS 0  // No loop delay
+#define WEBSCREEN_DISABLE_DEBUG_OUTPUT 1
+#define WEBSCREEN_OPTIMIZE_MEMORY 1
+#define WEBSCREEN_LOOP_DELAY_MS 0  // No loop delay
 #endif
 
 // ============================================================================

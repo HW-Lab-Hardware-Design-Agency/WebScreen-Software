@@ -26,6 +26,7 @@ extern "C" {
  * @param script_file Path to JavaScript file on SD card
  * @return true if runtime started successfully, false otherwise
  */
+
 bool webscreen_runtime_start_javascript(const char* script_file);
 
 /**
@@ -36,6 +37,7 @@ bool webscreen_runtime_start_javascript(const char* script_file);
  * 
  * @return true if fallback started successfully, false otherwise
  */
+
 bool webscreen_runtime_start_fallback(void);
 
 /**
@@ -44,6 +46,7 @@ bool webscreen_runtime_start_fallback(void);
  * Executes one iteration of the JavaScript runtime. Should be called
  * repeatedly from the main loop when in JavaScript mode.
  */
+
 void webscreen_runtime_loop_javascript(void);
 
 /**
@@ -52,6 +55,7 @@ void webscreen_runtime_loop_javascript(void);
  * Executes one iteration of the fallback application. Should be called
  * repeatedly from the main loop when in fallback mode.
  */
+
 void webscreen_runtime_loop_fallback(void);
 
 /**
@@ -59,6 +63,7 @@ void webscreen_runtime_loop_fallback(void);
  * 
  * Cleanly shuts down the active runtime and frees resources.
  */
+
 void webscreen_runtime_shutdown(void);
 
 // ============================================================================
@@ -69,6 +74,7 @@ void webscreen_runtime_shutdown(void);
  * @brief Check if JavaScript runtime is active
  * @return true if JavaScript is running, false otherwise
  */
+
 bool webscreen_runtime_is_javascript_active(void);
 
 /**
@@ -82,6 +88,7 @@ const char* webscreen_runtime_get_javascript_status(void);
  * @param code JavaScript code string to execute
  * @return true if execution successful, false on error
  */
+
 bool webscreen_runtime_execute_javascript(const char* code);
 
 /**
@@ -90,6 +97,7 @@ bool webscreen_runtime_execute_javascript(const char* code);
  * @param avg_time_us Pointer to store average execution time in microseconds
  * @param error_count Pointer to store error count
  */
+
 void webscreen_runtime_get_javascript_stats(uint32_t* exec_count, 
                                            uint32_t* avg_time_us, 
                                            uint32_t* error_count);
@@ -102,12 +110,14 @@ void webscreen_runtime_get_javascript_stats(uint32_t* exec_count,
  * @brief Check if fallback application is active
  * @return true if fallback is running, false otherwise
  */
+
 bool webscreen_runtime_is_fallback_active(void);
 
 /**
  * @brief Update fallback display text
  * @param text Text to display in fallback application
  */
+
 void webscreen_runtime_set_fallback_text(const char* text);
 
 /**
@@ -124,6 +134,7 @@ const char* webscreen_runtime_get_fallback_status(void);
  * @brief Initialize LVGL graphics library
  * @return true if initialization successful, false otherwise
  */
+
 bool webscreen_runtime_init_lvgl(void);
 
 /**
@@ -132,6 +143,7 @@ bool webscreen_runtime_init_lvgl(void);
  * Processes LVGL timers and animations. Should be called regularly
  * from both JavaScript and fallback runtime loops.
  */
+
 void webscreen_runtime_lvgl_timer_handler(void);
 
 /**
@@ -144,12 +156,14 @@ void* webscreen_runtime_get_lvgl_display(void);
  * @brief Set LVGL background color
  * @param color RGB color value (0xRRGGBB)
  */
+
 void webscreen_runtime_set_background_color(uint32_t color);
 
 /**
  * @brief Set LVGL foreground color
  * @param color RGB color value (0xRRGGBB)
  */
+
 void webscreen_runtime_set_foreground_color(uint32_t color);
 
 // ============================================================================
@@ -162,6 +176,7 @@ void webscreen_runtime_set_foreground_color(uint32_t color);
  * @param lvgl_memory_used Pointer to store LVGL memory usage
  * @param total_runtime_memory Pointer to store total runtime memory
  */
+
 void webscreen_runtime_get_memory_usage(uint32_t* js_heap_used,
                                        uint32_t* lvgl_memory_used,
                                        uint32_t* total_runtime_memory);
@@ -170,6 +185,7 @@ void webscreen_runtime_get_memory_usage(uint32_t* js_heap_used,
  * @brief Force garbage collection (if supported)
  * @return true if garbage collection was performed
  */
+
 bool webscreen_runtime_garbage_collect(void);
 
 // ============================================================================
@@ -185,12 +201,14 @@ const char* webscreen_runtime_get_last_error(void);
 /**
  * @brief Clear runtime error state
  */
+
 void webscreen_runtime_clear_errors(void);
 
 /**
  * @brief Check if runtime is in error state
  * @return true if runtime has errors, false otherwise
  */
+
 bool webscreen_runtime_has_errors(void);
 
 // ============================================================================
@@ -201,6 +219,7 @@ bool webscreen_runtime_has_errors(void);
  * @brief Enable or disable performance monitoring
  * @param enable true to enable monitoring, false to disable
  */
+
 void webscreen_runtime_set_performance_monitoring(bool enable);
 
 /**
@@ -209,6 +228,7 @@ void webscreen_runtime_set_performance_monitoring(bool enable);
  * @param max_loop_time_us Maximum loop time in microseconds
  * @param fps Frames per second (for display updates)
  */
+
 void webscreen_runtime_get_performance_stats(uint32_t* avg_loop_time_us,
                                             uint32_t* max_loop_time_us,
                                             uint32_t* fps);
@@ -216,7 +236,74 @@ void webscreen_runtime_get_performance_stats(uint32_t* avg_loop_time_us,
 /**
  * @brief Print runtime status to serial
  */
+
 void webscreen_runtime_print_status(void);
+
+// ============================================================================
+// JAVASCRIPT ENGINE INTERNAL FUNCTIONS
+// ============================================================================
+
+/**
+ * @brief Initialize the JavaScript engine (Elk)
+ * @return true if initialization successful, false otherwise
+ */
+
+bool webscreen_runtime_init_javascript_engine(void);
+
+/**
+ * @brief Load JavaScript script from SD card
+ * @param script_file Path to script file
+ * @return true if script loaded successfully, false otherwise
+ */
+
+bool webscreen_runtime_load_script(const char* script_file);
+
+/**
+ * @brief Start JavaScript execution task
+ * @return true if task started successfully, false otherwise
+ */
+
+bool webscreen_runtime_start_javascript_task(void);
+
+/**
+ * @brief JavaScript execution task function
+ * @param pvParameters Task parameters (unused)
+ */
+
+void webscreen_runtime_javascript_task(void *pvParameters);
+
+/**
+ * @brief Register JavaScript API functions
+ */
+
+void webscreen_runtime_register_js_functions(void);
+
+/**
+ * @brief Maintain WiFi and MQTT connections
+ */
+
+void webscreen_runtime_wifi_mqtt_maintain_loop(void);
+
+/**
+ * @brief Initialize LVGL SD filesystem driver ('S' drive)
+ * @return true if initialization successful, false otherwise
+ */
+
+bool webscreen_runtime_init_sd_filesystem(void);
+
+/**
+ * @brief Initialize LVGL memory filesystem driver ('M' drive)
+ * @return true if initialization successful, false otherwise
+ */
+
+bool webscreen_runtime_init_memory_filesystem(void);
+
+/**
+ * @brief Initialize RAM images storage
+ * @return true if initialization successful, false otherwise
+ */
+
+bool webscreen_runtime_init_ram_images(void);
 
 #ifdef __cplusplus
 }

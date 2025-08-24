@@ -8,8 +8,8 @@
 
 #include "webscreen_hardware.h"
 #include "webscreen_main.h"
-
-// Hardware state
+#include "pins_config.h"
+#include <SD_MMC.h>
 static bool g_hardware_initialized = false;
 static bool g_display_on = true;
 static uint8_t g_brightness = 200;
@@ -17,29 +17,24 @@ static bool g_last_button_state = HIGH;
 static uint32_t g_last_button_time = 0;
 static void (*g_button_callback)(bool) = nullptr;
 
-// ============================================================================
-// HARDWARE INITIALIZATION
-// ============================================================================
 
-bool webscreen_hardware_init(void) {
-    if (g_hardware_initialized) {
+bool webscreen_hardware_init(void) {    if (g_hardware_initialized) {
         return true;
     }
     
     WEBSCREEN_DEBUG_PRINTLN("Initializing hardware pins...");
     
-    // Initialize pins
+
     WEBSCREEN_PIN_MODE(WEBSCREEN_PIN_LED, OUTPUT);
     WEBSCREEN_PIN_MODE(WEBSCREEN_PIN_BUTTON, INPUT_PULLUP);
     WEBSCREEN_PIN_MODE(WEBSCREEN_PIN_OUTPUT, OUTPUT);
     
-    // Set initial states
-    WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);   // Turn on LED
-    WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_OUTPUT); // Power on
+
+    WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);   
+    WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_OUTPUT); 
     
-    // Initialize display
-    if (!webscreen_display_init()) {
-        WEBSCREEN_DEBUG_PRINTLN("Display initialization failed");
+
+    if (!webscreen_display_init()) {        WEBSCREEN_DEBUG_PRINTLN("Display initialization failed");
         return false;
     }
     
@@ -48,32 +43,55 @@ bool webscreen_hardware_init(void) {
     return true;
 }
 
-void webscreen_hardware_shutdown(void) {
-    if (!g_hardware_initialized) {
+
+void webscreen_hardware_shutdown(void) {    if (!g_hardware_initialized) {
         return;
     }
     
     WEBSCREEN_DEBUG_PRINTLN("Shutting down hardware...");
     
-    // Turn off display
+
     webscreen_display_power(false);
     
-    // Turn off LED
+
     WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
     
     g_hardware_initialized = false;
     WEBSCREEN_DEBUG_PRINTLN("Hardware shutdown complete");
 }
 
-// ============================================================================
-// DISPLAY FUNCTIONS
-// ============================================================================
 
-bool webscreen_display_init(void) {
-    WEBSCREEN_DEBUG_PRINTLN("Initializing display...");
+bool webscreen_hardware_init_sd_card(void) {    WEBSCREEN_DEBUG_PRINTLN("Initializing SD Card...");
+    SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
+    for (int i = 0; i < 3; i++) {
+
+        WEBSCREEN_DEBUG_PRINTF("Attempt %d: Mounting SD card at a safe, low frequency...\n", i + 1);
+        if (SD_MMC.begin("/sdcard", true, false, 400000)) {            WEBSCREEN_DEBUG_PRINTLN("SD Card mounted successfully at low frequency.");
+            
+
+            SD_MMC.end();
+            WEBSCREEN_DEBUG_PRINTLN("Re-mounting SD card at high frequency...");
+            if (SD_MMC.begin("/sdcard", true, false, 10000000)) {                WEBSCREEN_DEBUG_PRINTLN("SD Card re-mounted successfully at high frequency.");
+                return true;
+            } else {                WEBSCREEN_DEBUG_PRINTLN("Failed to re-mount at high frequency. Falling back to low speed mount.");
+
+                if(SD_MMC.begin("/sdcard", true, false, 400000)) {                    WEBSCREEN_DEBUG_PRINTLN("Continuing at safe, low frequency.");
+                    return true;
+                }
+            }
+        }
+        
+        WEBSCREEN_DEBUG_PRINTF("Attempt %d failed. Retrying in 200ms...\n", i + 1);
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    WEBSCREEN_DEBUG_PRINTLN("All attempts to mount SD card failed.");
+    return false;
+}
+
+
+bool webscreen_display_init(void) {    WEBSCREEN_DEBUG_PRINTLN("Initializing display...");
     
-    // This is a simplified implementation - in a real system,
-    // this would initialize the RM67162 display driver
     
     g_display_on = true;
     g_brightness = 200;
@@ -82,70 +100,58 @@ bool webscreen_display_init(void) {
     return true;
 }
 
-bool webscreen_display_set_brightness(uint8_t brightness) {
-    g_brightness = brightness;
+
+bool webscreen_display_set_brightness(uint8_t brightness) {    g_brightness = brightness;
     
-    // In a real implementation, this would control the display backlight
-    // For now, we'll use the LED as a brightness indicator
-    if (brightness > 128) {
-        WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
-    } else {
-        WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
+    if (brightness > 128) {        WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
+    } else {        WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
     }
     
     WEBSCREEN_DEBUG_PRINTF("Display brightness set to %d\n", brightness);
     return true;
 }
 
-uint8_t webscreen_display_get_brightness(void) {
-    return g_brightness;
+
+uint8_t webscreen_display_get_brightness(void) {    return g_brightness;
 }
 
-bool webscreen_display_set_rotation(uint8_t rotation) {
-    if (rotation > 3) {
+
+bool webscreen_display_set_rotation(uint8_t rotation) {    if (rotation > 3) {
         return false;
     }
     
-    // In a real implementation, this would rotate the display
+
     WEBSCREEN_DEBUG_PRINTF("Display rotation set to %d\n", rotation);
     return true;
 }
 
-void webscreen_display_power(bool on) {
-    g_display_on = on;
+
+void webscreen_display_power(bool on) {    g_display_on = on;
     
-    if (on) {
-        WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
+    if (on) {        WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
         webscreen_display_set_brightness(g_brightness);
-    } else {
-        WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
+    } else {        WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
     }
     
     WEBSCREEN_DEBUG_PRINTF("Display power: %s\n", on ? "ON" : "OFF");
 }
 
-bool webscreen_display_is_on(void) {
-    return g_display_on;
+
+bool webscreen_display_is_on(void) {    return g_display_on;
 }
 
-// ============================================================================
-// BUTTON HANDLING
-// ============================================================================
 
-void webscreen_hardware_handle_button(void) {
-    bool current_button_state = WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON);
+void webscreen_hardware_handle_button(void) {    bool current_button_state = WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON);
     uint32_t current_time = WEBSCREEN_MILLIS();
     
-    // Check for button press (HIGH to LOW transition with debouncing)
-    if (g_last_button_state == HIGH && current_button_state == LOW) {
-        if (current_time - g_last_button_time > WEBSCREEN_BUTTON_DEBOUNCE_MS) {
-            // Button pressed - toggle display
+
+    if (g_last_button_state == HIGH && current_button_state == LOW) {        if (current_time - g_last_button_time > WEBSCREEN_BUTTON_DEBOUNCE_MS) {
+
             g_display_on = !g_display_on;
             webscreen_display_power(g_display_on);
             
-            // Call callback if set
-            if (g_button_callback) {
-                g_button_callback(true);
+
+            if (g_button_callback) {                g_button_callback(true);
             }
             
             WEBSCREEN_DEBUG_PRINTF("Button pressed - Display %s\n", 
@@ -158,65 +164,57 @@ void webscreen_hardware_handle_button(void) {
     g_last_button_state = current_button_state;
 }
 
-bool webscreen_hardware_button_pressed(void) {
-    return (WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON) == LOW);
+
+bool webscreen_hardware_button_pressed(void) {    return (WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON) == LOW);
 }
 
-void webscreen_hardware_set_button_callback(void (*callback)(bool pressed)) {
-    g_button_callback = callback;
+
+void webscreen_hardware_set_button_callback(void (*callback)(bool pressed)) {    g_button_callback = callback;
 }
 
-// ============================================================================
-// POWER MANAGEMENT
-// ============================================================================
 
 uint16_t webscreen_hardware_get_battery_voltage(void) {
-    // Read battery voltage from ADC (simplified implementation)
-    int raw = analogRead(4); // PIN_BAT_VOLT
+
+    int raw = analogRead(4); 
     
-    // Convert to millivolts (this is a rough approximation)
+
     uint16_t voltage_mv = (raw * 3300) / 4095;
     
     return voltage_mv;
 }
 
-void webscreen_hardware_set_power_saving(bool enable) {
-    if (enable) {
-        // Enable power saving features
-        setCpuFrequencyMhz(80); // Reduce CPU frequency
+
+void webscreen_hardware_set_power_saving(bool enable) {    if (enable) {
+
+        setCpuFrequencyMhz(80); 
         WEBSCREEN_DEBUG_PRINTLN("Power saving mode enabled");
     } else {
-        // Disable power saving features
-        setCpuFrequencyMhz(240); // Full speed
+
+        setCpuFrequencyMhz(240); 
         WEBSCREEN_DEBUG_PRINTLN("Power saving mode disabled");
     }
 }
 
-void webscreen_hardware_deep_sleep(uint32_t duration_ms) {
-    WEBSCREEN_DEBUG_PRINTF("Entering deep sleep for %lu ms\n", duration_ms);
+
+void webscreen_hardware_deep_sleep(uint32_t duration_ms) {    WEBSCREEN_DEBUG_PRINTF("Entering deep sleep for %lu ms\n", duration_ms);
     
-    // Configure wake-up sources
-    esp_sleep_enable_timer_wakeup(duration_ms * 1000); // Convert to microseconds
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0); // Wake on button press
+
+    esp_sleep_enable_timer_wakeup(duration_ms * 1000); 
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0); 
     
-    // Enter deep sleep
+
     esp_deep_sleep_start();
 }
 
-// ============================================================================
-// LED CONTROL
-// ============================================================================
 
-void webscreen_hardware_set_led(bool on) {
-    if (on) {
+void webscreen_hardware_set_led(bool on) {    if (on) {
         WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
-    } else {
-        WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
+    } else {        WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
     }
 }
 
-void webscreen_hardware_blink_led(uint8_t count, uint16_t duration_ms) {
-    for (uint8_t i = 0; i < count; i++) {
+
+void webscreen_hardware_blink_led(uint8_t count, uint16_t duration_ms) {    for (uint8_t i = 0; i < count; i++) {
         WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
         WEBSCREEN_DELAY(duration_ms);
         WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
@@ -224,39 +222,37 @@ void webscreen_hardware_blink_led(uint8_t count, uint16_t duration_ms) {
     }
 }
 
-// ============================================================================
-// SYSTEM MONITORING
-// ============================================================================
 
 float webscreen_hardware_get_temperature(void) {
-    // Get internal temperature sensor reading
+
     float temp = temperatureRead();
     return temp;
 }
 
+
 bool webscreen_hardware_is_healthy(void) {
-    // Check basic hardware health indicators
+
     
-    // Check if pins are responding
+
     WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
     WEBSCREEN_DELAY(1);
     
-    // Check temperature
+
     float temp = webscreen_hardware_get_temperature();
-    if (temp > 85.0 || temp < -10.0) { // Outside reasonable operating range
+    if (temp > 85.0 || temp < -10.0) { 
         return false;
     }
     
-    // Check memory
-    if (ESP.getFreeHeap() < 10000) { // Less than 10KB free
+
+    if (ESP.getFreeHeap() < 10000) { 
         return false;
     }
     
     return g_hardware_initialized;
 }
 
-void webscreen_hardware_print_status(void) {
-    WEBSCREEN_DEBUG_PRINTLN("\n=== HARDWARE STATUS ===");
+
+void webscreen_hardware_print_status(void) {    WEBSCREEN_DEBUG_PRINTLN("\n=== HARDWARE STATUS ===");
     WEBSCREEN_DEBUG_PRINTF("Initialized: %s\n", g_hardware_initialized ? "Yes" : "No");
     WEBSCREEN_DEBUG_PRINTF("Display On: %s\n", g_display_on ? "Yes" : "No");
     WEBSCREEN_DEBUG_PRINTF("Brightness: %d/255\n", g_brightness);
@@ -268,43 +264,39 @@ void webscreen_hardware_print_status(void) {
     WEBSCREEN_DEBUG_PRINTLN("======================\n");
 }
 
-bool webscreen_hardware_self_test(void) {
-    WEBSCREEN_DEBUG_PRINTLN("Running hardware self-test...");
+
+bool webscreen_hardware_self_test(void) {    WEBSCREEN_DEBUG_PRINTLN("Running hardware self-test...");
     
     bool all_passed = true;
     
-    // Test LED
+
     WEBSCREEN_DEBUG_PRINT("LED test... ");
     webscreen_hardware_blink_led(3, 100);
     WEBSCREEN_DEBUG_PRINTLN("PASS");
     
-    // Test button
+
     WEBSCREEN_DEBUG_PRINT("Button test... ");
-    bool button_works = true; // In a real test, we'd verify button functionality
-    if (button_works) {
-        WEBSCREEN_DEBUG_PRINTLN("PASS");
-    } else {
-        WEBSCREEN_DEBUG_PRINTLN("FAIL");
+    bool button_works = true; 
+    if (button_works) {        WEBSCREEN_DEBUG_PRINTLN("PASS");
+    } else {        WEBSCREEN_DEBUG_PRINTLN("FAIL");
         all_passed = false;
     }
     
-    // Test temperature sensor
+
     WEBSCREEN_DEBUG_PRINT("Temperature sensor test... ");
     float temp = webscreen_hardware_get_temperature();
-    if (temp > -50 && temp < 100) { // Reasonable range
+    if (temp > -50 && temp < 100) { 
         WEBSCREEN_DEBUG_PRINTF("PASS (%.1f°C)\n", temp);
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("FAIL (%.1f°C)\n", temp);
+    } else {        WEBSCREEN_DEBUG_PRINTF("FAIL (%.1f°C)\n", temp);
         all_passed = false;
     }
     
-    // Test memory
+
     WEBSCREEN_DEBUG_PRINT("Memory test... ");
     uint32_t free_heap = ESP.getFreeHeap();
-    if (free_heap > 50000) { // At least 50KB free
+    if (free_heap > 50000) { 
         WEBSCREEN_DEBUG_PRINTF("PASS (%lu bytes free)\n", free_heap);
-    } else {
-        WEBSCREEN_DEBUG_PRINTF("FAIL (%lu bytes free)\n", free_heap);
+    } else {        WEBSCREEN_DEBUG_PRINTF("FAIL (%lu bytes free)\n", free_heap);
         all_passed = false;
     }
     

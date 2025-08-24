@@ -31,6 +31,7 @@ extern "C" {
  * 
  * @return true if initialization successful, false on critical failure
  */
+
 bool webscreen_setup(void);
 
 /**
@@ -44,6 +45,7 @@ bool webscreen_setup(void);
  * 
  * Called repeatedly from Arduino loop() function.
  */
+
 void webscreen_loop(void);
 
 /**
@@ -58,6 +60,7 @@ const char* webscreen_get_state(void);
  * 
  * @return true if system is operating normally
  */
+
 bool webscreen_is_healthy(void);
 
 /**
@@ -66,7 +69,32 @@ bool webscreen_is_healthy(void);
  * Initiates a controlled shutdown of all subsystems.
  * Useful for power management or error recovery.
  */
+
 void webscreen_shutdown(void);
+
+/**
+ * @brief Load configuration from SD card JSON file
+ * 
+ * Reads and parses the webscreen.json configuration file from SD card.
+ * Extracts WiFi credentials, MQTT settings, display colors, and script filename.
+ * 
+ * @param path Path to JSON config file (e.g., "/webscreen.json")
+ * @param outSSID Reference to store WiFi SSID
+ * @param outPASS Reference to store WiFi password
+ * @param outScript Reference to store script filename
+ * @param outMqttEnabled Reference to store MQTT enabled flag
+ * @param outBgColor Reference to store background color
+ * @param outFgColor Reference to store foreground color
+ * @return true if config loaded successfully, false otherwise
+ */
+
+bool webscreen_load_config(const char* path, 
+                          String &outSSID, 
+                          String &outPASS, 
+                          String &outScript, 
+                          bool &outMqttEnabled,
+                          uint32_t &outBgColor,
+                          uint32_t &outFgColor);
 
 #ifdef __cplusplus
 }
@@ -82,10 +110,8 @@ void webscreen_shutdown(void);
  * This structure holds all runtime configuration options.
  * Loaded from SD card JSON file at startup.
  */
-typedef struct {
-    // WiFi Configuration
-    struct {
-        char ssid[64];              ///< WiFi SSID
+typedef struct {    // WiFi Configuration
+    struct {        char ssid[64];              ///< WiFi SSID
         char password[64];          ///< WiFi password
         bool enabled;               ///< WiFi enabled flag
         uint32_t connection_timeout; ///< Connection timeout in ms
@@ -93,8 +119,7 @@ typedef struct {
     } wifi;
     
     // MQTT Configuration
-    struct {
-        char broker[128];           ///< MQTT broker URL
+    struct {        char broker[128];           ///< MQTT broker URL
         uint16_t port;              ///< MQTT broker port
         char username[64];          ///< MQTT username
         char password[64];          ///< MQTT password
@@ -104,8 +129,7 @@ typedef struct {
     } mqtt;
     
     // Display Configuration
-    struct {
-        uint8_t brightness;         ///< Display brightness (0-255)
+    struct {        uint8_t brightness;         ///< Display brightness (0-255)
         uint8_t rotation;           ///< Display rotation (0-3)
         uint32_t background_color;  ///< Background color (RGB)
         uint32_t foreground_color;  ///< Foreground color (RGB)
@@ -114,8 +138,7 @@ typedef struct {
     } display;
     
     // System Configuration
-    struct {
-        char device_name[32];       ///< Device name
+    struct {        char device_name[32];       ///< Device name
         char timezone[32];          ///< Timezone string
         uint8_t log_level;          ///< Logging level (0-4)
         bool performance_mode;      ///< Performance mode enabled
@@ -204,6 +227,7 @@ extern webscreen_config_t g_webscreen_config;
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 float temperatureRead();
 #ifdef __cplusplus
 }

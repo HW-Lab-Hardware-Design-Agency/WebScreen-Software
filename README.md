@@ -4,18 +4,7 @@
 
 ![til](./docs/WebScreen_Notification.gif)
 
-WebScreen is a high-performance ESP32-S3 based platform for running dynamic JavaScript applications with advanced hardware features. The firmware provides a robust, modular architecture with comprehensive error handling, optimized memory management, and professional-grade logging systems.
-
-## What's New in v2.0
-
-- **Modular Architecture**: Complete refactor with separation of concerns
-- **Advanced Memory Management**: Intelligent PSRAM/internal RAM allocation with leak detection
-- **Comprehensive Error Handling**: Centralized error reporting with recovery strategies
-- **Professional Logging**: Structured logging with multiple output destinations
-- **Performance Optimized**: Hardware acceleration and optimized rendering pipeline
-- **Power Management**: Intelligent power button handling and sleep modes
-- **Enhanced JavaScript API**: Expanded API surface with better error handling
-- **Developer Experience**: Improved debugging tools and comprehensive documentation
+WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Get the notifications you want, build custom JavaScript apps, and stay in the zone—no distractions. Powered by ESP32-S3 with an AMOLED screen, fully open hardware and software.
 
 ## Core Features
 
@@ -47,9 +36,9 @@ WebScreen is a high-performance ESP32-S3 based platform for running dynamic Java
 
 ### Prerequisites
 
-- **Hardware**: WebScreen custom PCB
-- **Storage**: Class 10 SD card (formatted as FAT32)
-- **Cable**: USB-C for programming and power
+- **Hardware**: WebScreen PCB
+- **Storage**: microSD card (formatted as FAT32)
+- **Cable**: USB-C for serial communication and power
 - **Software** (for compilation): Arduino IDE 2.0+
 
 ### Installation
@@ -88,17 +77,31 @@ This is the easiest way to get started with WebScreen without any development se
 3. **Install Required Libraries**
    ```
    Library Manager → Install:
-   - ArduinoJson (by Benoit Blanchon)
-   - LVGL (by kisvegabor)  
-   - PubSubClient (by Nick O'Leary)
+   - ArduinoJson (by Benoit Blanchon) - v6.x or later
+   - LVGL (by kisvegabor) - v8.3.X
+   - PubSubClient (by Nick O'Leary) - v2.8 or later
    ```
 
-4. **Open WebScreen Sketch**
+4. **Configure LVGL**
+   Copy the provided `lv_conf.h` file to your Arduino libraries folder:
+   ```
+   cp WebScreen-Software/lv_conf.h ~/Arduino/libraries/
+   ```
+   
+   Key LVGL settings configured for WebScreen:
+   - Color depth: 16-bit (RGB565) with byte swap enabled
+   - Custom memory management using stdlib malloc/free
+   - Display refresh: 30ms for stability
+   - GIF support enabled
+   - Complex drawing features enabled (shadows, gradients, etc.)
+   - Montserrat 14pt font enabled
+
+5. **Open WebScreen Sketch**
    ```
    File → Open → WebScreen-Software/webscreen/webscreen.ino
    ```
 
-5. **Board Configuration**
+6. **Board Configuration**
    - **Board**: ESP32S3 Dev Module  
    - **CPU Frequency**: 240MHz
    - **Flash Size**: 16MB (or your board's flash size)
@@ -295,6 +298,23 @@ WebScreen features a modular architecture with clear separation of concerns:
 5. Click Upload button
 ```
 
+#### LVGL Configuration
+WebScreen includes a custom `lv_conf.h` file optimized for ESP32-S3 with AMOLED display:
+
+**Key Configuration Settings:**
+- **Color Format**: 16-bit RGB565 with byte swapping for SPI compatibility
+- **Memory Management**: Custom malloc/free using ESP32 heap allocator
+- **Display Refresh**: 30ms refresh rate for stable display output
+- **Graphics Features**: Complex drawing enabled (gradients, shadows, anti-aliasing)
+- **File System**: GIF animation support enabled
+- **Fonts**: Montserrat 14pt as default UI font
+
+**Performance Optimizations:**
+- Image caching disabled to save RAM
+- Gradient caching disabled to reduce memory usage
+- Shadow caching disabled for predictable memory consumption
+- DPI set to 130 for optimal widget sizing on AMOLED display
+
 #### Debug Build
 To enable debug mode, uncomment this line in `webscreen/webscreen_config.h`:
 ```cpp
@@ -410,19 +430,8 @@ WebScreen is designed to be contributor-friendly with comprehensive documentatio
 | 🐛 **Bug Reports** | [GitHub Issues](https://github.com/HW-Lab-Hardware-Design-Agency/WebScreen-Software/issues) | Report bugs and request features |
 | 💬 **Discussions** | [GitHub Discussions](https://github.com/HW-Lab-Hardware-Design-Agency/WebScreen-Software/discussions) | Ask questions and share ideas |
 | 📖 **Documentation** | [docs/](docs/) | API reference and guides |
-| 🎓 **Examples** | [examples/](examples/) | Sample applications and tutorials |
 | 🌐 **Website** | [WebScreen.cc](https://webscreen.cc) | Official project website |
 | 🛒 **Hardware** | [CrowdSupply](https://www.crowdsupply.com/hw-media-lab/webscreen) | Purchase WebScreen hardware |
-
-### Issue Labels
-
-- `bug` - Something isn't working
-- `enhancement` - New feature request  
-- `good first issue` - Good for newcomers
-- `help wanted` - Extra attention needed
-- `performance` - Performance related
-- `documentation` - Documentation improvements
-- `hardware` - Hardware specific issues
 
 ### Support the Project
 

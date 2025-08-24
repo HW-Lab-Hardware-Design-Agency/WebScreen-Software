@@ -1,12 +1,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT) ![Issues](https://img.shields.io/github/issues/HW-Lab-Hardware-Design-Agency/WebScreen-Software) [![image](https://img.shields.io/badge/website-WebScreen.cc-D31027)](https://webscreen.cc) [![image](https://img.shields.io/badge/view_on-CrowdSupply-099)](https://www.crowdsupply.com/hw-media-lab/webscreen)
 
-# WebScreen Firmware v2.0
+# WebScreen Software
 
 ![til](./docs/WebScreen_Notification.gif)
 
 WebScreen is a high-performance ESP32-S3 based platform for running dynamic JavaScript applications with advanced hardware features. The firmware provides a robust, modular architecture with comprehensive error handling, optimized memory management, and professional-grade logging systems.
 
-## 🚀 What's New in v2.0
+## What's New in v2.0
 
 - **Modular Architecture**: Complete refactor with separation of concerns
 - **Advanced Memory Management**: Intelligent PSRAM/internal RAM allocation with leak detection
@@ -17,44 +17,62 @@ WebScreen is a high-performance ESP32-S3 based platform for running dynamic Java
 - **Enhanced JavaScript API**: Expanded API surface with better error handling
 - **Developer Experience**: Improved debugging tools and comprehensive documentation
 
-## 🎯 Core Features
+## Core Features
 
 ### Runtime Environment
-- **🚀 JavaScript Engine**: High-performance Elk JavaScript runtime with 512KB heap
-- **🎨 Advanced Graphics**: Hardware-accelerated LVGL with double buffering support  
-- **💾 Intelligent Storage**: Robust SD card management with auto-retry and speed optimization
-- **🔧 Fallback System**: Graceful degradation with built-in notification app
+- **JavaScript Engine**: Elk JavaScript runtime with comprehensive API bindings
+- **Graphics Library**: LVGL integration with RM67162 AMOLED display support
+- **Storage Management**: Robust SD card handling with multiple filesystem drivers
+- **Fallback System**: Built-in notification app with scrolling text and GIF animation
 
 ### Hardware Integration
-- **📱 ESP32-S3 Optimized**: Full PSRAM support with intelligent memory allocation
-- **🖥️ RM67162 Display**: 536x240 AMOLED with hardware rotation and brightness control
-- **⚡ Power Management**: Smart power button handling with screen on/off control
-- **🔌 Comprehensive I/O**: GPIO, SPI, I2C, and specialized pin configurations
+- **ESP32-S3 Platform**: Full PSRAM support and optimized memory allocation
+- **RM67162 Display**: 536x240 AMOLED with QSPI interface and brightness control
+- **Power Management**: Smart power button handling on GPIO 33
+- **Storage Interface**: SD_MMC card support with robust initialization
 
 ### Networking & Connectivity  
-- **📶 Advanced WiFi**: Auto-reconnection, power management, and connection monitoring
-- **🔒 Secure HTTPS**: Full certificate chain validation with SD-stored certificates
-- **📡 MQTT Integration**: Professional MQTT client with auto-reconnection
-- **📲 Bluetooth LE**: Full BLE stack for device communication
+- **WiFi Management**: Connection handling with timeout and status monitoring
+- **Secure HTTPS**: Certificate chain validation with SD card certificate storage
+- **MQTT Integration**: Client support with publish/subscribe functionality
+- **BLE Support**: Bluetooth Low Energy stack integration
 
-### Developer Experience
-- **🐛 Advanced Debugging**: Multi-level logging with serial and SD card output
-- **⚠️ Error Recovery**: Intelligent error handling with automatic recovery strategies  
-- **📊 Performance Monitoring**: Real-time memory, display, and system statistics
-- **🔧 Configuration Management**: Comprehensive JSON-based configuration system
+### Development Features
+- **Modular Architecture**: Separated concerns across hardware, network, and runtime modules
+- **Configuration System**: JSON-based configuration with comprehensive validation
+- **Error Handling**: Robust error reporting and recovery mechanisms
+- **Debug Support**: Serial logging and development utilities
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
 - **Hardware**: WebScreen custom PCB
-- **Software**: Arduino IDE 2.0+
 - **Storage**: Class 10 SD card (formatted as FAT32)
 - **Cable**: USB-C for programming and power
+- **Software** (for compilation): Arduino IDE 2.0+
 
-### 📋 Installation
+### Installation
 
-#### Option 1: Arduino IDE (Recommended)
+#### Option 1: Web Flasher (Recommended for beginners)
+
+For users who don't want to set up Arduino IDE and compile from source:
+
+1. **Visit the Web Flasher**
+   Navigate to: https://flash.webscreen.cc/
+
+2. **Connect WebScreen**
+   Connect your WebScreen device via USB-C cable
+
+3. **Flash Firmware**
+   Select the latest firmware version and click "Flash"
+
+4. **Setup SD Card**
+   Create your `webscreen.json` configuration file and JavaScript app on SD card
+
+This is the easiest way to get started with WebScreen without any development setup.
+
+#### Option 2: Arduino IDE (For developers)
 
 1. **Install ESP32 Support**
    ```
@@ -90,32 +108,11 @@ WebScreen is a high-performance ESP32-S3 based platform for running dynamic Java
 
    ![Board Settings](docs/arduino_tools_settings.png)
 
-#### Option 2: Arduino Library
+#### Option 3: Direct Compilation
 
-Install WebScreen as an Arduino library:
+For advanced users who want to modify the source code, you can compile directly from the Arduino IDE following the steps above.
 
-```bash
-# Copy library to Arduino libraries folder
-cp -r WebScreenLib ~/Arduino/libraries/WebScreen
-```
-
-Then use in your sketch:
-```cpp
-#include <WebScreen.h>
-
-WebScreen webscreen;
-
-void setup() {
-  webscreen.setWiFi("SSID", "Password");
-  webscreen.begin();
-}
-
-void loop() {
-  webscreen.loop();
-}
-```
-
-### 🔧 Hardware Setup
+### Hardware Setup
 
 #### Upload Mode (if USB not detected)
 1. Power off device
@@ -130,9 +127,9 @@ void loop() {
 - **Long Press**: System functions (if implemented)
 - **Pin**: GPIO 33 (INPUT_PULLUP)
 
-## ⚙️ Configuration
+## Configuration
 
-WebScreen v2.0 uses a comprehensive JSON configuration system stored on the SD card as `webscreen.json`:
+WebScreen uses a JSON configuration system stored on the SD card as `webscreen.json`. The configuration system supports both the current modular format and legacy formats for backward compatibility:
 
 ### Complete Configuration Example
 
@@ -175,7 +172,7 @@ WebScreen v2.0 uses a comprehensive JSON configuration system stored on the SD c
 }
 ```
 
-### 📝 Configuration Fields
+### Configuration Fields
 
 | Section | Field | Description | Default |
 |---------|-------|-------------|---------|
@@ -193,7 +190,7 @@ WebScreen v2.0 uses a comprehensive JSON configuration system stored on the SD c
 | | `performance_mode` | Enable performance optimizations | `false` |
 | | `watchdog_timeout` | Watchdog timeout (ms) | `30000` |
 
-### 🔧 Advanced Configuration
+### Advanced Configuration
 
 #### Minimal Configuration
 ```json
@@ -236,11 +233,11 @@ WebScreen v2.0 uses a comprehensive JSON configuration system stored on the SD c
 }
 ```
 
-## 🏗️ Architecture & Building
+## Architecture & Building
 
 ### System Architecture
 
-WebScreen v2.0 features a modular, layered architecture designed for maintainability and performance:
+WebScreen features a modular architecture with clear separation of concerns:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -250,33 +247,44 @@ WebScreen v2.0 features a modular, layered architecture designed for maintainabi
 │  │   Runtime       │    │     App         │                │
 │  └─────────────────┘    └─────────────────┘                │
 ├─────────────────────────────────────────────────────────────┤
-│                      Core Services                         │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        │
-│  │   Config     │ │    Error     │ │   Memory     │        │
-│  │  Manager     │ │   Handler    │ │   Manager    │        │
-│  └──────────────┘ └──────────────┘ └──────────────┘        │
+│                      Runtime Management                    │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │           webscreen_runtime.cpp/.h                     ││
+│  │  • LVGL initialization and management                   ││
+│  │  • Elk JavaScript engine integration                   ││
+│  │  • Task management and execution                       ││
+│  │  • Memory filesystem drivers                           ││
+│  └─────────────────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────────────────┤
-│                  Hardware Abstraction Layer                │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        │
-│  │   Display    │ │   Storage    │ │    Power     │        │
-│  │   Manager    │ │   Manager    │ │   Manager    │        │
-│  └──────────────┘ └──────────────┘ └──────────────┘        │
+│                    Core Application                        │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │             webscreen_main.cpp/.h                      ││
+│  │  • Configuration loading and management                ││
+│  │  • Application state management                        ││
+│  │  • Main setup and loop coordination                    ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│                  Hardware Abstraction                      │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │           webscreen_hardware.cpp/.h                    ││
+│  │  • SD card initialization with retry logic             ││
+│  │  • Power button handling                               ││
+│  │  • Display management                                  ││
+│  │  • Pin configuration and GPIO control                  ││
+│  └─────────────────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────────────────┤
 │                     Network Layer                          │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        │
-│  │     WiFi     │ │     MQTT     │ │     BLE      │        │
-│  │   Manager    │ │    Client    │ │    Stack     │        │
-│  └──────────────┘ └──────────────┘ └──────────────┘        │
-├─────────────────────────────────────────────────────────────┤
-│                       Utilities                            │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        │
-│  │   Logging    │ │    Timing    │ │   Security   │        │
-│  │   System     │ │   Utilities  │ │   Utilities  │        │
-│  └──────────────┘ └──────────────┘ └──────────────┘        │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │            webscreen_network.cpp/.h                    ││
+│  │  • WiFi connection with timeout handling               ││
+│  │  • HTTPS client with certificate validation            ││
+│  │  • MQTT client integration                             ││
+│  │  • BLE stack management                                ││
+│  └─────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 🔨 Build Process
+### Build Process
 
 #### Arduino IDE Build
 ```
@@ -294,7 +302,7 @@ To enable debug mode, uncomment this line in `webscreen/webscreen_config.h`:
 ```
 This enables verbose logging and memory debugging features.
 
-### 🚦 Runtime Modes
+### Runtime Modes
 
 | Mode | Trigger | Description |
 |------|---------|-------------|
@@ -303,7 +311,7 @@ This enables verbose logging and memory debugging features.
 | **Recovery** | System errors detected | Minimal mode with error reporting |
 | **Update** | Special SD card structure | Firmware update mode |
 
-### 🐛 Development & Debugging
+### Development & Debugging
 
 #### Serial Monitor Output
 ```
@@ -376,26 +384,26 @@ http_set_ca_cert_from_sd("/timeapi.pem");
 4. **Usage:**  
    Your JavaScript app should load it with `http_set_ca_cert_from_sd()` to enable secure HTTPS requests.
 
-## 🤝 Contributing & Support
+## Contributing & Support
 
-### 🔧 For Developers
+### For Developers
 
 WebScreen is designed to be contributor-friendly with comprehensive documentation and testing frameworks.
 
 #### Getting Started
-1. **Read the Docs**: Check out [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines
+1. **Read the Docs**: Check out [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed guidelines
 2. **Set Up Environment**: Follow the development setup instructions
 3. **Pick an Issue**: Look for "good first issue" labels on GitHub
 4. **Submit PR**: Follow our contribution workflow
 
 #### Key Areas for Contribution
-- **🚀 Performance**: Memory optimization, rendering improvements
-- **📱 Hardware Support**: New display drivers, sensor integration  
-- **🌐 Network**: Protocol implementations, connectivity features
-- **📚 Documentation**: API docs, tutorials, examples
-- **🧪 Testing**: Unit tests, integration tests, hardware testing
+- **Performance**: Memory optimization, rendering improvements
+- **Hardware Support**: New display drivers, sensor integration  
+- **Network**: Protocol implementations, connectivity features
+- **Documentation**: API docs, tutorials, examples
+- **Testing**: Unit tests, integration tests, hardware testing
 
-### 📞 Getting Help
+### Getting Help
 
 | Type | Resource | Description |
 |------|----------|-------------|
@@ -406,7 +414,7 @@ WebScreen is designed to be contributor-friendly with comprehensive documentatio
 | 🌐 **Website** | [WebScreen.cc](https://webscreen.cc) | Official project website |
 | 🛒 **Hardware** | [CrowdSupply](https://www.crowdsupply.com/hw-media-lab/webscreen) | Purchase WebScreen hardware |
 
-### 🏷️ Issue Labels
+### Issue Labels
 
 - `bug` - Something isn't working
 - `enhancement` - New feature request  
@@ -416,7 +424,7 @@ WebScreen is designed to be contributor-friendly with comprehensive documentatio
 - `documentation` - Documentation improvements
 - `hardware` - Hardware specific issues
 
-### 💝 Support the Project
+### Support the Project
 
 If WebScreen has been useful for your projects:
 

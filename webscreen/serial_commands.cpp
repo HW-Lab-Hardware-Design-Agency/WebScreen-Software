@@ -64,6 +64,9 @@ void SerialCommands::processCommand(const String& command) {
   else if (baseCmd == "reboot" || baseCmd == "restart") {
     reboot();
   }
+  else if (baseCmd == "load" || baseCmd == "run") {
+    loadApp(args);
+  }
   else {
     printError("Unknown command: " + baseCmd + ". Type /help for available commands.");
   }
@@ -82,6 +85,7 @@ void SerialCommands::showHelp() {
   Serial.println("/ls [path]               - List files/directories");
   Serial.println("/cat <file>              - Display file contents");
   Serial.println("/rm <file>               - Delete file");
+  Serial.println("/load <script.js>        - Load/switch to different JS app");
   Serial.println("/reboot                  - Restart the device");
   Serial.println("\nExamples:");
   Serial.println("/write hello.js");
@@ -354,6 +358,40 @@ void SerialCommands::catFile(const String& path) {
 void SerialCommands::reboot() {
   printSuccess("Rebooting in 3 seconds...");
   delay(3000);
+  ESP.restart();
+}
+
+void SerialCommands::loadApp(const String& scriptName) {
+  if (scriptName.length() == 0) {
+    printError("Usage: /load <script.js>");
+    return;
+  }
+  
+  if (!SD_MMC.begin()) {
+    printError("SD card not available");
+    return;
+  }
+  
+  String fullPath = scriptName.startsWith("/") ? scriptName : ("/" + scriptName);
+  if (!fullPath.endsWith(".js")) {
+    fullPath += ".js";
+  }
+  
+  // Check if file exists
+  File file = SD_MMC.open(fullPath, FILE_READ);
+  if (!file) {
+    printError("Script not found: " + fullPath);
+    return;
+  }
+  file.close();
+  
+  // Update global script filename for restart
+  extern String g_script_filename;
+  g_script_filename = fullPath;
+  
+  printSuccess("Script queued for loading: " + fullPath);
+  printSuccess("Restarting to load new script...");
+  delay(2000);
   ESP.restart();
 }
 

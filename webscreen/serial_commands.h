@@ -20,6 +20,7 @@ private:
   static void deleteFile(const String& path);
   static void catFile(const String& path);
   static void reboot();
+  static void loadApp(const String& scriptName);
   
   static void printPrompt();
   static String formatBytes(size_t bytes);

@@ -28,6 +28,7 @@ WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Ge
 
 ### Development Features
 - **Modular Architecture**: Separated concerns across hardware, network, and runtime modules
+- **Serial Commands**: Interactive development console with comprehensive command system
 - **Configuration System**: JSON-based configuration with comprehensive validation
 - **Error Handling**: Robust error reporting and recovery mechanisms
 - **Debug Support**: Serial logging and development utilities
@@ -341,6 +342,49 @@ This enables verbose logging and memory debugging features.
 [1234.890] INFO: [WiFi] Connected to MyNetwork (192.168.1.100)
 [1234.991] INFO: [JavaScript] Loaded /apps/weather.js (2.4KB)
 ```
+
+#### Serial Commands
+
+WebScreen includes a comprehensive serial command system for interactive development. Commands work in both fallback and dynamic JavaScript modes:
+
+**Core Commands:**
+```
+/help                    - Show all available commands
+/stats                   - Display system statistics (memory, storage, WiFi)
+/info                    - Show device information and version
+/write <filename>        - Interactive JavaScript editor
+/load <script.js>        - Switch to different JS application
+/reboot                  - Restart the device
+```
+
+**Configuration Management:**
+```
+/config get <key>        - Get configuration value
+/config set <key> <val>  - Set configuration value
+```
+
+**File Operations:**
+```
+/ls [path]               - List files/directories
+/cat <file>              - Display file contents
+/rm <file>               - Delete file
+```
+
+**Example Development Workflow:**
+```
+WebScreen> /write hello.js
+Enter JavaScript code. End with a line containing only 'END':
+---
++ create_label_with_text('Hello WebScreen!');
++ END
+[OK] Script saved: /hello.js (45 bytes)
+
+WebScreen> /load hello.js
+[OK] Script queued for loading: /hello.js
+[OK] Restarting to load new script...
+```
+
+For detailed command reference, see [docs/SerialCommands.md](docs/SerialCommands.md).
 
 #### Debug Commands
 ```cpp

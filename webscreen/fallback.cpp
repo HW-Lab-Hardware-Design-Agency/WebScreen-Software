@@ -7,6 +7,7 @@
 #include "webscreen.h"
 #include "globals.h"
 #include "tick.h"
+#include "serial_commands.h"
 static lv_obj_t *fb_label = nullptr;
 static lv_obj_t *fb_gif = nullptr;
 static lv_obj_t *fb_container = nullptr;
@@ -45,6 +46,7 @@ static void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, u
 void fallback_setup() {
   LOG("FALLBACK: Setting up scrolling label + GIF...");
   lv_init();
+  SerialCommands::init();
   start_lvgl_tick();
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, HIGH);
@@ -114,10 +116,17 @@ void fallback_loop() {
   lv_timer_handler();
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
-    lv_label_set_text(fb_label, line.c_str());
-    lv_obj_align(fb_container, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_clear_flag(fb_container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
-    create_scroll_animation(fb_container, 240, -lv_obj_get_height(fb_container) - 100, 8000);
+    
+    // Check if it's a command (starts with /)
+    if (line.startsWith("/")) {
+      SerialCommands::processCommand(line);
+    } else {
+      // Display text as before
+      lv_label_set_text(fb_label, line.c_str());
+      lv_obj_align(fb_container, LV_ALIGN_CENTER, 0, 0);
+      lv_obj_clear_flag(fb_container, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
+      create_scroll_animation(fb_container, 240, -lv_obj_get_height(fb_container) - 100, 8000);
+    }
   }
 }

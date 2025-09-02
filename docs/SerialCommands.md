@@ -57,12 +57,20 @@ WebScreen> /help
 /cat <file>              - Display file contents
 /rm <file>               - Delete file
 /load <script.js>        - Load/switch to different JS app
+/wget <url> [file]       - Download file from URL to SD card
+/ping <host>             - Test network connectivity
+/backup [save|restore]   - Backup/restore configuration
+/monitor [cpu|mem|net]   - Live system monitoring
 /reboot                  - Restart the device
 
 Examples:
 /write hello.js
 /config get wifi.ssid
 /config set wifi.ssid MyNetwork
+/wget https://example.com/app.js
+/ping google.com
+/backup save production
+/monitor mem
 /ls /
 /cat webscreen.json
 ```
@@ -181,6 +189,157 @@ WebScreen> /load weather.js
 - Deploy new versions without SD card removal
 - A/B testing of application variants
 - Quick application switching for demonstrations
+
+### Network and System Commands
+
+#### `/wget <url> [filename]`
+Downloads files from HTTP/HTTPS URLs directly to the SD card.
+
+**Usage:**
+```
+WebScreen> /wget https://example.com/config.json
+Downloading: https://example.com/config.json
+Saving to: /config.json
+Content-Length: 2.3 KB
+Progress: 10% 20% 30% 40% 50% 60% 70% 80% 90% 100% 
+[OK] Downloaded 2.3 KB to /config.json
+```
+
+**Features:**
+- **Auto Filename**: Extracts filename from URL if not specified
+- **Progress Display**: Shows download progress for known file sizes
+- **HTTPS Support**: Handles both HTTP and HTTPS protocols
+- **Error Handling**: Clear error messages for connection failures
+
+**Use Cases:**
+- Download JavaScript libraries or frameworks
+- Fetch configuration files from servers
+- Update application scripts from GitHub
+- Download assets like fonts or data files
+
+#### `/ping <host>`
+Tests network connectivity to a specified host.
+
+**Usage:**
+```
+WebScreen> /ping google.com
+PING google.com
+Pinging google.com (142.250.185.78) with 32 bytes of data:
+Reply from 142.250.185.78: time=23ms
+Reply from 142.250.185.78: time=19ms
+Reply from 142.250.185.78: time=21ms
+Reply from 142.250.185.78: time=18ms
+
+Ping statistics for 142.250.185.78:
+    Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)
+Approximate round trip times:
+    Minimum = 18ms, Maximum = 23ms, Average = 20ms
+```
+
+**Features:**
+- **DNS Resolution**: Resolves hostnames to IP addresses
+- **Statistics**: Provides min/max/average response times
+- **Packet Loss**: Shows connection reliability
+- **TCP-based**: Uses TCP connections for compatibility
+
+**Use Cases:**
+- Verify network connectivity before API calls
+- Test DNS resolution
+- Debug network issues
+- Monitor connection quality
+
+#### `/backup [save|restore|list] [name]`
+Manages configuration backups with metadata tracking.
+
+**Usage:**
+```
+WebScreen> /backup save production
+[OK] Configuration backed up to /backups/production.json
+
+WebScreen> /backup list
+Available backups:
+Name                     Size        Date
+----------------------------------------
+production               1.2 KB      45 sec ago
+dev_config              1.1 KB      3600 sec ago
+testing                 1.3 KB      7200 sec ago
+
+WebScreen> /backup restore production
+[OK] Configuration restored from production
+Please reboot for changes to take effect
+```
+
+**Features:**
+- **Auto Naming**: Generates timestamp-based names if not specified
+- **Metadata Storage**: Saves timestamp, WiFi SSID, memory status
+- **Directory Management**: Creates `/backups` directory automatically
+- **Listing Support**: Shows all backups with age information
+
+**Operations:**
+- `save [name]` - Create a new backup
+- `restore <name>` - Restore a specific backup
+- `list` - Show all available backups
+
+**Use Cases:**
+- Save configuration before making changes
+- Create environment-specific configurations
+- Quick rollback to known-good settings
+- A/B testing different configurations
+
+#### `/monitor [cpu|mem|net|all]`
+Provides real-time system monitoring with auto-refresh.
+
+**Usage:**
+```
+WebScreen> /monitor mem
+Live Monitor - Press any key to stop
+=====================================
+[14:23:45] Heap: 234.5KB/320.0KB (73.3%) | PSRAM: 7.2MB/8.0MB (90.0%)
+```
+
+**Monitor Modes:**
+
+**Memory Mode (`mem` or `memory`):**
+```
+[HH:MM:SS] Heap: FREE/TOTAL (%) | PSRAM: FREE/TOTAL (%)
+```
+- Shows heap and PSRAM usage
+- Displays percentages for quick assessment
+- Updates every second
+
+**CPU Mode (`cpu`):**
+```
+[HH:MM:SS] CPU: 240 MHz | Load: 45.2% | Temp: 42.3°C | Tasks: 12
+```
+- CPU frequency and utilization
+- Core temperature monitoring
+- FreeRTOS task count
+
+**Network Mode (`net` or `network`):**
+```
+[HH:MM:SS] WiFi: MyNetwork | IP: 192.168.1.100 | RSSI: -45 dBm | Channel: 6
+```
+- Current WiFi connection
+- IP address assignment
+- Signal strength (RSSI)
+- WiFi channel number
+
+**All Mode (`all`):**
+- Cycles through all metrics
+- Shows different stat each second
+- Comprehensive system overview
+
+**Features:**
+- **Real-time Updates**: Refreshes every second
+- **Non-blocking**: Press any key to stop
+- **Timestamped**: Each update shows current time
+- **ANSI Formatting**: Clean single-line updates
+
+**Use Cases:**
+- Monitor memory during JavaScript execution
+- Track CPU temperature under load
+- Debug WiFi connectivity issues
+- Performance profiling during development
 
 ### Configuration Management
 

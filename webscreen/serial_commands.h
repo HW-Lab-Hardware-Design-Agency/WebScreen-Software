@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <SD_MMC.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 class SerialCommands {
 public:
@@ -21,6 +23,10 @@ private:
   static void catFile(const String& path);
   static void reboot();
   static void loadApp(const String& scriptName);
+  static void wget(const String& args);
+  static void ping(const String& args);
+  static void backup(const String& args);
+  static void monitor(const String& args);
   
   static void printPrompt();
   static String formatBytes(size_t bytes);

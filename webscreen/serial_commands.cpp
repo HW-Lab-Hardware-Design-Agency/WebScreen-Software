@@ -2,6 +2,8 @@
 #include "globals.h"
 #include <WiFi.h>
 #include <esp_system.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 void SerialCommands::init() {
   Serial.println("\n=== WebScreen Serial Console ===");
@@ -67,6 +69,18 @@ void SerialCommands::processCommand(const String& command) {
   else if (baseCmd == "load" || baseCmd == "run") {
     loadApp(args);
   }
+  else if (baseCmd == "wget" || baseCmd == "download") {
+    wget(args);
+  }
+  else if (baseCmd == "ping") {
+    ping(args);
+  }
+  else if (baseCmd == "backup") {
+    backup(args);
+  }
+  else if (baseCmd == "monitor" || baseCmd == "mon") {
+    monitor(args);
+  }
   else {
     printError("Unknown command: " + baseCmd + ". Type /help for available commands.");
   }
@@ -86,6 +100,10 @@ void SerialCommands::showHelp() {
   Serial.println("/cat <file>              - Display file contents");
   Serial.println("/rm <file>               - Delete file");
   Serial.println("/load <script.js>        - Load/switch to different JS app");
+  Serial.println("/wget <url> [file]       - Download file from URL to SD card");
+  Serial.println("/ping <host>             - Test network connectivity");
+  Serial.println("/backup [save|restore]   - Backup/restore configuration");
+  Serial.println("/monitor [cpu|mem|net]   - Live system monitoring");
   Serial.println("/reboot                  - Restart the device");
   Serial.println("\nExamples:");
   Serial.println("/write hello.js");
@@ -412,4 +430,476 @@ void SerialCommands::printError(const String& message) {
 
 void SerialCommands::printSuccess(const String& message) {
   Serial.println("[OK] " + message);
+}
+
+void SerialCommands::wget(const String& args) {
+  if (args.length() == 0) {
+    printError("Usage: /wget <url> [filename]");
+    return;
+  }
+  
+  // Parse URL and optional filename
+  int spaceIndex = args.indexOf(' ');
+  String url = (spaceIndex > 0) ? args.substring(0, spaceIndex) : args;
+  String filename = "";
+  
+  if (spaceIndex > 0) {
+    filename = args.substring(spaceIndex + 1);
+  } else {
+    // Extract filename from URL
+    int lastSlash = url.lastIndexOf('/');
+    if (lastSlash >= 0 && lastSlash < url.length() - 1) {
+      filename = url.substring(lastSlash + 1);
+    } else {
+      filename = "download.dat";
+    }
+  }
+  
+  // Ensure filename starts with /
+  if (!filename.startsWith("/")) {
+    filename = "/" + filename;
+  }
+  
+  // Check WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    printError("WiFi not connected. Cannot download.");
+    return;
+  }
+  
+  // Check SD card
+  if (!SD_MMC.begin()) {
+    printError("SD card not available");
+    return;
+  }
+  
+  Serial.println("Downloading: " + url);
+  Serial.println("Saving to: " + filename);
+  
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure(); // For simplicity, skip certificate validation
+  
+  // Start HTTP request
+  if (url.startsWith("https://")) {
+    http.begin(client, url);
+  } else {
+    http.begin(url);
+  }
+  
+  http.setTimeout(30000); // 30 second timeout
+  
+  int httpCode = http.GET();
+  
+  if (httpCode > 0) {
+    if (httpCode == HTTP_CODE_OK) {
+      // Get content length
+      int contentLength = http.getSize();
+      Serial.printf("Content-Length: %s\n", contentLength > 0 ? formatBytes(contentLength).c_str() : "Unknown");
+      
+      // Open file for writing
+      File file = SD_MMC.open(filename, FILE_WRITE);
+      if (!file) {
+        printError("Cannot create file: " + filename);
+        http.end();
+        return;
+      }
+      
+      // Get stream
+      WiFiClient* stream = http.getStreamPtr();
+      
+      // Buffer for reading
+      uint8_t buffer[512];
+      int totalBytes = 0;
+      int lastProgress = -1;
+      
+      // Download with progress
+      Serial.print("Progress: ");
+      while (http.connected() && (contentLength < 0 || totalBytes < contentLength)) {
+        size_t available = stream->available();
+        if (available) {
+          int bytesRead = stream->readBytes(buffer, min(available, sizeof(buffer)));
+          file.write(buffer, bytesRead);
+          totalBytes += bytesRead;
+          
+          // Show progress
+          if (contentLength > 0) {
+            int progress = (totalBytes * 100) / contentLength;
+            if (progress != lastProgress && progress % 10 == 0) {
+              Serial.printf("%d%% ", progress);
+              lastProgress = progress;
+            }
+          } else {
+            // Show bytes downloaded if content length unknown
+            if (totalBytes % 10240 == 0) { // Every 10KB
+              Serial.print(".");
+            }
+          }
+        }
+        delay(1);
+      }
+      
+      file.close();
+      Serial.println();
+      
+      printSuccess("Downloaded " + formatBytes(totalBytes) + " to " + filename);
+    } else {
+      printError("HTTP error code: " + String(httpCode));
+    }
+  } else {
+    printError("Connection failed: " + http.errorToString(httpCode));
+  }
+  
+  http.end();
+}
+
+void SerialCommands::ping(const String& args) {
+  if (args.length() == 0) {
+    printError("Usage: /ping <host>");
+    return;
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    printError("WiFi not connected");
+    return;
+  }
+  
+  String host = args;
+  host.trim();
+  
+  Serial.println("PING " + host);
+  
+  // Resolve hostname to IP
+  IPAddress ip;
+  if (!WiFi.hostByName(host.c_str(), ip)) {
+    printError("Cannot resolve host: " + host);
+    return;
+  }
+  
+  Serial.printf("Pinging %s (%s) with 32 bytes of data:\n", host.c_str(), ip.toString().c_str());
+  
+  // Perform 4 pings
+  int successCount = 0;
+  int totalTime = 0;
+  int minTime = 9999;
+  int maxTime = 0;
+  
+  for (int i = 0; i < 4; i++) {
+    unsigned long startTime = millis();
+    
+    // Simple ping implementation using TCP connect
+    WiFiClient client;
+    client.setTimeout(1000); // 1 second timeout
+    
+    bool success = false;
+    int responseTime = 0;
+    
+    // Try to connect to port 80 (HTTP) as a connectivity test
+    if (client.connect(ip, 80, 1000)) {
+      responseTime = millis() - startTime;
+      success = true;
+      client.stop();
+    } else {
+      // Try port 443 (HTTPS) as fallback
+      if (client.connect(ip, 443, 1000)) {
+        responseTime = millis() - startTime;
+        success = true;
+        client.stop();
+      }
+    }
+    
+    if (success) {
+      Serial.printf("Reply from %s: time=%dms\n", ip.toString().c_str(), responseTime);
+      successCount++;
+      totalTime += responseTime;
+      if (responseTime < minTime) minTime = responseTime;
+      if (responseTime > maxTime) maxTime = responseTime;
+    } else {
+      Serial.printf("Request timeout.\n");
+    }
+    
+    if (i < 3) delay(1000); // Wait 1 second between pings
+  }
+  
+  // Print statistics
+  Serial.printf("\nPing statistics for %s:\n", ip.toString().c_str());
+  Serial.printf("    Packets: Sent = 4, Received = %d, Lost = %d (%d%% loss)\n", 
+                successCount, 4 - successCount, (4 - successCount) * 25);
+  
+  if (successCount > 0) {
+    Serial.println("Approximate round trip times:");
+    Serial.printf("    Minimum = %dms, Maximum = %dms, Average = %dms\n", 
+                  minTime, maxTime, totalTime / successCount);
+  }
+}
+
+void SerialCommands::backup(const String& args) {
+  if (!SD_MMC.begin()) {
+    printError("SD card not available");
+    return;
+  }
+  
+  String operation = "";
+  String backupName = "";
+  
+  // Parse arguments
+  int spaceIndex = args.indexOf(' ');
+  if (spaceIndex > 0) {
+    operation = args.substring(0, spaceIndex);
+    backupName = args.substring(spaceIndex + 1);
+  } else {
+    operation = args;
+  }
+  
+  operation.toLowerCase();
+  
+  if (operation == "save") {
+    // Generate backup name if not provided
+    if (backupName.length() == 0) {
+      backupName = String("backup_") + String(millis() / 1000);
+    }
+    
+    // Create backups directory if it doesn't exist
+    if (!SD_MMC.exists("/backups")) {
+      SD_MMC.mkdir("/backups");
+    }
+    
+    String backupPath = "/backups/" + backupName + ".json";
+    
+    // Read current configuration
+    File srcFile = SD_MMC.open("/webscreen.json", FILE_READ);
+    if (!srcFile) {
+      printError("Cannot read webscreen.json");
+      return;
+    }
+    
+    // Write backup
+    File dstFile = SD_MMC.open(backupPath, FILE_WRITE);
+    if (!dstFile) {
+      printError("Cannot create backup file");
+      srcFile.close();
+      return;
+    }
+    
+    // Copy configuration
+    while (srcFile.available()) {
+      dstFile.write(srcFile.read());
+    }
+    
+    srcFile.close();
+    dstFile.close();
+    
+    // Add metadata file
+    String metaPath = "/backups/" + backupName + ".meta";
+    File metaFile = SD_MMC.open(metaPath, FILE_WRITE);
+    if (metaFile) {
+      metaFile.printf("{\n");
+      metaFile.printf("  \"timestamp\": %lu,\n", millis() / 1000);
+      metaFile.printf("  \"wifi_ssid\": \"%s\",\n", WiFi.SSID().c_str());
+      metaFile.printf("  \"free_heap\": %d,\n", ESP.getFreeHeap());
+      metaFile.printf("  \"version\": \"2.0.0\"\n");
+      metaFile.printf("}\n");
+      metaFile.close();
+    }
+    
+    printSuccess("Configuration backed up to " + backupPath);
+    
+  } else if (operation == "restore") {
+    if (backupName.length() == 0) {
+      printError("Usage: /backup restore <name>");
+      return;
+    }
+    
+    String backupPath = "/backups/" + backupName + ".json";
+    
+    // Check if backup exists
+    if (!SD_MMC.exists(backupPath)) {
+      printError("Backup not found: " + backupName);
+      return;
+    }
+    
+    // Read backup
+    File backupFile = SD_MMC.open(backupPath, FILE_READ);
+    if (!backupFile) {
+      printError("Cannot read backup file");
+      return;
+    }
+    
+    // Write to main config
+    File configFile = SD_MMC.open("/webscreen.json", FILE_WRITE);
+    if (!configFile) {
+      printError("Cannot write to webscreen.json");
+      backupFile.close();
+      return;
+    }
+    
+    // Copy backup to config
+    while (backupFile.available()) {
+      configFile.write(backupFile.read());
+    }
+    
+    backupFile.close();
+    configFile.close();
+    
+    printSuccess("Configuration restored from " + backupName);
+    Serial.println("Please reboot for changes to take effect");
+    
+  } else if (operation == "list" || operation == "") {
+    // List available backups
+    File backupsDir = SD_MMC.open("/backups");
+    if (!backupsDir || !backupsDir.isDirectory()) {
+      Serial.println("No backups found");
+      return;
+    }
+    
+    Serial.println("\nAvailable backups:");
+    Serial.println("Name                     Size        Date");
+    Serial.println("----------------------------------------");
+    
+    File file = backupsDir.openNextFile();
+    while (file) {
+      String name = String(file.name());
+      if (name.endsWith(".json")) {
+        name = name.substring(name.lastIndexOf('/') + 1);
+        name = name.substring(0, name.length() - 5); // Remove .json
+        
+        // Try to read metadata
+        String metaPath = String(file.name());
+        metaPath.replace(".json", ".meta");
+        File metaFile = SD_MMC.open(metaPath, FILE_READ);
+        
+        if (metaFile) {
+          DynamicJsonDocument meta(256);
+          deserializeJson(meta, metaFile);
+          metaFile.close();
+          
+          unsigned long timestamp = meta["timestamp"] | 0;
+          Serial.printf("%-24s %-10s %lu sec ago\n", 
+                       name.c_str(), 
+                       formatBytes(file.size()).c_str(),
+                       (millis() / 1000) - timestamp);
+        } else {
+          Serial.printf("%-24s %-10s\n", name.c_str(), formatBytes(file.size()).c_str());
+        }
+      }
+      file = backupsDir.openNextFile();
+    }
+    
+    backupsDir.close();
+    
+  } else {
+    printError("Usage: /backup [save|restore|list] [name]");
+  }
+}
+
+void SerialCommands::monitor(const String& args) {
+  String mode = args;
+  mode.toLowerCase();
+  mode.trim();
+  
+  if (mode == "") mode = "mem"; // Default to memory monitoring
+  
+  Serial.println("Live Monitor - Press any key to stop");
+  Serial.println("=====================================");
+  
+  unsigned long lastUpdate = 0;
+  const unsigned long updateInterval = 1000; // Update every second
+  
+  while (!Serial.available()) {
+    if (millis() - lastUpdate >= updateInterval) {
+      lastUpdate = millis();
+      
+      // Clear previous line (ANSI escape code)
+      Serial.print("\r\033[K");
+      
+      if (mode == "mem" || mode == "memory") {
+        // Memory monitoring
+        Serial.printf("[%02d:%02d:%02d] Heap: %s/%s (%.1f%%) | PSRAM: %s/%s (%.1f%%)",
+                     (int)((millis() / 3600000) % 24),
+                     (int)((millis() / 60000) % 60),
+                     (int)((millis() / 1000) % 60),
+                     formatBytes(ESP.getFreeHeap()).c_str(),
+                     formatBytes(ESP.getHeapSize()).c_str(),
+                     (ESP.getFreeHeap() * 100.0) / ESP.getHeapSize(),
+                     formatBytes(ESP.getFreePsram()).c_str(),
+                     formatBytes(ESP.getPsramSize()).c_str(),
+                     (ESP.getFreePsram() * 100.0) / ESP.getPsramSize());
+                     
+      } else if (mode == "cpu") {
+        // CPU monitoring
+        static unsigned long lastCycles = 0;
+        unsigned long cycles = ESP.getCycleCount();
+        unsigned long cyclesDiff = cycles - lastCycles;
+        lastCycles = cycles;
+        
+        float cpuUsage = (cyclesDiff / (float)(ESP.getCpuFreqMHz() * 1000000)) * 100.0;
+        
+        Serial.printf("[%02d:%02d:%02d] CPU: %d MHz | Load: %.1f%% | Temp: %.1f°C | Tasks: %d",
+                     (int)((millis() / 3600000) % 24),
+                     (int)((millis() / 60000) % 60),
+                     (int)((millis() / 1000) % 60),
+                     ESP.getCpuFreqMHz(),
+                     min(cpuUsage, 100.0f),
+                     temperatureRead(),
+                     uxTaskGetNumberOfTasks());
+                     
+      } else if (mode == "net" || mode == "network") {
+        // Network monitoring
+        if (WiFi.status() == WL_CONNECTED) {
+          Serial.printf("[%02d:%02d:%02d] WiFi: %s | IP: %s | RSSI: %d dBm | Channel: %d",
+                       (int)((millis() / 3600000) % 24),
+                       (int)((millis() / 60000) % 60),
+                       (int)((millis() / 1000) % 60),
+                       WiFi.SSID().c_str(),
+                       WiFi.localIP().toString().c_str(),
+                       WiFi.RSSI(),
+                       WiFi.channel());
+        } else {
+          Serial.printf("[%02d:%02d:%02d] WiFi: Disconnected",
+                       (int)((millis() / 3600000) % 24),
+                       (int)((millis() / 60000) % 60),
+                       (int)((millis() / 1000) % 60));
+        }
+        
+      } else if (mode == "all") {
+        // Combined monitoring - cycle through different stats
+        static int cycle = 0;
+        
+        switch (cycle % 3) {
+          case 0:
+            Serial.printf("[MEM] Heap: %s free | PSRAM: %s free",
+                         formatBytes(ESP.getFreeHeap()).c_str(),
+                         formatBytes(ESP.getFreePsram()).c_str());
+            break;
+          case 1:
+            Serial.printf("[CPU] %d MHz | Temp: %.1f°C",
+                         ESP.getCpuFreqMHz(),
+                         temperatureRead());
+            break;
+          case 2:
+            if (WiFi.status() == WL_CONNECTED) {
+              Serial.printf("[NET] %s | RSSI: %d dBm",
+                           WiFi.SSID().c_str(),
+                           WiFi.RSSI());
+            } else {
+              Serial.printf("[NET] Disconnected");
+            }
+            break;
+        }
+        cycle++;
+        
+      } else {
+        printError("Unknown monitor mode. Use: mem, cpu, net, or all");
+        break;
+      }
+    }
+    
+    delay(100); // Small delay to prevent overwhelming the CPU
+  }
+  
+  // Clear any pending serial input
+  while (Serial.available()) {
+    Serial.read();
+  }
+  
+  Serial.println("\n\nMonitoring stopped.");
 }

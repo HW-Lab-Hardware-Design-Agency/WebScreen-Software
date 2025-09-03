@@ -357,10 +357,18 @@ WebScreen includes a comprehensive serial command system for interactive develop
 /reboot                  - Restart the device
 ```
 
+**Network & Monitoring:**
+```
+/wget <url> [file]       - Download file from URL to SD card
+/ping <host>             - Test network connectivity
+/monitor [cpu|mem|net]   - Live system monitoring (press any key to stop)
+```
+
 **Configuration Management:**
 ```
 /config get <key>        - Get configuration value
 /config set <key> <val>  - Set configuration value
+/backup [save|restore]   - Backup or restore configuration
 ```
 
 **File Operations:**

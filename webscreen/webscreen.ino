@@ -50,13 +50,19 @@ void setup() {
   }
   g_script_filename = scriptFile;
 
-  if (!webscreen_network_connect_wifi(s.c_str(), p.c_str(), 15000)) {
-    LOG("Wi-Fi fail => starting fallback mode.");
-    useFallback = true;
-    fallback_setup();
-    return;
+  // Try to connect to WiFi if configured, but don't fail if it doesn't work
+  if (s.length() > 0) {
+    if (!webscreen_network_connect_wifi(s.c_str(), p.c_str(), 15000)) {
+      LOG("Wi-Fi connection failed, but continuing to check for script...");
+      // Don't return here - continue to check if script exists
+    } else {
+      LOG("Wi-Fi connected successfully.");
+    }
+  } else {
+    LOG("No WiFi configured, running in offline mode.");
   }
 
+  // Check if the script file exists
   String scriptPath = scriptFile;
   if (!scriptPath.startsWith("/")) {
     scriptPath = "/" + scriptPath;
@@ -71,6 +77,8 @@ void setup() {
   }
   checkF.close();
 
+  // Script exists, run it (with or without WiFi)
+  LOG("Script file found, starting JavaScript runtime...");
   useFallback = false;
   dynamic_js_setup();
 }

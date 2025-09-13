@@ -231,9 +231,10 @@ WebScreen uses a JSON configuration file stored on the SD card as `/webscreen.js
 
 **Note:** WebScreen will start in fallback mode (displaying the notification screen) if:
 - No `/webscreen.json` configuration file is found on the SD card
-- The JavaScript file specified in the `script` field doesn't exist
+- The JavaScript file specified in the `script` field doesn't exist on the SD card
 - The SD card cannot be mounted
-- WiFi connection fails (when configured)
+
+**Important:** If WiFi configuration is missing or WiFi connection fails, WebScreen will still execute the JavaScript application (if the script file exists). This allows offline applications to run without network connectivity.
 
 ## Architecture & Building
 

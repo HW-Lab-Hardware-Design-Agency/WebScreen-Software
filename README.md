@@ -133,46 +133,28 @@ For advanced users who want to modify the source code, you can compile directly 
 
 ## Configuration
 
-WebScreen uses a JSON configuration system stored on the SD card as `webscreen.json`. The configuration system supports both the current modular format and legacy formats for backward compatibility:
+WebScreen uses a JSON configuration file stored on the SD card as `/webscreen.json`. This file controls WiFi settings, display colors, MQTT configuration, and which JavaScript app to run.
 
-### Complete Configuration Example
+### Configuration Format
+
+**IMPORTANT:** The current firmware uses the following format with nested "settings" structure:
 
 ```json
 {
-  "wifi": {
-    "ssid": "your_wifi_network",
-    "password": "your_wifi_password", 
-    "enabled": true,
-    "connection_timeout": 15000,
-    "auto_reconnect": true
+  "settings": {
+    "wifi": {
+      "ssid": "your_wifi_network",
+      "pass": "your_wifi_password"
+    },
+    "mqtt": {
+      "enabled": false
+    }
   },
-  "mqtt": {
-    "broker": "mqtt.example.com",
-    "port": 1883,
-    "username": "your_username",
-    "password": "your_password", 
-    "client_id": "webscreen_001",
-    "enabled": false,
-    "keepalive": 60
+  "screen": {
+    "background": "#2980b9",
+    "foreground": "#00fff1"
   },
-  "display": {
-    "brightness": 200,
-    "rotation": 1,
-    "background_color": "#2980b9",
-    "foreground_color": "#00fff1",
-    "auto_brightness": false,
-    "screen_timeout": 300000
-  },
-  "system": {
-    "device_name": "WebScreen-01",
-    "timezone": "UTC-8",
-    "log_level": 2,
-    "performance_mode": true,
-    "watchdog_timeout": 30000
-  },
-  "script_file": "/apps/weather_app.js",
-  "config_version": 2,
-  "last_modified": 1640995200
+  "script": "app.js"
 }
 ```
 
@@ -180,62 +162,78 @@ WebScreen uses a JSON configuration system stored on the SD card as `webscreen.j
 
 | Section | Field | Description | Default |
 |---------|-------|-------------|---------|
-| **wifi** | `ssid` | WiFi network name | `""` |
-| | `password` | WiFi password | `""` |
-| | `enabled` | Enable WiFi connectivity | `true` |
-| | `connection_timeout` | Connection timeout (ms) | `15000` |
-| | `auto_reconnect` | Auto-reconnect on disconnect | `true` |
-| **display** | `brightness` | Screen brightness (0-255) | `200` |
-| | `rotation` | Screen rotation (0-3) | `1` |
-| | `background_color` | Background color (hex) | `"#000000"` |
-| | `foreground_color` | Text color (hex) | `"#FFFFFF"` |
-| | `screen_timeout` | Auto-sleep timeout (ms, 0=never) | `0` |
-| **system** | `log_level` | Logging level (0=debug, 4=fatal) | `2` |
-| | `performance_mode` | Enable performance optimizations | `false` |
-| | `watchdog_timeout` | Watchdog timeout (ms) | `30000` |
+| **settings.wifi** | `ssid` | WiFi network name | `""` |
+| | `pass` | WiFi password | `""` |
+| **settings.mqtt** | `enabled` | Enable MQTT functionality | `false` |
+| **screen** | `background` | Background color (hex format) | `"#000000"` |
+| | `foreground` | Text/foreground color (hex) | `"#FFFFFF"` |
+| **Root** | `script` | JavaScript file to execute | `"app.js"` |
 
-### Advanced Configuration
+### Example Configurations
 
-#### Minimal Configuration
+#### Basic WiFi Setup
 ```json
 {
-  "wifi": {
-    "ssid": "MyNetwork",
-    "password": "MyPassword"
+  "settings": {
+    "wifi": {
+      "ssid": "MyNetwork",
+      "pass": "MyPassword"
+    }
   },
-  "script_file": "/app.js"
+  "script": "app.js"
 }
 ```
 
-#### Performance Optimized
+#### Custom Colors
 ```json
 {
-  "display": {
-    "brightness": 255,
-    "auto_brightness": false
+  "settings": {
+    "wifi": {
+      "ssid": "MyNetwork",
+      "pass": "MyPassword"
+    }
   },
-  "system": {
-    "performance_mode": true,
-    "log_level": 3
+  "screen": {
+    "background": "#1a1a2e",
+    "foreground": "#eee"
+  },
+  "script": "weather.js"
+}
+```
+
+#### With MQTT Enabled
+```json
+{
+  "settings": {
+    "wifi": {
+      "ssid": "MyNetwork",
+      "pass": "MyPassword"
+    },
+    "mqtt": {
+      "enabled": true
+    }
+  },
+  "script": "mqtt_dashboard.js"
+}
+```
+
+#### Minimal Configuration (WiFi Only)
+```json
+{
+  "settings": {
+    "wifi": {
+      "ssid": "MyNetwork",
+      "pass": "MyPassword"
+    }
   }
 }
 ```
 
-#### Power Saving Mode
-```json
-{
-  "wifi": {
-    "enabled": false
-  },
-  "display": {
-    "brightness": 100,
-    "screen_timeout": 60000
-  },
-  "system": {
-    "performance_mode": false
-  }
-}
-```
+**Note:** WebScreen will start in fallback mode (displaying the notification screen) if:
+- No `/webscreen.json` configuration file is found on the SD card
+- The JavaScript file specified in the `script` field doesn't exist
+- The SD card cannot be mounted
+- WiFi connection fails (when configured)
 
 ## Architecture & Building
 

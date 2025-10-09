@@ -95,7 +95,8 @@ void camera_loop() {
   // Handle LVGL tasks
   lv_timer_handler();
 
-  delay(10);
+  // Minimal delay for smoother frame processing
+  delay(5);
 }
 
 void setup() {

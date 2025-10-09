@@ -42,7 +42,7 @@ uint8_t webscreen_mac[] = {0xCC, 0xBA, 0x97, 0x26, 0x09, 0xF0};
 // Camera configuration
 const int CAMERA_WIDTH = 320;
 const int CAMERA_HEIGHT = 240;
-const int TARGET_FPS = 10;  // Reduced for reliability
+const int TARGET_FPS = 20;  // Increased for smoother video
 const int FRAME_DELAY = 1000 / TARGET_FPS; // milliseconds
 
 // ESP-NOW frame structure (must match WebScreen receiver)
@@ -103,10 +103,10 @@ bool init_camera() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_RGB565; // RGB565 for direct display
   config.frame_size = FRAMESIZE_QVGA;     // 320x240
-  config.grab_mode = CAMERA_GRAB_LATEST;
+  config.grab_mode = CAMERA_GRAB_LATEST;  // Always get latest frame
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 12;
-  config.fb_count = 2; // Double buffering
+  config.jpeg_quality = 10;               // Better quality (lower = better for JPEG)
+  config.fb_count = 2;                    // Double buffering for smoother capture
 
   // Initialize camera
   esp_err_t err = esp_camera_init(&config);
@@ -115,31 +115,37 @@ bool init_camera() {
     return false;
   }
 
-  // Get camera sensor for settings adjustment
+  // Get camera sensor for optimized settings
   sensor_t *s = esp_camera_sensor_get();
   if (s) {
-    s->set_brightness(s, 0);     // -2 to 2
-    s->set_contrast(s, 0);       // -2 to 2
-    s->set_saturation(s, 0);     // -2 to 2
-    s->set_special_effect(s, 0); // 0 to 6 (0 - No Effect, ...)
-    s->set_whitebal(s, 1);       // 0 = disable , 1 = enable
-    s->set_awb_gain(s, 1);       // 0 = disable , 1 = enable
-    s->set_wb_mode(s, 0);        // 0 to 4 - if awb_gain enabled
-    s->set_exposure_ctrl(s, 1);  // 0 = disable , 1 = enable
-    s->set_aec2(s, 0);           // 0 = disable , 1 = enable
-    s->set_ae_level(s, 0);       // -2 to 2
-    s->set_aec_value(s, 300);    // 0 to 1200
-    s->set_gain_ctrl(s, 1);      // 0 = disable , 1 = enable
-    s->set_agc_gain(s, 0);       // 0 to 30
-    s->set_gainceiling(s, (gainceiling_t)0); // 0 to 6
-    s->set_bpc(s, 0);            // 0 = disable , 1 = enable
-    s->set_wpc(s, 1);            // 0 = disable , 1 = enable
-    s->set_raw_gma(s, 1);        // 0 = disable , 1 = enable
-    s->set_lenc(s, 1);           // 0 = disable , 1 = enable
-    s->set_hmirror(s, 0);        // 0 = disable , 1 = enable
-    s->set_vflip(s, 0);          // 0 = disable , 1 = enable
-    s->set_dcw(s, 1);            // 0 = disable , 1 = enable
-    s->set_colorbar(s, 0);       // 0 = disable , 1 = enable
+    // Image quality improvements
+    s->set_brightness(s, 1);     // Slightly brighter: -2 to 2
+    s->set_contrast(s, 1);       // Better contrast: -2 to 2
+    s->set_saturation(s, 1);     // More vivid colors: -2 to 2
+    s->set_sharpness(s, 1);      // Sharper image: -2 to 2
+
+    // Auto adjustments for better quality
+    s->set_whitebal(s, 1);       // Auto white balance
+    s->set_awb_gain(s, 1);       // Auto white balance gain
+    s->set_exposure_ctrl(s, 1);  // Auto exposure
+    s->set_aec2(s, 1);           // Auto exposure control 2
+    s->set_gain_ctrl(s, 1);      // Auto gain control
+    s->set_agc_gain(s, 3);       // Slight gain boost: 0 to 30
+
+    // Image corrections
+    s->set_bpc(s, 1);            // Black pixel correction
+    s->set_wpc(s, 1);            // White pixel correction
+    s->set_raw_gma(s, 1);        // Gamma correction
+    s->set_lenc(s, 1);           // Lens correction
+    s->set_dcw(s, 1);            // Downsize enable
+
+    // No effects
+    s->set_special_effect(s, 0); // No special effects
+    s->set_colorbar(s, 0);       // No test pattern
+
+    // Orientation (adjust if camera is mounted differently)
+    s->set_hmirror(s, 0);        // Horizontal mirror: 0 = normal
+    s->set_vflip(s, 1);          // Vertical flip: 1 = flip upside down
   }
 
   Serial.println("Camera initialized successfully");

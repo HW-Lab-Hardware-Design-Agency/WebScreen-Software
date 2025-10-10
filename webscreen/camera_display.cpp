@@ -4,6 +4,7 @@
  */
 
 #include "camera_display.h"
+#include "motion_detect.h"
 #include <string.h>
 
 // LVGL objects
@@ -16,9 +17,14 @@ static lv_obj_t* frames_label = nullptr;
 static lv_obj_t* quality_label = nullptr;
 static lv_obj_t* uptime_label = nullptr;
 static lv_obj_t* status_label = nullptr;
+static lv_obj_t* motion_label = nullptr;
+static lv_obj_t* motion_indicator = nullptr;
 
 // Canvas buffer (stored globally since lv_canvas_get_buf was removed in LVGL 8.3+)
 static lv_color_t* canvas_buf = nullptr;
+
+// Motion detection
+static bool motion_detection_enabled = true;
 
 // Display settings
 #define CANVAS_WIDTH ESPNOW_CAMERA_WIDTH
@@ -99,9 +105,23 @@ bool camera_display_init(void) {
   status_label = lv_label_create(info_panel);
   lv_obj_add_style(status_label, &label_style, 0);
   lv_label_set_text(status_label, "Waiting...");
-  lv_obj_set_pos(status_label, 0, 180);
+  lv_obj_set_pos(status_label, 0, 165);
   lv_obj_set_width(status_label, INFO_PANEL_WIDTH - 20);
   lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
+
+  // Motion detection label
+  motion_label = lv_label_create(info_panel);
+  lv_obj_add_style(motion_label, &label_style, 0);
+  lv_label_set_text(motion_label, "Motion: --");
+  lv_obj_set_pos(motion_label, 0, 200);
+
+  // Motion indicator (visual alert)
+  motion_indicator = lv_obj_create(info_panel);
+  lv_obj_set_size(motion_indicator, 15, 15);
+  lv_obj_set_pos(motion_indicator, INFO_PANEL_WIDTH - 25, 200);
+  lv_obj_set_style_radius(motion_indicator, 8, 0);
+  lv_obj_set_style_bg_color(motion_indicator, lv_color_hex(0x555555), 0); // Gray when inactive
+  lv_obj_set_style_border_width(motion_indicator, 0, 0);
 
   // Allocate canvas buffer in PSRAM
   canvas_buf = (lv_color_t*)ps_malloc(CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(lv_color_t));
@@ -125,11 +145,20 @@ bool camera_display_init(void) {
   int16_t y_offset = 0;  // Top align
   lv_obj_set_pos(camera_canvas, x_offset, y_offset);
 
+  // Initialize motion detection
+  if (motion_detection_enabled) {
+    if (!motion_detect_init()) {
+      Serial.println("Camera Display: Motion detection init failed (non-critical)");
+      motion_detection_enabled = false;
+    }
+  }
+
   Serial.println("Camera Display: Initialized successfully");
   Serial.printf("  - Canvas size: %dx%d\n", CANVAS_WIDTH, CANVAS_HEIGHT);
   Serial.printf("  - Screen size: %dx%d\n", LV_HOR_RES, LV_VER_RES);
   Serial.printf("  - Info panel: %dx%d\n", INFO_PANEL_WIDTH, LV_VER_RES);
   Serial.printf("  - Canvas position: (%d, %d)\n", x_offset, y_offset);
+  Serial.printf("  - Motion detection: %s\n", motion_detection_enabled ? "enabled" : "disabled");
 
   return true;
 }
@@ -144,6 +173,11 @@ void camera_display_update(void) {
     uint16_t* frame_data = espnow_camera_get_frame();
 
     if (frame_data != nullptr) {
+      // Check for motion if enabled
+      if (motion_detection_enabled) {
+        motion_detect_check(frame_data, CANVAS_WIDTH, CANVAS_HEIGHT);
+      }
+
       // Copy RGB565 frame data to LVGL canvas buffer
       // LVGL uses lv_color_t which is RGB565 on ESP32
       memcpy(canvas_buf, frame_data, CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(lv_color_t));
@@ -212,11 +246,39 @@ void camera_display_update(void) {
         lv_label_set_text(status_label, "Streaming\nSLOW");
       }
     }
+
+    // Update motion detection info
+    if (motion_detection_enabled && motion_label != nullptr && motion_indicator != nullptr) {
+      motion_stats_t motion_stats = motion_detect_get_stats();
+
+      // Update motion label
+      if (motion_stats.motion_events == 0) {
+        lv_label_set_text(motion_label, "Motion: --");
+      } else {
+        char motion_text[32];
+        snprintf(motion_text, sizeof(motion_text), "Motion: %lu", motion_stats.motion_events);
+        lv_label_set_text(motion_label, motion_text);
+      }
+
+      // Update motion indicator color
+      if (motion_stats.motion_detected) {
+        // Red when motion detected
+        lv_obj_set_style_bg_color(motion_indicator, lv_color_hex(0xFF0000), 0);
+      } else {
+        // Gray when no motion
+        lv_obj_set_style_bg_color(motion_indicator, lv_color_hex(0x555555), 0);
+      }
+    }
   }
 }
 
 void camera_display_shutdown(void) {
   Serial.println("Camera Display: Shutting down...");
+
+  // Shutdown motion detection
+  if (motion_detection_enabled) {
+    motion_detect_shutdown();
+  }
 
   // Delete LVGL objects (child objects deleted with parent)
   if (camera_container != nullptr) {
@@ -232,6 +294,8 @@ void camera_display_shutdown(void) {
   quality_label = nullptr;
   uptime_label = nullptr;
   status_label = nullptr;
+  motion_label = nullptr;
+  motion_indicator = nullptr;
   camera_canvas = nullptr;
 
   // Free canvas buffer
@@ -245,4 +309,20 @@ void camera_display_shutdown(void) {
 
 lv_obj_t* camera_display_get_object(void) {
   return camera_container;
+}
+
+void camera_display_set_motion_detection(bool enable) {
+  motion_detection_enabled = enable;
+
+  if (enable && motion_label != nullptr) {
+    if (!motion_detect_init()) {
+      Serial.println("Camera Display: Failed to enable motion detection");
+      motion_detection_enabled = false;
+    }
+  } else if (!enable) {
+    motion_detect_shutdown();
+  }
+
+  Serial.printf("Camera Display: Motion detection %s\n",
+                motion_detection_enabled ? "enabled" : "disabled");
 }

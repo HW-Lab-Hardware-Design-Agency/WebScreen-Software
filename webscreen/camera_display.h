@@ -31,3 +31,9 @@ void camera_display_shutdown(void);
  * @return LVGL object containing camera display
  */
 lv_obj_t* camera_display_get_object(void);
+
+/**
+ * @brief Enable/disable motion detection
+ * @param enable true to enable motion detection
+ */
+void camera_display_set_motion_detection(bool enable);

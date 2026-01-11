@@ -45,6 +45,9 @@ void SerialCommands::processCommand(const String& command) {
   else if (baseCmd == "write") {
     writeScript(args);
   }
+  else if (baseCmd == "upload") {
+    uploadFile(args);
+  }
   else if (baseCmd == "config") {
     if (args.startsWith("get ")) {
       configGet(args.substring(4));
@@ -94,6 +97,7 @@ void SerialCommands::showHelp() {
   Serial.println("/stats                   - Show system statistics");
   Serial.println("/info                    - Show device information");
   Serial.println("/write <filename>        - Write JS script to SD card (interactive)");
+  Serial.println("/upload <file> [base64]  - Upload any file (text or base64-encoded)");
   Serial.println("/config get <key>        - Get config value from webscreen.json");
   Serial.println("/config set <key> <val>  - Set config value in webscreen.json");
   Serial.println("/ls [path]               - List files/directories");
@@ -107,6 +111,8 @@ void SerialCommands::showHelp() {
   Serial.println("/reboot                  - Restart the device");
   Serial.println("\nExamples:");
   Serial.println("/write hello.js");
+  Serial.println("/upload image.png base64");
+  Serial.println("/upload config.json");
   Serial.println("/config get wifi.ssid");
   Serial.println("/config set wifi.ssid MyNetwork");
   Serial.println("/ls /");
@@ -208,6 +214,121 @@ void SerialCommands::writeScript(const String& args) {
   
   file.close();
   printSuccess("Script saved: " + filename + " (" + formatBytes(SD_MMC.open(filename).size()) + ")");
+}
+
+// Base64 decoding table
+static const uint8_t base64_decode_table[128] = {
+  64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+  64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+  64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 62, 64, 64, 64, 63,
+  52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 64, 64, 64, 64, 64, 64,
+  64,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+  15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 64, 64, 64, 64, 64,
+  64, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+  41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 64, 64, 64, 64, 64
+};
+
+static size_t base64_decode(const char* input, size_t inputLen, uint8_t* output) {
+  size_t outputLen = 0;
+  uint32_t buffer = 0;
+  int bitsCollected = 0;
+
+  for (size_t i = 0; i < inputLen; i++) {
+    char c = input[i];
+    if (c == '=' || c == '\n' || c == '\r' || c == ' ') continue;
+    if (c < 0 || c >= 128) continue;
+
+    uint8_t value = base64_decode_table[(uint8_t)c];
+    if (value >= 64) continue;
+
+    buffer = (buffer << 6) | value;
+    bitsCollected += 6;
+
+    if (bitsCollected >= 8) {
+      bitsCollected -= 8;
+      output[outputLen++] = (buffer >> bitsCollected) & 0xFF;
+    }
+  }
+
+  return outputLen;
+}
+
+void SerialCommands::uploadFile(const String& args) {
+  if (args.length() == 0) {
+    printError("Usage: /upload <filename> [base64]");
+    return;
+  }
+
+  if (!SD_MMC.begin()) {
+    printError("SD card not available");
+    return;
+  }
+
+  // Parse filename and mode
+  int spaceIndex = args.indexOf(' ');
+  String filename = (spaceIndex > 0) ? args.substring(0, spaceIndex) : args;
+  String mode = (spaceIndex > 0) ? args.substring(spaceIndex + 1) : "";
+  mode.toLowerCase();
+  mode.trim();
+
+  bool isBase64 = (mode == "base64" || mode == "b64");
+
+  // Ensure filename starts with /
+  if (!filename.startsWith("/")) {
+    filename = "/" + filename;
+  }
+
+  Serial.println("Upload mode: " + String(isBase64 ? "base64" : "text"));
+  Serial.println("Target file: " + filename);
+  Serial.println("Send file data. End with a line containing only 'END':");
+  Serial.println("---");
+
+  File file = SD_MMC.open(filename, FILE_WRITE);
+  if (!file) {
+    printError("Cannot create file: " + filename);
+    return;
+  }
+
+  size_t totalBytes = 0;
+  String line;
+
+  // Buffer for base64 decoding
+  uint8_t decodeBuffer[512];
+
+  while (true) {
+    while (!Serial.available()) {
+      delay(10);
+    }
+
+    line = Serial.readStringUntil('\n');
+    line.trim();
+
+    if (line == "END") {
+      break;
+    }
+
+    if (isBase64) {
+      // Decode base64 and write binary data
+      size_t decodedLen = base64_decode(line.c_str(), line.length(), decodeBuffer);
+      if (decodedLen > 0) {
+        file.write(decodeBuffer, decodedLen);
+        totalBytes += decodedLen;
+      }
+      // Show progress every 10KB
+      if (totalBytes % 10240 < 512) {
+        Serial.printf("+ %s received\r", formatBytes(totalBytes).c_str());
+      }
+    } else {
+      // Text mode - write as-is with newline
+      file.println(line);
+      totalBytes += line.length() + 1;
+      Serial.println("+ " + line);
+    }
+  }
+
+  file.close();
+  Serial.println();
+  printSuccess("File saved: " + filename + " (" + formatBytes(totalBytes) + ")");
 }
 
 void SerialCommands::configSet(const String& args) {

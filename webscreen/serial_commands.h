@@ -16,6 +16,7 @@ private:
   static void showStats();
   static void showInfo();
   static void writeScript(const String& args);
+  static void uploadFile(const String& args);
   static void configSet(const String& args);
   static void configGet(const String& args);
   static void listFiles(const String& path);

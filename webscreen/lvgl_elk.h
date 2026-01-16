@@ -408,12 +408,19 @@ static jsval_t js_create_timer(struct js *js, jsval_t *args, int nargs) {
 // sd_read_file(path)
 static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
-  const char *path = js_str(js, args[0]);
-  if (!path) return js_mknull();
+  const char *rawPath = js_str(js, args[0]);
+  if (!rawPath) return js_mknull();
+
+  // Strip quotes if present
+  String path(rawPath);
+  if (path.startsWith("\"") && path.endsWith("\"")) {
+    path.remove(0, 1);
+    path.remove(path.length() - 1, 1);
+  }
 
   File file = SD_MMC.open(path);
   if (!file) {
-    LOGF("Failed to open file: %s\n", path);
+    LOGF("Failed to open file: %s\n", path.c_str());
     return js_mknull();
   }
   String content = file.readString();
@@ -2132,20 +2139,38 @@ String readHttpResponseBody(WiFiClient &client) {
   String headers;
   String body;
   bool chunked = false;
+  int contentLength = -1;
 
-  while (client.connected()) {
+  // Read headers - check both connected and available for robustness
+  unsigned long timeout = millis() + 10000;  // 10 second timeout
+  while ((client.connected() || client.available()) && millis() < timeout) {
+    if (!client.available()) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
     String line = client.readStringUntil('\n');
-    if (line == "\r") {  // End of headers
+    line.trim();  // Remove \r and whitespace
+    if (line.length() == 0) {  // Empty line = end of headers
       break;
     }
     headers += line + "\n";
     if (line.indexOf("Transfer-Encoding: chunked") >= 0) {
       chunked = true;
     }
+    // Parse Content-Length
+    if (line.startsWith("content-length:") || line.startsWith("Content-Length:")) {
+      int colonPos = line.indexOf(':');
+      if (colonPos > 0) {
+        String lenStr = line.substring(colonPos + 1);
+        lenStr.trim();
+        contentLength = lenStr.toInt();
+      }
+    }
   }
 
   if (chunked) {
-    while (true) {
+    timeout = millis() + 10000;
+    while (millis() < timeout) {
       // Read chunk size
       String sizeLine = client.readStringUntil('\n');
       sizeLine.trim();
@@ -2160,7 +2185,7 @@ String readHttpResponseBody(WiFiClient &client) {
       int bytesRead = 0;
       while (bytesRead < chunkSize) {
         int toRead = chunkSize - bytesRead;
-        if (toRead > sizeof(buf)) toRead = sizeof(buf);
+        if (toRead > (int)sizeof(buf)) toRead = sizeof(buf);
         int n = client.readBytes(buf, toRead);
         if (n <= 0) break;  // Timeout or error
         body += String(buf).substring(0, n);
@@ -2169,13 +2194,31 @@ String readHttpResponseBody(WiFiClient &client) {
 
       client.readStringUntil('\n');  // Read trailing \r\n
     }
-  } else {  // Read until the connection is closed
-    while (client.connected() || client.available()) {
+  } else if (contentLength > 0) {
+    // Use Content-Length to read exact number of bytes
+    body.reserve(contentLength);
+    int bytesRead = 0;
+    timeout = millis() + 10000;
+    while (bytesRead < contentLength && millis() < timeout) {
+      if (client.available()) {
+        char c = client.read();
+        body += c;
+        bytesRead++;
+      } else if (!client.connected()) {
+        break;
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+    }
+  } else {
+    // No Content-Length, read until connection closes
+    timeout = millis() + 10000;
+    while ((client.connected() || client.available()) && millis() < timeout) {
       if (client.available()) {
         char c = client.read();
         body += c;
       } else {
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(10));
       }
     }
   }
@@ -2377,11 +2420,22 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
     url.remove(url.length() - 1, 1);
   }
 
-  LOG("js_http_get => Using SSL for: " + url);
-
+  // Determine if HTTPS or HTTP
+  bool useSSL = true;
   const String HTTPS_PREFIX = "https://";
+  const String HTTP_PREFIX = "http://";
+
   if (url.startsWith(HTTPS_PREFIX)) {
     url.remove(0, HTTPS_PREFIX.length());
+    useSSL = true;
+    LOG("js_http_get => Using HTTPS");
+  } else if (url.startsWith(HTTP_PREFIX)) {
+    url.remove(0, HTTP_PREFIX.length());
+    useSSL = false;
+    LOG("js_http_get => Using HTTP");
+  } else {
+    useSSL = true;
+    LOG("js_http_get => No prefix, assuming HTTPS");
   }
 
   int slashPos = url.indexOf('/');
@@ -2396,44 +2450,62 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
 
   LOG("Parsed host='" + host + "', path='" + path + "'");
 
-  WiFiClientSecure client;
-  if (g_httpCAcert) {  // If user loaded a cert from SD, use it
-    client.setCACert(g_httpCAcert);
-    LOG("Using user-supplied CA cert (secure)");
-  } else {  // Otherwise, skip validation
-    client.setInsecure();
-    LOG("No CA cert => setInsecure() (unsecure)");
+  String response;
+
+  if (useSSL) {
+    WiFiClientSecure client;
+    if (g_httpCAcert) {
+      client.setCACert(g_httpCAcert);
+      LOG("Using user-supplied CA cert");
+    } else {
+      client.setInsecure();
+      LOG("No CA cert => setInsecure()");
+    }
+
+    LOGF("Connecting to '%s':443...\n", host.c_str());
+    if (!client.connect(host.c_str(), 443)) {
+      LOG("Connection failed!");
+      return js_mkstr(js, "", 0);
+    }
+    LOG("Connected => sending GET request");
+
+    client.print(String("GET ") + path + " HTTP/1.1\r\n");
+    client.print(String("Host: ") + host + "\r\n");
+    for (auto &hdr : g_http_headers) {
+      client.print(hdr.first);
+      client.print(": ");
+      client.print(hdr.second);
+      client.print("\r\n");
+    }
+    client.print("Connection: close\r\n\r\n");
+
+    response = readHttpResponseBody(client);
+    client.stop();
+  } else {
+    WiFiClient client;
+    LOGF("Connecting to '%s':80...\n", host.c_str());
+    if (!client.connect(host.c_str(), 80)) {
+      LOG("Connection failed!");
+      return js_mkstr(js, "", 0);
+    }
+    LOG("Connected => sending GET request");
+
+    client.print(String("GET ") + path + " HTTP/1.1\r\n");
+    client.print(String("Host: ") + host + "\r\n");
+    for (auto &hdr : g_http_headers) {
+      client.print(hdr.first);
+      client.print(": ");
+      client.print(hdr.second);
+      client.print("\r\n");
+    }
+    client.print("Connection: close\r\n\r\n");
+
+    response = readHttpResponseBody(client);
+    client.stop();
   }
-
-  LOGF("Connecting to '%s':443...\n", host.c_str());
-  if (!client.connect(host.c_str(), 443)) {
-    LOG("Connection failed!");
-    return js_mkstr(js, "", 0);
-  }
-  LOG("Connected => sending GET request");
-
-  client.print(String("GET ") + path + " HTTP/1.1\r\n");
-  client.print(String("Host: ") + host + "\r\n");
-
-  // Send any stored headers from g_http_headers
-  for (auto &hdr : g_http_headers) {  // e.g. "Authorization: Bearer 12345\r\n"
-    client.print(hdr.first);
-    client.print(": ");
-    client.print(hdr.second);
-    client.print("\r\n");
-  }
-
-  client.print("Connection: close\r\n\r\n");
-
-  String response = readHttpResponseBody(client);
-  client.stop();
 
   LOGF("Done reading. response size=%d\n", response.length());
-  LOG("Full response content:\n<<<");
-  LOG(response);  // <--- add this!
-  LOG(">>> End of response");
 
-  // Return entire raw HTTP response
   return js_mkstr(js, response.c_str(), response.length());
 }
 

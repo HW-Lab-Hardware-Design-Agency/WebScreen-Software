@@ -61,6 +61,8 @@ WebScreen> /help
 /ping <host>             - Test network connectivity
 /backup [save|restore]   - Backup/restore configuration
 /brightness <0-255>      - Set display brightness
+/time                    - Show current device time
+/settime <epoch> [tz]    - Set device time from epoch
 /monitor [cpu|mem|net]   - Live system monitoring
 /reboot                  - Restart the device
 
@@ -367,6 +369,60 @@ Live Monitor - Press any key to stop
 - Track CPU temperature under load
 - Debug WiFi connectivity issues
 - Performance profiling during development
+
+### Time Commands
+
+#### `/time`
+Displays the current device time, epoch timestamp, and day of week. Time is sourced from NTP (Network Time Protocol) and requires a WiFi connection for initial synchronization.
+
+**Usage:**
+```
+WebScreen> /time
+Current time: 2026-02-17 14:23:45
+Epoch: 1771337025
+Day of week: 2 (0=Sun)
+```
+
+**Notes:**
+- Returns an error if NTP has not synced yet
+- Time is displayed in the device's configured timezone
+- NTP automatically syncs when WiFi connects (server: `pool.ntp.org` by default)
+
+#### `/settime <epoch> [timezone]`
+Manually sets the device time from a Unix epoch timestamp, with an optional POSIX timezone string.
+
+**Usage:**
+```
+WebScreen> /settime 1771337025
+Time set: 2026-02-17 14:23:45
+
+WebScreen> /settime 1771337025 EST5EDT,M3.2.0,M11.1.0
+Time set: 2026-02-17 09:23:45
+```
+
+**Parameters:**
+- `epoch` - Unix timestamp in seconds (must be after 2021-01-01)
+- `timezone` - Optional POSIX TZ string that sets the device timezone
+
+**POSIX TZ String Examples:**
+| Location | POSIX TZ String |
+|---|---|
+| UTC | `UTC0` |
+| US Eastern | `EST5EDT,M3.2.0,M11.1.0` |
+| US Pacific | `PST8PDT,M3.2.0,M11.1.0` |
+| Buenos Aires | `<-03>3` |
+| Tokyo | `JST-9` |
+| London | `GMT0BST,M3.5.0/1,M10.5.0` |
+| Berlin | `CET-1CEST,M3.5.0,M10.5.0/3` |
+
+**Notes:**
+- The WebScreen Admin tool provides a timezone dropdown that maps IANA names to POSIX TZ strings automatically
+- Full POSIX TZ database: https://github.com/nayarsystems/posix_tz_db
+
+**Use Cases:**
+- Set time when WiFi/NTP is not available
+- Override timezone from the serial console
+- Used by the WebScreen Admin tool's "Sync Time to Device" feature
 
 ### Configuration Management
 

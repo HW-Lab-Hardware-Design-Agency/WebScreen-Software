@@ -22,6 +22,7 @@ WebScreen exposes a comprehensive set of functions to JavaScript applications ru
   "display": {
     "brightness": 200
   },
+  "timezone": "EST5EDT,M3.2.0,M11.1.0",
   "script": "my_app.js"
 }
 ```
@@ -85,6 +86,56 @@ The following functions are available in your JavaScript applications:
 
 - **wifi_get_ip()**  
   Returns the local IP address as a string.
+
+### NTP Time Functions
+
+Time is automatically synchronized via NTP when the device connects to WiFi. The timezone is configured in `webscreen.json` using a POSIX TZ string (see the WebScreen Admin tool for a full dropdown of all timezones).
+
+- **ntp_synced()**
+  Returns `true` if NTP time has been synchronized, `false` otherwise. Always check this before using other time functions.
+  ```javascript
+  if (ntp_synced()) {
+    print("Time is available");
+  }
+  ```
+
+- **get_hours()**
+  Returns the current hour (0-23) in the configured timezone, or -1 if NTP is not synced.
+
+- **get_minutes()**
+  Returns the current minute (0-59), or -1 if NTP is not synced.
+
+- **get_seconds()**
+  Returns the current second (0-59), or -1 if NTP is not synced.
+
+- **get_year()**
+  Returns the current year (e.g. 2026), or -1 if NTP is not synced.
+
+- **get_month()**
+  Returns the current month (1-12), or -1 if NTP is not synced.
+
+- **get_day()**
+  Returns the current day of the month (1-31), or -1 if NTP is not synced.
+
+- **get_weekday()**
+  Returns the day of the week (0=Sunday, 6=Saturday), or -1 if NTP is not synced.
+
+- **get_epoch()**
+  Returns the current Unix timestamp in seconds, or -1 if time is not valid (before 2021).
+
+**Example: Simple Clock**
+```javascript
+// Wait for NTP sync
+if (wifi_status() && ntp_synced()) {
+  let h = get_hours();
+  let m = get_minutes();
+  let s = get_seconds();
+  let time_str = numberToString(h) + ":" +
+                 (m < 10 ? "0" : "") + numberToString(m) + ":" +
+                 (s < 10 ? "0" : "") + numberToString(s);
+  set_text(time_label, time_str);
+}
+```
 
 ### HTTP Functions
 

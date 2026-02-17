@@ -29,6 +29,8 @@ private:
   static void backup(const String& args);
   static void monitor(const String& args);
   static void setBrightness(const String& args);
+  static void showTime();
+  static void setTime(const String& args);
 
   static void printPrompt();
   static String formatBytes(size_t bytes);

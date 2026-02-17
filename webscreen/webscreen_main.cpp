@@ -31,7 +31,7 @@ webscreen_config_t g_webscreen_config = { .wifi = {
                                             .auto_reconnect = true },
                                           .mqtt = { .broker = "", .port = 1883, .username = "", .password = "", .client_id = "webscreen_001", .enabled = false, .keepalive = WEBSCREEN_MQTT_KEEPALIVE_SEC },
                                           .display = { .brightness = 200, .rotation = WEBSCREEN_DISPLAY_ROTATION, .background_color = 0x000000, .foreground_color = 0xFFFFFF, .auto_brightness = false, .screen_timeout = 0 },
-                                          .system = { .device_name = "WebScreen", .timezone = "UTC", .log_level = 2, .performance_mode = false, .watchdog_timeout = WEBSCREEN_WATCHDOG_TIMEOUT_SEC * 1000 },
+                                          .system = { .device_name = "WebScreen", .timezone = "UTC", .ntp_server = "pool.ntp.org", .log_level = 2, .performance_mode = false, .watchdog_timeout = WEBSCREEN_WATCHDOG_TIMEOUT_SEC * 1000 },
                                           .script_file = "/app.js",
                                           .config_version = 2,
                                           .last_modified = 0 };
@@ -186,6 +186,23 @@ static bool load_configuration(void) {
   WEBSCREEN_DEBUG_PRINTF("Config: display.brightness = %d\n", g_webscreen_config.display.brightness);
   g_webscreen_config.system.log_level = doc["system"]["log_level"] | g_webscreen_config.system.log_level;
 
+  // Load timezone (check both system.timezone and top-level timezone for backward compat)
+  if (doc["system"]["timezone"]) {
+    WEBSCREEN_STR_COPY(g_webscreen_config.system.timezone,
+                       doc["system"]["timezone"], sizeof(g_webscreen_config.system.timezone));
+  } else if (doc["timezone"]) {
+    WEBSCREEN_STR_COPY(g_webscreen_config.system.timezone,
+                       doc["timezone"], sizeof(g_webscreen_config.system.timezone));
+  }
+
+  // Load NTP server
+  if (doc["system"]["ntp_server"]) {
+    WEBSCREEN_STR_COPY(g_webscreen_config.system.ntp_server,
+                       doc["system"]["ntp_server"], sizeof(g_webscreen_config.system.ntp_server));
+  }
+  WEBSCREEN_DEBUG_PRINTF("Config: timezone=%s, ntp_server=%s\n",
+                         g_webscreen_config.system.timezone, g_webscreen_config.system.ntp_server);
+
   if (doc["script_file"]) {
     WEBSCREEN_STR_COPY(g_webscreen_config.script_file,
                        doc["script_file"], sizeof(g_webscreen_config.script_file));
@@ -326,9 +343,23 @@ bool webscreen_load_config(const char *path,
 
   // Load display brightness into global config so init_lvgl_display() can apply it
   g_webscreen_config.display.brightness = doc["display"]["brightness"] | g_webscreen_config.display.brightness;
-  WEBSCREEN_DEBUG_PRINTF("Config loaded - SSID: %s, Script: %s, MQTT: %s, Brightness: %d\n",
+
+  // Load timezone (check top-level first, then system.timezone)
+  const char* tz = doc["timezone"] | (const char*)nullptr;
+  if (!tz) tz = doc["system"]["timezone"] | (const char*)nullptr;
+  if (tz) {
+    WEBSCREEN_STR_COPY(g_webscreen_config.system.timezone, tz, sizeof(g_webscreen_config.system.timezone));
+  }
+
+  // Load NTP server
+  const char* ntp = doc["system"]["ntp_server"] | (const char*)nullptr;
+  if (ntp) {
+    WEBSCREEN_STR_COPY(g_webscreen_config.system.ntp_server, ntp, sizeof(g_webscreen_config.system.ntp_server));
+  }
+
+  WEBSCREEN_DEBUG_PRINTF("Config loaded - SSID: %s, Script: %s, MQTT: %s, Brightness: %d, TZ: %s\n",
                          outSSID.c_str(), outScript.c_str(), outMqttEnabled ? "enabled" : "disabled",
-                         g_webscreen_config.display.brightness);
+                         g_webscreen_config.display.brightness, g_webscreen_config.system.timezone);
 
   return true;
 }

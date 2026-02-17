@@ -57,6 +57,7 @@ void setup() {
       // Don't return here - continue to check if script exists
     } else {
       LOG("Wi-Fi connected successfully.");
+      webscreen_ntp_setup_from_config();
     }
   } else {
     LOG("No WiFi configured, running in offline mode.");

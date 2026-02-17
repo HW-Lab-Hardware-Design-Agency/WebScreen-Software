@@ -3,6 +3,8 @@
 #include "webscreen_config.h"
 #include "webscreen_hardware.h"
 #include <WiFi.h>
+#include <time.h>
+#include <sys/time.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -89,6 +91,12 @@ void SerialCommands::processCommand(const String& command) {
   else if (baseCmd == "brightness") {
     setBrightness(args);
   }
+  else if (baseCmd == "time") {
+    showTime();
+  }
+  else if (baseCmd == "settime") {
+    setTime(args);
+  }
   else {
     printError("Unknown command: " + baseCmd + ". Type /help for available commands.");
   }
@@ -114,6 +122,8 @@ void SerialCommands::showHelp() {
   Serial.println("/backup [save|restore]   - Backup/restore configuration");
   Serial.println("/monitor [cpu|mem|net]   - Live system monitoring");
   Serial.println("/brightness <0-255>     - Set display brightness");
+  Serial.println("/time                    - Show current device time");
+  Serial.println("/settime <epoch> [tz]    - Set device time from epoch");
   Serial.println("/reboot                  - Restart the device");
   Serial.println("\nExamples:");
   Serial.println("/write hello.js");
@@ -1055,4 +1065,57 @@ void SerialCommands::setBrightness(const String& args) {
 
   webscreen_display_set_brightness((uint8_t)brightness);
   printSuccess("Brightness set to " + String(brightness));
+}
+
+void SerialCommands::showTime() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 100)) {
+    printError("Time not available (NTP not synced)");
+    return;
+  }
+
+  Serial.printf("Current time: %04d-%02d-%02d %02d:%02d:%02d\n",
+                timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  Serial.printf("Epoch: %lu\n", (unsigned long)mktime(&timeinfo));
+  Serial.printf("Day of week: %d (0=Sun)\n", timeinfo.tm_wday);
+}
+
+void SerialCommands::setTime(const String& args) {
+  String val = args;
+  val.trim();
+
+  if (val.length() == 0) {
+    printError("Usage: /settime <epoch> [timezone]");
+    return;
+  }
+
+  int spaceIndex = val.indexOf(' ');
+  String epochStr = (spaceIndex > 0) ? val.substring(0, spaceIndex) : val;
+  String tz = (spaceIndex > 0) ? val.substring(spaceIndex + 1) : "";
+  tz.trim();
+
+  unsigned long epoch = strtoul(epochStr.c_str(), NULL, 10);
+  if (epoch < 1609459200) {  // Before 2021-01-01
+    printError("Invalid epoch value");
+    return;
+  }
+
+  struct timeval tv;
+  tv.tv_sec = epoch;
+  tv.tv_usec = 0;
+  settimeofday(&tv, NULL);
+
+  if (tz.length() > 0) {
+    setenv("TZ", tz.c_str(), 1);
+    tzset();
+  }
+
+  struct tm timeinfo;
+  getLocalTime(&timeinfo);
+
+  Serial.printf("Time set: %04d-%02d-%02d %02d:%02d:%02d\n",
+                timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  printSuccess("Device time synchronized");
 }

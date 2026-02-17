@@ -143,7 +143,8 @@ typedef struct {  // WiFi Configuration
   // System Configuration
   struct {
     char device_name[32];       ///< Device name
-    char timezone[32];          ///< Timezone string
+    char timezone[32];          ///< Timezone string (UTC offset hours or POSIX TZ)
+    char ntp_server[64];        ///< NTP server hostname
     uint8_t log_level;          ///< Logging level (0-4)
     bool performance_mode;      ///< Performance mode enabled
     uint32_t watchdog_timeout;  ///< Watchdog timeout in ms

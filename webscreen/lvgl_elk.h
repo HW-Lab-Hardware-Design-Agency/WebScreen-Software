@@ -11,6 +11,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>  // For MQTT
+#include <time.h>
 
 #include <vector>
 #include <utility>  // for std::pair
@@ -3296,6 +3297,67 @@ static jsval_t js_get_brightness(struct js *js, jsval_t *args, int nargs) {
 }
 
 /******************************************************************************
+ * H3) NTP Time API
+ ******************************************************************************/
+
+static jsval_t js_get_hours(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return js_mknum(-1);
+  return js_mknum((double)timeinfo.tm_hour);
+}
+
+static jsval_t js_get_minutes(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return js_mknum(-1);
+  return js_mknum((double)timeinfo.tm_min);
+}
+
+static jsval_t js_get_seconds(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return js_mknum(-1);
+  return js_mknum((double)timeinfo.tm_sec);
+}
+
+static jsval_t js_get_year(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return js_mknum(-1);
+  return js_mknum((double)(timeinfo.tm_year + 1900));
+}
+
+static jsval_t js_get_month(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return js_mknum(-1);
+  return js_mknum((double)(timeinfo.tm_mon + 1));  // 1-12
+}
+
+static jsval_t js_get_day(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return js_mknum(-1);
+  return js_mknum((double)timeinfo.tm_mday);
+}
+
+static jsval_t js_get_weekday(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return js_mknum(-1);
+  return js_mknum((double)timeinfo.tm_wday);  // 0=Sunday, 6=Saturday
+}
+
+static jsval_t js_get_epoch(struct js *js, jsval_t *args, int nargs) {
+  time_t now;
+  time(&now);
+  if (now < 1609459200) return js_mknum(-1);  // Before 2021-01-01
+  return js_mknum((double)now);
+}
+
+static jsval_t js_ntp_synced(struct js *js, jsval_t *args, int nargs) {
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo, 10) && timeinfo.tm_year > (2020 - 1900)) {
+    return js_mktrue();
+  }
+  return js_mkfalse();
+}
+
+/******************************************************************************
  * I) Register All JS Functions
  ******************************************************************************/
 
@@ -3311,6 +3373,18 @@ void register_js_functions() {
   js_set(js, global, "delay", js_mkfun(js_delay));
   js_set(js, global, "set_brightness", js_mkfun(js_set_brightness));
   js_set(js, global, "get_brightness", js_mkfun(js_get_brightness));
+
+  // NTP Time functions
+  js_set(js, global, "get_hours", js_mkfun(js_get_hours));
+  js_set(js, global, "get_minutes", js_mkfun(js_get_minutes));
+  js_set(js, global, "get_seconds", js_mkfun(js_get_seconds));
+  js_set(js, global, "get_year", js_mkfun(js_get_year));
+  js_set(js, global, "get_month", js_mkfun(js_get_month));
+  js_set(js, global, "get_day", js_mkfun(js_get_day));
+  js_set(js, global, "get_weekday", js_mkfun(js_get_weekday));
+  js_set(js, global, "get_epoch", js_mkfun(js_get_epoch));
+  js_set(js, global, "ntp_synced", js_mkfun(js_ntp_synced));
+
   js_set(js, global, "create_timer", js_mkfun(js_create_timer));
   js_set(js, global, "toNumber", js_mkfun(js_to_number));
   js_set(js, global, "numberToString", js_mkfun(js_number_to_string));

@@ -116,6 +116,38 @@ extern "C" {
   void webscreen_wifi_set_auto_reconnect(bool enable);
 
   // ============================================================================
+  // NTP TIME SYNCHRONIZATION
+  // ============================================================================
+
+  /**
+   * @brief Initialize NTP time synchronization with UTC offset
+   * @param ntp_server NTP server hostname (e.g., "pool.ntp.org")
+   * @param utc_offset_sec UTC offset in seconds
+   * @param daylight_offset_sec Daylight saving offset in seconds
+   * @return true if NTP sync initiated successfully
+   */
+  bool webscreen_ntp_init(const char* ntp_server, long utc_offset_sec, int daylight_offset_sec);
+
+  /**
+   * @brief Initialize NTP with POSIX timezone string
+   * @param ntp_server NTP server hostname
+   * @param posix_tz POSIX timezone string (e.g., "EST5EDT,M3.2.0,M11.1.0")
+   * @return true if NTP sync initiated successfully
+   */
+  bool webscreen_ntp_init_tz(const char* ntp_server, const char* posix_tz);
+
+  /**
+   * @brief Check if NTP time has been synchronized
+   * @return true if time is synchronized, false otherwise
+   */
+  bool webscreen_ntp_is_synced(void);
+
+  /**
+   * @brief Initialize NTP from global config (timezone + ntp_server)
+   */
+  void webscreen_ntp_setup_from_config(void);
+
+  // ============================================================================
   // HTTP CLIENT
   // ============================================================================
 

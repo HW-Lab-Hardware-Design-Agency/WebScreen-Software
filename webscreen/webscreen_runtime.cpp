@@ -1,5 +1,6 @@
 #include "webscreen_runtime.h"
 #include "webscreen_main.h"
+#include "webscreen_network.h"
 #include <lvgl.h>
 #include "tick.h"
 #include "pins_config.h"
@@ -444,9 +445,12 @@ void webscreen_runtime_register_js_functions(void) {
 
   WEBSCREEN_DEBUG_PRINTLN("JavaScript API functions registered successfully");
 }
+static bool g_was_wifi_connected = false;
+
 void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
 
   if (WiFi.status() != WL_CONNECTED) {
+    g_was_wifi_connected = false;
     unsigned long now = WEBSCREEN_MILLIS();
 
     if (now - g_last_wifi_reconnect_attempt > 10000) {
@@ -455,6 +459,16 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     }
     return;
   }
+
+  // WiFi is connected - initialize NTP if this is a new connection
+  if (!g_was_wifi_connected) {
+    g_was_wifi_connected = true;
+    if (!webscreen_ntp_is_synced()) {
+      WEBSCREEN_DEBUG_PRINTLN("WiFi connected - initializing NTP...");
+      webscreen_ntp_setup_from_config();
+    }
+  }
+
   if (g_mqtt_enabled) {}
 }
 extern void init_lvgl_display();

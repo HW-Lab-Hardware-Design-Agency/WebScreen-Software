@@ -16,7 +16,7 @@
 #define WEBSCREEN_VERSION_MAJOR 2
 #define WEBSCREEN_VERSION_MINOR 0
 #define WEBSCREEN_VERSION_PATCH 0
-#define WEBSCREEN_VERSION_STRING "2.0.6"
+#define WEBSCREEN_VERSION_STRING "2.0.7"
 
 // ============================================================================
 // HARDWARE CONFIGURATION
@@ -81,6 +81,10 @@
 // MQTT Client
 #define WEBSCREEN_MQTT_KEEPALIVE_SEC 60
 #define WEBSCREEN_MQTT_MAX_PACKET_SIZE 1024
+
+// NTP Configuration
+#define WEBSCREEN_NTP_SERVER_DEFAULT "pool.ntp.org"
+#define WEBSCREEN_NTP_SYNC_TIMEOUT_MS 10000
 
 // ============================================================================
 // SYSTEM CONFIGURATION

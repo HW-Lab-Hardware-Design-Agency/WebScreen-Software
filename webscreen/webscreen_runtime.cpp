@@ -29,11 +29,18 @@ static TaskHandle_t g_js_task_handle = NULL;
 static bool g_js_engine_initialized = false;
 static String g_js_script_content = "";
 
+// Script source in PSRAM — Elk stores function bodies as pointers into the
+// original source string.  If that buffer lives on the regular heap, any heap
+// corruption (e.g. from lwip/PubSubClient) silently damages function bodies
+// and causes "; expected" parse errors.  PSRAM is a separate address space,
+// immune to regular-heap overflow/corruption.
+static char  *g_js_script_psram     = nullptr;
+static size_t g_js_script_psram_len = 0;
+
 static unsigned long g_last_mqtt_reconnect_attempt = 0;
 static unsigned long g_last_wifi_reconnect_attempt = 0;
 
-extern WiFiClient g_wifiClient;
-extern PubSubClient g_mqttClient;
+// g_wifiClient and g_mqttClient are defined in lvgl_elk.h (included above)
 static uint32_t g_loop_count = 0;
 static uint32_t g_last_performance_check = 0;
 static uint32_t g_avg_loop_time_us = 0;
@@ -164,6 +171,8 @@ void webscreen_runtime_shutdown(void) {
     g_js_engine_initialized = false;
     g_current_script_file = "";
     g_js_script_content = "";
+    if (g_js_script_psram) { free(g_js_script_psram); g_js_script_psram = nullptr; }
+    g_js_script_psram_len = 0;
     g_last_error = "";
   }
 }
@@ -352,9 +361,18 @@ bool webscreen_runtime_init_javascript_engine(void) {
     return false;
   }
 
-  // Set aggressive GC threshold to trigger garbage collection more often
-  // This helps prevent memory fragmentation during long-running scripts
-  js_setgct(js, elk_memory_size / 4);  // Trigger GC when 25% of heap is used
+  // Disable Elk's automatic GC (set threshold to full heap size).
+  //
+  // Elk's GC triggers inside js_stmt() at the start of EVERY statement,
+  // including during nested function calls. GC compacts the heap and adjusts
+  // js->code, but does NOT adjust the saved `code` pointer on the C stack in
+  // do_call_op(). This leaves a dangling pointer that causes "; expected"
+  // parse errors after the function returns.
+  //
+  // Manual GC via js_gc(js) in the timer callback (every 60 iterations,
+  // BETWEEN js_eval calls) is safe because no saved code pointers exist
+  // on the stack at that point.
+  js_setgct(js, elk_memory_size);  // Never auto-trigger; rely on manual GC
 
   webscreen_runtime_register_js_functions();
 
@@ -383,7 +401,23 @@ bool webscreen_runtime_load_script(const char* script_file) {
     return false;
   }
 
-  WEBSCREEN_DEBUG_PRINTF("Script loaded successfully (%d bytes)\n", g_js_script_content.length());
+  // Copy script to PSRAM so Elk's function-body pointers survive any
+  // regular-heap corruption from MQTT / lwip / PubSubClient operations.
+  if (g_js_script_psram) { free(g_js_script_psram); g_js_script_psram = nullptr; }
+  g_js_script_psram_len = g_js_script_content.length();
+  g_js_script_psram = (char *)ps_malloc(g_js_script_psram_len + 1);
+  if (g_js_script_psram) {
+    memcpy(g_js_script_psram, g_js_script_content.c_str(), g_js_script_psram_len + 1);
+    // Free the regular-heap copy — we no longer need it
+    g_js_script_content = "";
+    WEBSCREEN_DEBUG_PRINTF("Script copied to PSRAM (%u bytes)\n", g_js_script_psram_len);
+  } else {
+    WEBSCREEN_DEBUG_PRINTLN("WARNING: ps_malloc failed for script, using heap copy (vulnerable to corruption)");
+    g_js_script_psram_len = 0;
+  }
+
+  WEBSCREEN_DEBUG_PRINTF("Script loaded successfully (%u bytes)\n",
+      g_js_script_psram ? g_js_script_psram_len : g_js_script_content.length());
   return true;
 }
 bool webscreen_runtime_start_javascript_task(void) {
@@ -415,8 +449,12 @@ bool webscreen_runtime_start_javascript_task(void) {
 void webscreen_runtime_javascript_task(void* pvParameters) {
   WEBSCREEN_DEBUG_PRINTLN("JavaScript task started");
   vTaskDelay(pdMS_TO_TICKS(100));
-  if (js && g_js_script_content.length() > 0) {
-    jsval_t result = js_eval(js, g_js_script_content.c_str(), g_js_script_content.length());
+  // Prefer the PSRAM copy (immune to regular-heap corruption).
+  const char *script_src = g_js_script_psram ? g_js_script_psram : g_js_script_content.c_str();
+  size_t      script_len = g_js_script_psram ? g_js_script_psram_len : g_js_script_content.length();
+
+  if (js && script_len > 0) {
+    jsval_t result = js_eval(js, script_src, script_len);
     if (js_type(result) == JS_ERR) {
       const char *error = js_str(js, result);
       WEBSCREEN_DEBUG_PRINT("JavaScript execution error: ");
@@ -469,7 +507,15 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     }
   }
 
-  if (g_mqtt_enabled) {}
+  if (g_mqtt_enabled) {
+    if (g_mqttClient.connected()) {
+      g_mqttClient.loop();
+    }
+    // Messages are queued by onMqttMessage callback.
+    // JS polls via mqtt_has_message() from its timer — no js_eval from C++.
+    extern void processPendingMqttMessage();
+    processPendingMqttMessage();
+  }
 }
 extern void init_lvgl_display();
 extern void init_lv_fs();

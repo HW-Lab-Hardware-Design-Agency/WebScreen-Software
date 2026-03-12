@@ -570,6 +570,12 @@ static jsval_t js_block(struct js *js, bool create_scope) {
     uint8_t t = js->tok;
     res = js_stmt(js);
     if (!is_err(res) && t != TOK_LBRACE && t != TOK_IF && t != TOK_WHILE && js->tok != TOK_SEMICOLON) {
+      printf("[ELK DBG] ;expected at block  t=%d tok=%d pos=%u clen=%u code_in_heap=%d\n",
+             (int)t, (int)js->tok, (unsigned)js->pos, (unsigned)js->clen,
+             (js->code >= (const char*)js->mem && js->code < (const char*)js->mem + js->size));
+      int ctx = (int)js->clen - (int)js->pos;
+      if (ctx > 40) ctx = 40;
+      if (ctx > 0) printf("[ELK DBG] remaining: [%.*s]\n", ctx, &js->code[js->pos]);
       res = js_mkerr(js, "; expected");
       break;
     }
@@ -970,7 +976,12 @@ static jsval_t js_call_dot(struct js *js) {
   jsval_t res = js_group(js);
   if (is_err(res)) return res;
   if (vtype(res) == T_CODEREF) {
-    res = lookup(js, &js->code[coderefoff(res)], codereflen(res));
+    jsoff_t _cr_off = coderefoff(res), _cr_len = codereflen(res);
+    res = lookup(js, &js->code[_cr_off], _cr_len);
+    if (is_err(res) && js->code >= (const char*)js->mem && js->code < (const char*)js->mem + js->size) {
+      printf("[LOOKUP DBG] '%.*s' not found! pos=%u clen=%u\n",
+             (int)_cr_len, &js->code[_cr_off], (unsigned)js->pos, (unsigned)js->clen);
+    }
   }
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT) {
     if (js->tok == TOK_DOT) {
@@ -1100,8 +1111,21 @@ static jsval_t js_ternary(struct js *js) {
 }
 
 static jsval_t js_assignment(struct js *js) {
-  RTL_BINOP(js_ternary, js_assignment,
-            (next(js) == TOK_ASSIGN || js->tok == TOK_PLUS_ASSIGN || js->tok == TOK_MINUS_ASSIGN || js->tok == TOK_MUL_ASSIGN || js->tok == TOK_DIV_ASSIGN || js->tok == TOK_REM_ASSIGN || js->tok == TOK_SHL_ASSIGN || js->tok == TOK_SHR_ASSIGN || js->tok == TOK_ZSHR_ASSIGN || js->tok == TOK_AND_ASSIGN || js->tok == TOK_XOR_ASSIGN || js->tok == TOK_OR_ASSIGN));
+  jsval_t res = js_ternary(js);
+  if (is_err(res)) {
+    if (js->code >= (const char*)js->mem && js->code < (const char*)js->mem + js->size) {
+      printf("[ASSIGN DBG] ternary returned err, pos=%u clen=%u consumed=%d tok=%d\n",
+             (unsigned)js->pos, (unsigned)js->clen, js->consumed, (int)js->tok);
+    }
+  }
+  while (!is_err(res) && (next(js) == TOK_ASSIGN || js->tok == TOK_PLUS_ASSIGN || js->tok == TOK_MINUS_ASSIGN || js->tok == TOK_MUL_ASSIGN || js->tok == TOK_DIV_ASSIGN || js->tok == TOK_REM_ASSIGN || js->tok == TOK_SHL_ASSIGN || js->tok == TOK_SHR_ASSIGN || js->tok == TOK_ZSHR_ASSIGN || js->tok == TOK_AND_ASSIGN || js->tok == TOK_XOR_ASSIGN || js->tok == TOK_OR_ASSIGN)) {
+    uint8_t op = js->tok;
+    js->consumed = 1;
+    jsval_t rhs = js_assignment(js);
+    if (is_err(rhs)) return rhs;
+    res = do_op(js, op, res, rhs);
+  }
+  return res;
 }
 
 static jsval_t js_expr(struct js *js) {
@@ -1295,7 +1319,15 @@ static jsval_t js_stmt(struct js *js) {
     default:            res = resolveprop(js, js_expr(js)); break;
   }
   //printf("STMT [%.*s] -> %s, tok %d, flags %d\n", (int) (js->pos - pos), &js->code[pos], js_str(js, res), next(js), js->flags);
-  if (next(js) != TOK_SEMICOLON && next(js) != TOK_EOF && next(js) != TOK_RBRACE) return js_mkerr(js, "; expected");
+  if (next(js) != TOK_SEMICOLON && next(js) != TOK_EOF && next(js) != TOK_RBRACE) {
+    printf("[ELK DBG] ;expected at stmt-end  tok=%d pos=%u clen=%u code_in_heap=%d\n",
+           (int)js->tok, (unsigned)js->pos, (unsigned)js->clen,
+           (js->code >= (const char*)js->mem && js->code < (const char*)js->mem + js->size));
+    int ctx = (int)js->clen - (int)js->pos;
+    if (ctx > 40) ctx = 40;
+    if (ctx > 0) printf("[ELK DBG] remaining: [%.*s]\n", ctx, &js->code[js->pos]);
+    return js_mkerr(js, "; expected");
+  }
   js->consumed = 1;
   // clang-format on
   return res;

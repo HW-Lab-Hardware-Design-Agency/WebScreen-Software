@@ -12,6 +12,7 @@
 #include <ArduinoJson.h>
 #include <PubSubClient.h>  // For MQTT
 #include <time.h>
+#include <esp_task_wdt.h>
 
 #include <vector>
 #include <utility>  // for std::pair
@@ -22,8 +23,8 @@
 #include "webscreen_main.h"
 
 // Global WiFiClient + PubSubClient
-static WiFiClient g_wifiClient;
-static PubSubClient g_mqttClient(g_wifiClient);
+WiFiClient g_wifiClient;
+PubSubClient g_mqttClient(g_wifiClient);
 
 // HTTP client certificate.
 static char *g_httpCAcert = nullptr;  // Will hold entire PEM cert from SD
@@ -42,6 +43,15 @@ extern "C" {
 
 // For storing a JavaScript callback to handle incoming messages
 static char g_mqttCallbackName[32];  // Big enough for a function name
+static char g_mqttBrokerCopy[128];   // Persistent copy of broker hostname for PubSubClient
+
+// MQTT message queue — onMqttMessage stores here, JS polls via mqtt_has_message()
+static bool g_mqttMsgPending = false;
+static char g_mqttMsgTopic[128];
+static char g_mqttMsgPayload[512];
+
+// Flag for JS to poll — set after onMqttMessage stores payload
+static bool g_mqttMsgReady = false;
 static unsigned long lastMqttReconnectAttempt = 0;
 static unsigned long lastWiFiReconnectAttempt = 0;
 
@@ -470,13 +480,6 @@ static void elk_timer_cb(lv_timer_t *timer) {
     jsval_t res = js_eval(js, snippet, strlen(snippet));
     if (js_type(res) == JS_ERR) {
       LOGF("[TIMER CB] Error executing JS function '%s': %s\n", func_name, js_str(js, res));
-      // If we get a parse error, memory might be corrupted - reboot
-      const char* errStr = js_str(js, res);
-      if (errStr && strstr(errStr, "expected")) {
-        LOG("[TIMER CB] Parse error detected, memory may be corrupted - rebooting");
-        delay(1000);
-        ESP.restart();
-      }
     }
   }
 }
@@ -3086,47 +3089,69 @@ static jsval_t js_ble_write(struct js *js, jsval_t *args, int nargs) {
 void onMqttMessage(char *topic, byte *payload, unsigned int length) {
   LOGF("[MQTT] Message arrived on topic '%s'\n", topic);
 
-  // If we have a non-empty callback name, build a snippet and eval
-  if (g_mqttCallbackName[0] != '\0') {  // Convert char* topic and payload to a C++ string
-    String topicStr(topic);
-    String msgStr;
-    msgStr.reserve(length);
-    for (unsigned int i = 0; i < length; i++) {
-      msgStr += (char)payload[i];
-    }
+  // Queue the message for processing from the C++ main loop.
+  // We must NOT call js_eval here because this callback fires inside
+  // g_mqttClient.loop(), which may be called from JS via mqtt_loop().
+  // Elk is not re-entrant — calling js_eval inside another js_eval
+  // corrupts the parser state.
+  if (g_mqttCallbackName[0] != '\0') {
+    strncpy(g_mqttMsgTopic, topic, sizeof(g_mqttMsgTopic) - 1);
+    g_mqttMsgTopic[sizeof(g_mqttMsgTopic) - 1] = '\0';
 
-    // Build snippet: myCallback('topicString','payloadString')
-    char snippet[512];
-    // Use %s for the function name, plus single quotes around the data
-    snprintf(snippet, sizeof(snippet),
-             "%s('%s','%s');",
-             g_mqttCallbackName,
-             topicStr.c_str(),
-             msgStr.c_str());
+    unsigned int copyLen = length < sizeof(g_mqttMsgPayload) - 1 ? length : sizeof(g_mqttMsgPayload) - 1;
+    memcpy(g_mqttMsgPayload, payload, copyLen);
+    g_mqttMsgPayload[copyLen] = '\0';
 
-    LOGF("[MQTT] Evaluating snippet: %s\n", snippet);
-
-    // Evaluate snippet
-    jsval_t res = js_eval(js, snippet, strlen(snippet));
-    // Optionally check if res is error
-    if (js_type(res) == JS_ERR) {
-      Serial.print("[MQTT] Callback error: ");
-      LOG(js_str(js, res));
-    }
+    g_mqttMsgPending = true;
   }
+}
+
+// Relay raw payload to JS — no C++ JSON parsing, minimal stack usage.
+void processPendingMqttMessage() {
+  if (!g_mqttMsgPending) return;
+  g_mqttMsgPending = false;
+  g_mqttMsgReady = true;
+  LOGF("[MQTT] Message ready for JS (%d bytes)\n", strlen(g_mqttMsgPayload));
+}
+
+// JS-callable functions to poll for MQTT messages from timer callback
+static jsval_t js_mqtt_has_message(struct js *js, jsval_t *args, int nargs) {
+  return g_mqttMsgReady ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t js_mqtt_get_payload(struct js *js, jsval_t *args, int nargs) {
+  return js_mkstr(js, g_mqttMsgPayload, strlen(g_mqttMsgPayload));
+}
+
+static jsval_t js_mqtt_msg_clear(struct js *js, jsval_t *args, int nargs) {
+  g_mqttMsgReady = false;
+  return js_mknull();
 }
 // JavaScript-exposed bridging functions
 // mqtt_init(broker, port)
 static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkfalse();
-  const char *broker = js_str(js, args[0]);
+
+  size_t broker_len = 0;
+  char *broker = js_getstr(js, args[0], &broker_len);
   int port = (int)js_getnum(args[1]);
 
-  if (!broker || port <= 0) return js_mkfalse();
+  if (!broker || broker_len == 0 || port <= 0) return js_mkfalse();
 
-  g_mqttClient.setServer(broker, port);
+  // Copy broker string to persistent buffer — PubSubClient::setServer()
+  // stores only the pointer, not a copy. The Elk JS heap pointer becomes
+  // dangling after the function returns.
+  size_t copy_len = broker_len < sizeof(g_mqttBrokerCopy) - 1 ? broker_len : sizeof(g_mqttBrokerCopy) - 1;
+  memcpy(g_mqttBrokerCopy, broker, copy_len);
+  g_mqttBrokerCopy[copy_len] = '\0';
+
+  g_mqttClient.setServer(g_mqttBrokerCopy, port);
   g_mqttClient.setCallback(onMqttMessage);
-  LOGF("[MQTT] init => broker=%s port=%d\n", broker, port);
+  g_mqttClient.setBufferSize(WEBSCREEN_MQTT_MAX_PACKET_SIZE);
+  g_mqttClient.setSocketTimeout(5);  // 5 second MQTT handshake timeout (in seconds)
+  g_wifiClient.setTimeout(3000);  // 3 second TCP connect timeout (in milliseconds)
+
+  LOGF("[MQTT] init => broker=%s port=%d\n", g_mqttBrokerCopy, port);
 
   return js_mktrue();
 }
@@ -3134,16 +3159,58 @@ static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
 // mqtt_connect(clientID, user, pass)
 static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
-  const char *clientID = js_str(js, args[0]);
-  const char *user = (nargs >= 2) ? js_str(js, args[1]) : nullptr;
-  const char *pass = (nargs >= 3) ? js_str(js, args[2]) : nullptr;
+
+  // Verify WiFi is connected before attempting MQTT
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG("[MQTT] Connect skipped - WiFi not connected");
+    return js_mkfalse();
+  }
+
+  size_t clientID_len = 0;
+  char *clientID = js_getstr(js, args[0], &clientID_len);
+
+  size_t user_len = 0, pass_len = 0;
+  char *user = (nargs >= 2) ? js_getstr(js, args[1], &user_len) : nullptr;
+  char *pass = (nargs >= 3) ? js_getstr(js, args[2], &pass_len) : nullptr;
+
+  // Copy clientID to stack buffer since Elk heap pointers may not persist
+  char clientID_buf[64];
+  if (clientID && clientID_len > 0) {
+    size_t clen = clientID_len < sizeof(clientID_buf) - 1 ? clientID_len : sizeof(clientID_buf) - 1;
+    memcpy(clientID_buf, clientID, clen);
+    clientID_buf[clen] = '\0';
+  } else {
+    strcpy(clientID_buf, "webscreen");
+  }
+
+  LOGF("[MQTT] Connecting as '%s' to %s...\n", clientID_buf, g_mqttBrokerCopy);
+
+  // Disable task watchdog entirely during blocking connect.
+  // The connect call (DNS + TCP + MQTT handshake) can exceed the 5-second
+  // WDT period, which would trigger a reboot.
+  esp_task_wdt_deinit();
 
   bool ok = false;
-  if (user && pass && strlen(user) && strlen(pass)) {
-    ok = g_mqttClient.connect(clientID, user, pass);
+  if (user && pass && user_len > 0 && pass_len > 0) {
+    // Copy user/pass to stack buffers too
+    char user_buf[64], pass_buf[64];
+    size_t ulen = user_len < sizeof(user_buf) - 1 ? user_len : sizeof(user_buf) - 1;
+    memcpy(user_buf, user, ulen); user_buf[ulen] = '\0';
+    size_t plen = pass_len < sizeof(pass_buf) - 1 ? pass_len : sizeof(pass_buf) - 1;
+    memcpy(pass_buf, pass, plen); pass_buf[plen] = '\0';
+    ok = g_mqttClient.connect(clientID_buf, user_buf, pass_buf);
   } else {
-    ok = g_mqttClient.connect(clientID);
+    ok = g_mqttClient.connect(clientID_buf);
   }
+
+  // Re-enable task watchdog (ESP-IDF v5.x config struct API)
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 5000,
+    .idle_core_mask = (1 << 0) | (1 << 1),
+    .trigger_panic = true,
+  };
+  esp_task_wdt_init(&wdt_config);
+  vTaskDelay(pdMS_TO_TICKS(1));
 
   if (ok) {
     LOG("[MQTT] Connected successfully");
@@ -3157,28 +3224,41 @@ static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
 // mqtt_publish(topic, message)
 static jsval_t js_mqtt_publish(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkfalse();
-  const char *topic = js_str(js, args[0]);
-  const char *message = js_str(js, args[1]);
-  if (!topic || !message) return js_mkfalse();
+  size_t topic_len = 0, msg_len = 0;
+  char *topic = js_getstr(js, args[0], &topic_len);
+  char *message = js_getstr(js, args[1], &msg_len);
+  if (!topic || !message || topic_len == 0) return js_mkfalse();
 
-  bool ok = g_mqttClient.publish(topic, message);
+  // Copy to stack buffers since PubSubClient needs null-terminated C strings
+  char topic_buf[128], msg_buf[512];
+  size_t tlen = topic_len < sizeof(topic_buf) - 1 ? topic_len : sizeof(topic_buf) - 1;
+  memcpy(topic_buf, topic, tlen); topic_buf[tlen] = '\0';
+  size_t mlen = msg_len < sizeof(msg_buf) - 1 ? msg_len : sizeof(msg_buf) - 1;
+  memcpy(msg_buf, message, mlen); msg_buf[mlen] = '\0';
+
+  bool ok = g_mqttClient.publish(topic_buf, msg_buf);
   return ok ? js_mktrue() : js_mkfalse();
 }
 
 // mqtt_subscribe(topic)
 static jsval_t js_mqtt_subscribe(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
-  const char *topic = js_str(js, args[0]);
-  if (!topic) return js_mkfalse();
+  size_t topic_len = 0;
+  char *topic = js_getstr(js, args[0], &topic_len);
+  if (!topic || topic_len == 0) return js_mkfalse();
 
-  bool ok = g_mqttClient.subscribe(topic);
-  LOGF("[MQTT] Subscribed to '%s'? => %s\n", topic, ok ? "OK" : "FAIL");
+  char topic_buf[128];
+  size_t tlen = topic_len < sizeof(topic_buf) - 1 ? topic_len : sizeof(topic_buf) - 1;
+  memcpy(topic_buf, topic, tlen); topic_buf[tlen] = '\0';
+
+  bool ok = g_mqttClient.subscribe(topic_buf);
+  LOGF("[MQTT] Subscribed to '%s'? => %s\n", topic_buf, ok ? "OK" : "FAIL");
   return ok ? js_mktrue() : js_mkfalse();
 }
 
-// mqtt_loop()
+// mqtt_loop() — no-op from JS side. MQTT processing is handled by the
+// C++ main loop to avoid re-entrant js_eval calls.
 static jsval_t js_mqtt_loop(struct js *js, jsval_t *args, int nargs) {
-  g_mqttClient.loop();
   return js_mknull();
 }
 
@@ -3522,6 +3602,9 @@ void register_js_functions() {
   js_set(js, global, "mqtt_subscribe", js_mkfun(js_mqtt_subscribe));
   js_set(js, global, "mqtt_loop", js_mkfun(js_mqtt_loop));
   js_set(js, global, "mqtt_on_message", js_mkfun(js_mqtt_on_message));
+  js_set(js, global, "mqtt_has_message", js_mkfun(js_mqtt_has_message));
+  js_set(js, global, "mqtt_get_payload", js_mkfun(js_mqtt_get_payload));
+  js_set(js, global, "mqtt_msg_clear", js_mkfun(js_mqtt_msg_clear));
 }
 // K) The elk_task -- runs Elk + bridging in a separate FreeRTOS task
 

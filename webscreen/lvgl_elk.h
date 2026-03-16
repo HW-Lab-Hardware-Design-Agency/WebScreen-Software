@@ -424,6 +424,22 @@ static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
+static jsval_t js_get_millis(struct js *js, jsval_t *args, int nargs) {
+  return js_mknum((double)millis());
+}
+
+static jsval_t js_str_length(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mknum(0);
+  size_t len;
+  char *s = js_getstr(js, args[0], &len);
+  if (!s) return js_mknum(0);
+  String str(s, len);
+  if (str.startsWith("\"") && str.endsWith("\"") && str.length() >= 2) {
+    return js_mknum((double)(str.length() - 2));
+  }
+  return js_mknum((double)str.length());
+}
+
 // LVGL Timer Bridging Functions
 
 // Execution counter for periodic maintenance
@@ -3451,6 +3467,8 @@ void register_js_functions() {
   js_set(js, global, "wifi_status", js_mkfun(js_wifi_status));
   js_set(js, global, "wifi_get_ip", js_mkfun(js_wifi_get_ip));
   js_set(js, global, "delay", js_mkfun(js_delay));
+  js_set(js, global, "get_millis", js_mkfun(js_get_millis));
+  js_set(js, global, "str_length", js_mkfun(js_str_length));
   js_set(js, global, "set_brightness", js_mkfun(js_set_brightness));
   js_set(js, global, "get_brightness", js_mkfun(js_get_brightness));
 

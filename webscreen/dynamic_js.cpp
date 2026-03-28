@@ -7,6 +7,7 @@
 #include "pins_config.h"
 #include "rm67162.h"
 #include "webscreen_runtime.h"
+#include "webscreen_hardware.h"
 #include "globals.h"
 #include "serial_commands.h"
 
@@ -25,10 +26,13 @@ void dynamic_js_setup() {
   LOG("DYNAMIC_JS: setup done!");
 }
 void dynamic_js_loop() {
+  // Handle power button (short press = display toggle, long press = power off)
+  webscreen_hardware_handle_button();
+
   // Handle serial commands
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
-    
+
     // Check if it's a command (starts with /)
     if (line.startsWith("/")) {
       SerialCommands::processCommand(line);
@@ -37,6 +41,6 @@ void dynamic_js_loop() {
       LOG("Serial input: " + line);
     }
   }
-  
+
   webscreen_runtime_loop_javascript();
 }

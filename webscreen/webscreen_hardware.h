@@ -148,6 +148,15 @@ extern "C" {
 
   void webscreen_hardware_deep_sleep(uint32_t duration_ms);
 
+  /**
+ * @brief Release power latch to turn off the device
+ *
+ * Drives OUTPUT_PIN LOW to cut power via the latch circuit.
+ * This function does not return.
+ */
+
+  void webscreen_hardware_power_off(void);
+
   // ============================================================================
   // LED CONTROL
   // ============================================================================

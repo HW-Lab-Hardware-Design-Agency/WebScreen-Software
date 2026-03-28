@@ -93,6 +93,7 @@
 // Timing
 #define WEBSCREEN_LOOP_DELAY_MS 1
 #define WEBSCREEN_BUTTON_DEBOUNCE_MS 50
+#define WEBSCREEN_POWER_OFF_HOLD_MS 3000  // Hold button 3 seconds to power off
 #define WEBSCREEN_STATS_REPORT_INTERVAL_MS 300000  // 5 minutes
 
 // Watchdog

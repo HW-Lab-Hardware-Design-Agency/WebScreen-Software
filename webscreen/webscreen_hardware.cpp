@@ -16,6 +16,8 @@ static bool g_display_on = true;
 static uint8_t g_brightness = 200;
 static bool g_last_button_state = HIGH;
 static uint32_t g_last_button_time = 0;
+static uint32_t g_button_press_start = 0;
+static bool g_button_held = false;
 static void (*g_button_callback)(bool) = nullptr;
 bool webscreen_hardware_init(void) {
   if (g_hardware_initialized) {
@@ -124,20 +126,38 @@ bool webscreen_display_is_on(void) {
 void webscreen_hardware_handle_button(void) {
   bool current_button_state = WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON);
   uint32_t current_time = WEBSCREEN_MILLIS();
+
+  // Button just pressed (HIGH -> LOW transition, active LOW with pull-up)
   if (g_last_button_state == HIGH && current_button_state == LOW) {
     if (current_time - g_last_button_time > WEBSCREEN_BUTTON_DEBOUNCE_MS) {
+      g_button_press_start = current_time;
+      g_button_held = true;
+      g_last_button_time = current_time;
+    }
+  }
 
+  // Button still held — check for long press power off
+  if (g_button_held && current_button_state == LOW) {
+    if (current_time - g_button_press_start >= WEBSCREEN_POWER_OFF_HOLD_MS) {
+      WEBSCREEN_DEBUG_PRINTLN("Long press detected — powering off!");
+      webscreen_hardware_power_off();
+      // Does not return
+    }
+  }
+
+  // Button released (LOW -> HIGH transition)
+  if (g_last_button_state == LOW && current_button_state == HIGH) {
+    if (g_button_held && (current_time - g_button_press_start < WEBSCREEN_POWER_OFF_HOLD_MS)) {
+      // Short press — toggle display
       g_display_on = !g_display_on;
       webscreen_display_power(g_display_on);
       if (g_button_callback) {
         g_button_callback(true);
       }
-
-      WEBSCREEN_DEBUG_PRINTF("Button pressed - Display %s\n",
+      WEBSCREEN_DEBUG_PRINTF("Button short press - Display %s\n",
                              g_display_on ? "ON" : "OFF");
-
-      g_last_button_time = current_time;
     }
+    g_button_held = false;
   }
 
   g_last_button_state = current_button_state;
@@ -170,6 +190,20 @@ void webscreen_hardware_deep_sleep(uint32_t duration_ms) {
   WEBSCREEN_DEBUG_PRINTF("Entering deep sleep for %lu ms\n", duration_ms);
   esp_sleep_enable_timer_wakeup(duration_ms * 1000);
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0);
+  esp_deep_sleep_start();
+}
+void webscreen_hardware_power_off(void) {
+  WEBSCREEN_DEBUG_PRINTLN("Power latch released — shutting down.");
+  Serial.flush();
+
+  // Turn off display first
+  webscreen_display_power(false);
+
+  // Release the power latch
+  WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_OUTPUT);
+
+  // If the latch circuit doesn't cut power immediately, halt here
+  WEBSCREEN_DELAY(1000);
   esp_deep_sleep_start();
 }
 void webscreen_hardware_set_led(bool on) {

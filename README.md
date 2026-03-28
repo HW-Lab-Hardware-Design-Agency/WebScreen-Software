@@ -128,10 +128,14 @@ For advanced users who want to modify the source code, you can compile directly 
 5. Upload firmware
 6. Press **RESET** to run
 
-#### Power Button
-- **Single Press**: Toggle screen on/off
-- **Long Press**: System functions (if implemented)
-- **Pin**: GPIO 33 (INPUT_PULLUP)
+#### Power Button (GPIO 33)
+- **Short Press** (< 3s): Toggle display on/off (device keeps running)
+- **Long Press** (>= 3s): Power off via latch circuit (drives OUTPUT_PIN 1 LOW to cut power, falls back to deep sleep if latch is not present)
+- **Pin**: GPIO 33 (INPUT_PULLUP, active LOW)
+- **Debounce**: 50ms
+- **Power-on**: Press the button to supply momentary power; firmware latches power by driving OUTPUT_PIN HIGH in `setup()`
+
+> **Note**: For the power-on button press to work after a latch power-off, the hardware circuit must wire the button in parallel with the latch MOSFET so it can momentarily supply power independently of the GPIO latch output. If your circuit doesn't have this, the device will enter deep sleep instead and wake on the next button press.
 
 ## Configuration
 
@@ -448,17 +452,19 @@ Serial.printf("FPS: %d, Memory: %d KB\n", stats.last_fps, stats.memory_used/1024
 ## JavaScript API
 
 The firmware exposes numerous functions to your JavaScript applications. Some highlights include:
-- **Basic:** `print()`, `delay()`
-- **Wi‑Fi:** `wifi_connect()`, `wifi_status()`, `wifi_get_ip()`
-- **HTTP:** `http_get()`, `http_post()`, `http_delete()` (all support custom ports like `http://host:port/path`), `http_set_ca_cert_from_sd()`, `parse_json_value()`
+- **Basic:** `print()`, `delay()`, `get_millis()`, `toNumber()`, `numberToString()`
+- **Strings:** `str_length()`, `str_substring()`, `str_index_of()`
+- **Wi-Fi:** `wifi_connect()`, `wifi_status()`, `wifi_get_ip()`
+- **HTTP:** `http_get()`, `http_post()`, `http_delete()` (all support custom ports like `http://host:port/path`), `http_set_ca_cert_from_sd()`, `http_set_header()`, `http_clear_headers()`, `parse_json_value()`
 - **SD Card:** `sd_read_file()`, `sd_write_file()`, `sd_list_dir()`, `sd_delete_file()`
 - **BLE:** `ble_init()`, `ble_is_connected()`, `ble_write()`
 - **Display:** `set_brightness()`, `get_brightness()`
+- **Time:** `get_hours()`, `get_minutes()`, `get_seconds()`, `get_year()`, `get_month()`, `get_day()`, `get_weekday()`, `get_epoch()`, `ntp_synced()`
 - **UI Drawing:** `draw_label()`, `draw_rect()`, `show_image()`, `create_label()`, `label_set_text()`
 - **Image Handling:** `create_image()`, `create_image_from_ram()`, `rotate_obj()`, `move_obj()`, `animate_obj()`
 - **Styles & Layout:** `create_style()`, `obj_add_style()`, `style_set_*()`, `obj_align()`
 - **Advanced Widgets:** Meter, Message Box, Span, Window, TileView, Line
-- **MQTT:** `mqtt_init()`, `mqtt_connect()`, `mqtt_publish()`, `mqtt_subscribe()`, `mqtt_loop()`, `mqtt_on_message()`
+- **MQTT:** `mqtt_init()`, `mqtt_connect()`, `mqtt_publish()`, `mqtt_subscribe()`, `mqtt_loop()`, `mqtt_on_message()`, `mqtt_has_message()`, `mqtt_get_payload()`, `mqtt_msg_clear()`
 
 For a full list and examples of usage, see the [JavaScript API Reference](docs/API.md).
 

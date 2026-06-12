@@ -9,6 +9,7 @@
 #include "tick.h"
 #include "serial_commands.h"
 #include "webscreen_main.h"
+#include "webscreen_hardware.h"
 static lv_obj_t *fb_label = nullptr;
 static lv_obj_t *fb_gif = nullptr;
 static lv_obj_t *fb_container = nullptr;
@@ -57,6 +58,9 @@ void fallback_setup() {
   // Apply configured brightness
   if (g_webscreen_config.display.brightness > 0) {
     lcd_brightness(g_webscreen_config.display.brightness);
+    // Keep the cached value in sync so the button's display off/on toggle
+    // restores the configured brightness, not the default.
+    webscreen_hardware_sync_brightness(g_webscreen_config.display.brightness);
   }
 
   fbBuf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
@@ -120,6 +124,9 @@ void fallback_setup() {
 }
 
 void fallback_loop() {
+  // Handle power button (short press = display toggle, long press = power off)
+  webscreen_hardware_handle_button();
+
   lv_timer_handler();
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');

@@ -24,6 +24,11 @@ void setup() {
   pinMode(OUTPUT_PIN, OUTPUT);
   digitalWrite(OUTPUT_PIN, HIGH);
 
+  // Power button. This pinMode used to live only in dead code paths, so the
+  // pin was read in its reset-default state and only worked with an external
+  // pull-up.
+  pinMode(INPUT_PIN, INPUT_PULLUP);
+
   if (!webscreen_hardware_init_sd_card()) {
     LOG("SD card mount fail => starting fallback mode.");
     useFallback = true;
@@ -81,7 +86,13 @@ void setup() {
   // Script exists, run it (with or without WiFi)
   LOG("Script file found, starting JavaScript runtime...");
   useFallback = false;
-  dynamic_js_setup();
+  if (!dynamic_js_setup()) {
+    // Never leave a dead screen: a failed JS start drops to the fallback
+    // notification app, with serial commands still available for recovery.
+    LOG("JavaScript runtime failed to start => starting fallback mode.");
+    useFallback = true;
+    fallback_setup();
+  }
 }
 
 void loop() {

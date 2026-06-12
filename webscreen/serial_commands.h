@@ -24,6 +24,8 @@ private:
   static void catFile(const String& path);
   static void reboot();
   static void loadApp(const String& scriptName);
+  static void restartApp();
+  static void runGC();
   static void wget(const String& args);
   static void ping(const String& args);
   static void backup(const String& args);

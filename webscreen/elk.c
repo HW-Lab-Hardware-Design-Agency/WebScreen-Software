@@ -63,6 +63,8 @@ struct js {
   jsoff_t gct;        // GC threshold. If brk > gct, trigger GC
   jsoff_t maxcss;     // Maximum allowed C stack size usage
   void *cstk;         // C stack pointer at the beginning of js_eval()
+  jsoff_t steps;      // Statements executed since last top-level js_eval()
+  jsoff_t maxsteps;   // Statement budget per js_eval(), 0 = unlimited
 };
 
 // A JS memory stores diffenent entities: objects, properties, strings
@@ -317,9 +319,14 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   memcpy(buf, &koff, sizeof(koff));           // Initialize prop data: copy key
   memcpy(buf + sizeof(koff), &v, sizeof(v));  // Copy value
   jsoff_t brk = js->brk | T_OBJ;              // New prop offset
-  memcpy(&js->mem[head], &brk, sizeof(brk));  // Repoint head to the new prop
   // printf("PROP: %u -> %u\n", b, brk);
-  return mkentity(js, (b & ~3U) | T_PROP, buf, sizeof(buf));  // Create new prop
+  // Upstream fix (cesanta/elk a128ee2): create the prop FIRST, repoint the
+  // object's head only on success. Repointing before an OOM left the head
+  // dangling at old brk, aliasing whatever entity got allocated there next.
+  jsval_t res = mkentity(js, (b & ~3U) | T_PROP, buf, sizeof(buf));
+  if (!is_err(res))
+    memcpy(&js->mem[head], &brk, sizeof(brk));  // Repoint head to the new prop
+  return res;
 }
 
 // Return T_OBJ/T_PROP/T_STR entity size based on the first word in memory
@@ -790,8 +797,16 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_TYPEOF:  return js_mkstr(js, typestr(vtype(r)), strlen(typestr(vtype(r))));
     case TOK_CALL:    return do_call_op(js, l, r);
     case TOK_ASSIGN:  return assign(js, lhs, r);
-    case TOK_POSTINC: { do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l; }
-    case TOK_POSTDEC: { do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l; }
+    // Upstream fix (cesanta/elk a07410e): ++/-- on a non-lvalue used to call
+    // assign() on arbitrary data — a wild arena write. Reject bad lhs instead.
+    case TOK_POSTINC: {
+      if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for ++");
+      do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l;
+    }
+    case TOK_POSTDEC: {
+      if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for --");
+      do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l;
+    }
     case TOK_NOT:     if (vtype(r) == T_BOOL) return mkval(T_BOOL, !vdata(r)); break;
   }
   if (is_assign(op))    return do_assign_op(js, op, lhs, r);
@@ -1300,7 +1315,16 @@ static jsval_t js_return(struct js *js) {
 static jsval_t js_stmt(struct js *js) {
   jsval_t res;
   // jsoff_t pos = js->pos - js->tlen;
-  if (js->brk > js->gct) js_gc(js);
+  // GC only OUTSIDE function calls: do_call_op() holds raw `code`/`nogc`
+  // copies in C locals that js_fixup_offsets() cannot adjust, so compacting
+  // mid-call dangles them ("; expected" corruption). F_CALL covers the whole
+  // function-body execution window, making top-level statement boundaries the
+  // only — and safe — auto-GC points.
+  if (js->brk > js->gct && !(js->flags & F_CALL)) js_gc(js);
+  // Statement budget: turns a runaway script (while(true){}) into a JS error
+  // the host can handle, instead of a task starved forever inside js_eval().
+  if (js->maxsteps != 0 && ++js->steps > js->maxsteps)
+    return js_mkerr(js, "step limit");
   switch (next(js)) {  // clang-format off
     case TOK_CASE: case TOK_CATCH: case TOK_CLASS: case TOK_CONST:
     case TOK_DEFAULT: case TOK_DELETE: case TOK_DO: case TOK_FINALLY:
@@ -1350,6 +1374,9 @@ struct js *js_create(void *buf, size_t len) {
 // clang-format off
 void js_setgct(struct js *js, size_t gct) { js->gct = (jsoff_t) gct; }
 void js_setmaxcss(struct js *js, size_t max) { js->maxcss = (jsoff_t) max; }
+void js_setmaxsteps(struct js *js, size_t max) { js->maxsteps = (jsoff_t) max; }
+size_t js_usage(struct js *js) { return js->brk; }   // Current arena bytes used
+size_t js_total(struct js *js) { return js->size; }  // Arena capacity
 jsval_t js_mktrue(void) { return mkval(T_BOOL, 1); }
 jsval_t js_mkfalse(void) { return mkval(T_BOOL, 0); }
 jsval_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
@@ -1411,6 +1438,7 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   js->clen = (jsoff_t)len;
   js->pos = 0;
   js->cstk = &res;
+  js->steps = 0;  // Fresh statement budget per top-level eval
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
   }

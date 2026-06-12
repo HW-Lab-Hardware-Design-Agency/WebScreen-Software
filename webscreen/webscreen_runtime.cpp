@@ -19,7 +19,6 @@ static String g_current_script_file = "";
 static String g_fallback_text = "WebScreen v" WEBSCREEN_VERSION_STRING "\nFallback Mode\nSD card or script not found";
 static String g_last_error = "";
 static uint32_t g_runtime_start_time = 0;
-static bool g_lvgl_initialized = false;
 
 extern struct js* js;
 extern uint8_t *elk_memory;
@@ -42,7 +41,6 @@ static unsigned long g_last_wifi_reconnect_attempt = 0;
 
 // g_wifiClient and g_mqttClient are defined in lvgl_elk.h (included above)
 static uint32_t g_loop_count = 0;
-static uint32_t g_last_performance_check = 0;
 static uint32_t g_avg_loop_time_us = 0;
 static uint32_t g_max_loop_time_us = 0;
 
@@ -104,55 +102,12 @@ bool webscreen_runtime_start_javascript(const char* script_file) {
   WEBSCREEN_DEBUG_PRINTLN("JavaScript runtime started (simulated)");
   return true;
 }
-bool webscreen_runtime_start_fallback(void) {
-  WEBSCREEN_DEBUG_PRINTLN("Starting fallback application");
-  webscreen_runtime_shutdown();
-  if (!webscreen_runtime_init_lvgl()) {
-    g_last_error = "Failed to initialize LVGL for fallback";
-    return false;
-  }
-
-  g_javascript_active = false;
-  g_fallback_active = true;
-  g_runtime_start_time = WEBSCREEN_MILLIS();
-  g_last_error = "";
-
-  WEBSCREEN_DEBUG_PRINTLN("Fallback application started");
-  return true;
-}
 void webscreen_runtime_loop_javascript(void) {
   if (!g_javascript_active) {
     return;
   }
 
   vTaskDelay(pdMS_TO_TICKS(50));
-}
-void webscreen_runtime_loop_fallback(void) {
-  if (!g_fallback_active) {
-    return;
-  }
-  webscreen_runtime_lvgl_timer_handler();
-  static uint32_t last_update = 0;
-  static int animation_frame = 0;
-
-  if (WEBSCREEN_MILLIS() - last_update > 1000) {  // Update every second
-    last_update = WEBSCREEN_MILLIS();
-    animation_frame++;
-    String animated_text = g_fallback_text;
-    for (int i = 0; i < (animation_frame % 4); i++) {
-      animated_text += ".";
-    }
-
-    WEBSCREEN_DEBUG_PRINTF("Fallback frame %d: %s\n", animation_frame, animated_text.c_str());
-  }
-  if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
-    input.trim();
-
-    if (input.length() > 0) {
-      webscreen_runtime_set_fallback_text(input.c_str());
-    }
-  }
 }
 void webscreen_runtime_shutdown(void) {
   if (g_javascript_active || g_fallback_active) {
@@ -194,27 +149,6 @@ const char* webscreen_runtime_get_javascript_status(void) {
 
   return status.c_str();
 }
-bool webscreen_runtime_execute_javascript(const char* code) {
-  if (!g_javascript_active || !code) {
-    return false;
-  }
-  WEBSCREEN_DEBUG_PRINTF("Executing JS: %s\n", code);
-  if (strstr(code, "print(")) {
-
-    const char* start = strchr(code, '"');
-    if (start) {
-      start++;  // Skip opening quote
-      const char* end = strchr(start, '"');
-      if (end) {
-        String text = String(start).substring(0, end - start);
-        webscreen_runtime_set_fallback_text(text.c_str());
-        return true;
-      }
-    }
-  }
-
-  return true;  // Simulate successful execution
-}
 void webscreen_runtime_get_javascript_stats(uint32_t* exec_count,
                                             uint32_t* avg_time_us,
                                             uint32_t* error_count) {
@@ -225,70 +159,33 @@ void webscreen_runtime_get_javascript_stats(uint32_t* exec_count,
 bool webscreen_runtime_is_fallback_active(void) {
   return g_fallback_active;
 }
-void webscreen_runtime_set_fallback_text(const char* text) {
-  if (text) {
-    g_fallback_text = text;
-    WEBSCREEN_DEBUG_PRINTF("Fallback text updated: %s\n", text);
-  }
-}
-
-const char* webscreen_runtime_get_fallback_status(void) {
-  if (!g_fallback_active) {
-    return "Fallback application inactive";
-  }
-
-  static String status;
-  status = "Fallback active - Uptime: ";
-  status += (WEBSCREEN_MILLIS() - g_runtime_start_time);
-  status += "ms";
-
-  return status.c_str();
-}
-bool webscreen_runtime_init_lvgl(void) {
-
-  g_lvgl_initialized = true;
-  return true;
-}
-void webscreen_runtime_lvgl_timer_handler(void) {
-  if (g_lvgl_initialized) {
-    lv_timer_handler();
-  }
-}
-
-void* webscreen_runtime_get_lvgl_display(void) {
-  if (g_lvgl_initialized) {
-    return lv_disp_get_default();
-  }
-  return nullptr;
-}
-void webscreen_runtime_set_background_color(uint32_t color) {
-  WEBSCREEN_DEBUG_PRINTF("Background color set to 0x%06X\n", color);
-  if (g_lvgl_initialized) {
-    lv_obj_t* scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(color), 0);
-  }
-}
-void webscreen_runtime_set_foreground_color(uint32_t color) {
-  WEBSCREEN_DEBUG_PRINTF("Foreground color set to 0x%06X\n", color);
-  if (g_lvgl_initialized) {
-    lv_obj_t* scr = lv_scr_act();
-    lv_obj_set_style_text_color(scr, lv_color_hex(color), 0);
-  }
-}
 void webscreen_runtime_get_memory_usage(uint32_t* js_heap_used,
                                         uint32_t* lvgl_memory_used,
                                         uint32_t* total_runtime_memory) {
-
-  if (js_heap_used) *js_heap_used = g_javascript_active ? 50000 : 0;
-  if (lvgl_memory_used) *lvgl_memory_used = 100000;
-  if (total_runtime_memory) *total_runtime_memory = 150000;
+  // Real numbers now (this used to return hardcoded values).
+  if (js_heap_used) *js_heap_used = js ? (uint32_t)js_usage(js) : 0;
+  if (lvgl_memory_used) *lvgl_memory_used = (uint32_t)(ESP.getHeapSize() - ESP.getFreeHeap());
+  if (total_runtime_memory) *total_runtime_memory = js ? (uint32_t)js_total(js) : 0;
 }
+
+void webscreen_runtime_get_js_arena(uint32_t* used, uint32_t* total) {
+  if (used) *used = js ? (uint32_t)js_usage(js) : 0;
+  if (total) *total = js ? (uint32_t)js_total(js) : 0;
+}
+
 bool webscreen_runtime_garbage_collect(void) {
-  if (g_javascript_active) {
-    WEBSCREEN_DEBUG_PRINTLN("JavaScript garbage collection triggered");
+  // Compacting the arena while the JS task is mid-eval corrupts it, so this
+  // only requests a GC; the JS task runs it at its next safe point.
+  if (g_javascript_active && js != NULL) {
+    g_js_gc_requested = true;
+    WEBSCREEN_DEBUG_PRINTLN("JavaScript garbage collection requested");
     return true;
   }
   return false;
+}
+
+void webscreen_runtime_set_js_heap_kb(int kb) {
+  set_elk_heap_kb(kb);
 }
 
 const char* webscreen_runtime_get_last_error(void) {
@@ -299,23 +196,6 @@ void webscreen_runtime_clear_errors(void) {
 }
 bool webscreen_runtime_has_errors(void) {
   return g_last_error.length() > 0;
-}
-void webscreen_runtime_set_performance_monitoring(bool enable) {
-  WEBSCREEN_DEBUG_PRINTF("Performance monitoring: %s\n", enable ? "Enabled" : "Disabled");
-
-  if (enable) {
-    g_loop_count = 0;
-    g_avg_loop_time_us = 0;
-    g_max_loop_time_us = 0;
-    g_last_performance_check = WEBSCREEN_MILLIS();
-  }
-}
-void webscreen_runtime_get_performance_stats(uint32_t* avg_loop_time_us,
-                                             uint32_t* max_loop_time_us,
-                                             uint32_t* fps) {
-  if (avg_loop_time_us) *avg_loop_time_us = g_avg_loop_time_us;
-  if (max_loop_time_us) *max_loop_time_us = g_max_loop_time_us;
-  if (fps) *fps = g_avg_loop_time_us > 0 ? (1000000 / g_avg_loop_time_us) : 0;
 }
 void webscreen_runtime_print_status(void) {
   WEBSCREEN_DEBUG_PRINTLN("\n=== RUNTIME STATUS ===");
@@ -361,18 +241,17 @@ bool webscreen_runtime_init_javascript_engine(void) {
     return false;
   }
 
-  // Disable Elk's automatic GC (set threshold to full heap size).
-  //
-  // Elk's GC triggers inside js_stmt() at the start of EVERY statement,
-  // including during nested function calls. GC compacts the heap and adjusts
-  // js->code, but does NOT adjust the saved `code` pointer on the C stack in
-  // do_call_op(). This leaves a dangling pointer that causes "; expected"
-  // parse errors after the function returns.
-  //
-  // Manual GC via js_gc(js) in the timer callback (every 60 iterations,
-  // BETWEEN js_eval calls) is safe because no saved code pointers exist
-  // on the stack at that point.
-  js_setgct(js, elk_memory_size);  // Never auto-trigger; rely on manual GC
+  // Auto-GC is safe again: js_stmt() now skips collection whenever F_CALL is
+  // set (see elk.c), so the heap is only ever compacted at top-level
+  // statement boundaries — the same points where the old manual-GC scheme
+  // already proved safe. Collect when the arena reaches 3/4.
+  js_setgct(js, (elk_memory_size / 4) * 3);
+
+  // Convert runaway scripts into recoverable JS errors instead of crashes:
+  // - recursion blows the 24KB task stack without a C-stack ceiling
+  // - while(true){} starves LVGL and the watchdog without a statement budget
+  js_setmaxcss(js, 10 * 1024);
+  js_setmaxsteps(js, 2 * 1000 * 1000);
 
   webscreen_runtime_register_js_functions();
 
@@ -446,25 +325,143 @@ bool webscreen_runtime_start_javascript_task(void) {
   WEBSCREEN_DEBUG_PRINTLN("JavaScript task started successfully");
   return true;
 }
-void webscreen_runtime_javascript_task(void* pvParameters) {
-  WEBSCREEN_DEBUG_PRINTLN("JavaScript task started");
-  vTaskDelay(pdMS_TO_TICKS(100));
-  // Prefer the PSRAM copy (immune to regular-heap corruption).
+// ---- In-place JS app restart -------------------------------------------
+//
+// The historical "recovery" for a misbehaving script was ESP.restart() — a
+// full device reboot that users experienced as a crash loop. Instead, the JS
+// task can now tear the app down and start it again in place: the display,
+// WiFi connection and Elk arena all survive; only the script state is rebuilt.
+// Restart is requested via flag (from the timer bridge on repeated JS errors,
+// or from serial /load + /restart_app) and performed by the JS task itself in
+// its own loop — it owns LVGL, so teardown needs no cross-task locking.
+static volatile bool g_js_restart_requested = false;
+static char g_js_restart_reason[64] = "";
+static uint32_t g_js_restart_failures = 0;
+static const uint32_t JS_RESTART_FAILURE_LIMIT = 2;
+static bool g_js_safe_mode = false;  // Restarts kept failing; wait for user
+
+void webscreen_runtime_request_restart(const char *reason) {
+  strlcpy(g_js_restart_reason, reason ? reason : "unspecified", sizeof(g_js_restart_reason));
+  g_js_safe_mode = false;  // An explicit request always gets a fresh try
+  g_js_restart_requested = true;
+}
+
+bool webscreen_runtime_load_new_script(const char *script_file) {
+  if (!script_file || !SD_MMC.exists(script_file)) {
+    return false;
+  }
+  g_current_script_file = script_file;
+  g_js_restart_failures = 0;
+  webscreen_runtime_request_restart("script change");
+  return true;
+}
+
+// Full-width wrapped error label so a broken script is visible on the device
+// instead of a black screen.
+static void webscreen_runtime_show_error_screen(const char *msg) {
+  lv_obj_t *label = lv_label_create(lv_scr_act());
+  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(label, 500);
+  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(label, msg);
+}
+
+// Evaluate the loaded script (PSRAM copy preferred). Returns true on success;
+// on failure copies the JS error into err_buf (js_str points into the arena,
+// which the next eval may clobber).
+static bool webscreen_runtime_eval_script(char *err_buf, size_t err_len) {
   const char *script_src = g_js_script_psram ? g_js_script_psram : g_js_script_content.c_str();
   size_t      script_len = g_js_script_psram ? g_js_script_psram_len : g_js_script_content.length();
 
-  if (js && script_len > 0) {
-    jsval_t result = js_eval(js, script_src, script_len);
-    if (js_type(result) == JS_ERR) {
-      const char *error = js_str(js, result);
-      WEBSCREEN_DEBUG_PRINT("JavaScript execution error: ");
-      WEBSCREEN_DEBUG_PRINTLN(error ? error : "unknown error");
-    } else {
-      WEBSCREEN_DEBUG_PRINTLN("JavaScript script executed successfully");
-    }
+  if (!js || script_len == 0) {
+    if (err_buf) strlcpy(err_buf, "no engine or empty script", err_len);
+    return false;
   }
-  for (;;) {
+  jsval_t result = js_eval(js, script_src, script_len);
+  if (js_type(result) == JS_ERR) {
+    const char *error = js_str(js, result);
+    if (err_buf) strlcpy(err_buf, error ? error : "unknown error", err_len);
+    return false;
+  }
+  return true;
+}
 
+// Runs ON the JS task. Teardown order matters: UI first (deletes lv_img
+// widgets referencing RAM-image descriptors), then media buffers, then comm.
+static void webscreen_runtime_perform_inplace_restart(void) {
+  WEBSCREEN_DEBUG_PRINTF("In-place JS app restart (reason: %s, script: %s)\n",
+                         g_js_restart_reason, g_current_script_file.c_str());
+
+  elk_teardown_ui();
+  elk_teardown_media();
+  elk_teardown_comm();
+
+  // Re-create the engine over the SAME arena and re-register the API.
+  g_js_engine_initialized = false;
+  if (!webscreen_runtime_init_javascript_engine()) {
+    webscreen_runtime_show_error_screen("WebScreen: JS engine re-init failed.\nUse /reboot to power-cycle.");
+    g_js_safe_mode = true;
+    return;
+  }
+
+  char err[128] = "";
+  bool ok = webscreen_runtime_load_script(g_current_script_file.c_str()) &&
+            webscreen_runtime_eval_script(err, sizeof(err));
+
+  if (ok) {
+    g_js_restart_failures = 0;
+    WEBSCREEN_DEBUG_PRINTLN("JS app restarted successfully");
+    return;
+  }
+
+  g_js_restart_failures++;
+  WEBSCREEN_DEBUG_PRINTF("JS app restart failed (%u/%u): %s\n",
+                         g_js_restart_failures, JS_RESTART_FAILURE_LIMIT, err);
+  if (g_js_restart_failures >= JS_RESTART_FAILURE_LIMIT) {
+    // Safe mode: stop retrying, show the error, keep the device alive —
+    // serial commands still work, so the user can fix the script and /load.
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "WebScreen: script '%s' keeps failing:\n%s\n\n"
+             "Fix the script, then run /load or /restart_app.",
+             g_current_script_file.c_str(), err);
+    webscreen_runtime_show_error_screen(msg);
+    g_js_safe_mode = true;
+  } else {
+    g_js_restart_requested = true;  // One more attempt
+  }
+}
+
+void webscreen_runtime_javascript_task(void* pvParameters) {
+  WEBSCREEN_DEBUG_PRINTLN("JavaScript task started");
+  vTaskDelay(pdMS_TO_TICKS(100));
+
+  char err[128] = "";
+  if (!webscreen_runtime_eval_script(err, sizeof(err))) {
+    WEBSCREEN_DEBUG_PRINT("JavaScript execution error: ");
+    WEBSCREEN_DEBUG_PRINTLN(err);
+    // Make the failure visible on the device instead of a black screen.
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "WebScreen: script '%s' failed:\n%s\n\n"
+             "Fix the script, then run /load or /restart_app.",
+             g_current_script_file.c_str(), err);
+    webscreen_runtime_show_error_screen(msg);
+  } else {
+    WEBSCREEN_DEBUG_PRINTLN("JavaScript script executed successfully");
+  }
+
+  for (;;) {
+    if (g_js_restart_requested && !g_js_safe_mode) {
+      g_js_restart_requested = false;
+      webscreen_runtime_perform_inplace_restart();
+    }
+    // GC requested by JS gc() or serial — this point is outside any eval,
+    // so compacting the arena is safe.
+    if (g_js_gc_requested && js != NULL) {
+      g_js_gc_requested = false;
+      js_gc(js);
+    }
     if (g_mqtt_enabled) {
       webscreen_runtime_wifi_mqtt_maintain_loop();
     }
@@ -494,6 +491,7 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     if (now - g_last_wifi_reconnect_attempt > 10000) {
       g_last_wifi_reconnect_attempt = now;
       WEBSCREEN_DEBUG_PRINTLN("Wi-Fi disconnected, attempting reconnection...");
+      WiFi.reconnect();  // Previously this only logged — never reconnected
     }
     return;
   }
@@ -510,6 +508,14 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
   if (g_mqtt_enabled) {
     if (g_mqttClient.connected()) {
       g_mqttClient.loop();
+    } else {
+      // Broker dropped — retry with the credentials from the last successful
+      // mqtt_connect() (elk_mqtt_try_reconnect in lvgl_elk.h), 5s backoff.
+      unsigned long now = WEBSCREEN_MILLIS();
+      if (now - g_last_mqtt_reconnect_attempt > 5000) {
+        g_last_mqtt_reconnect_attempt = now;
+        elk_mqtt_try_reconnect();
+      }
     }
     // Messages are queued by onMqttMessage callback.
     // JS polls via mqtt_has_message() from its timer — no js_eval from C++.

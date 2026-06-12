@@ -2,12 +2,17 @@
 #include "globals.h"
 #include "webscreen_config.h"
 #include "webscreen_hardware.h"
+#include "webscreen_runtime.h"
 #include <WiFi.h>
 #include <time.h>
 #include <sys/time.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+
+// Abort blocking receive loops if the host stops sending (loopTask must never hang)
+static const unsigned long SERIAL_RX_TIMEOUT_MS = 30000;
 
 void SerialCommands::init() {
   Serial.println("\n=== WebScreen Serial Console ===");
@@ -76,6 +81,12 @@ void SerialCommands::processCommand(const String& command) {
   else if (baseCmd == "load" || baseCmd == "run") {
     loadApp(args);
   }
+  else if (baseCmd == "restart_app") {
+    restartApp();
+  }
+  else if (baseCmd == "gc") {
+    runGC();
+  }
   else if (baseCmd == "wget" || baseCmd == "download") {
     wget(args);
   }
@@ -117,6 +128,8 @@ void SerialCommands::showHelp() {
   Serial.println("/cat <file>              - Display file contents");
   Serial.println("/rm <file>               - Delete file");
   Serial.println("/load <script.js>        - Load/switch to different JS app");
+  Serial.println("/restart_app             - Restart the JS app in place (no reboot)");
+  Serial.println("/gc                      - Run JS garbage collection");
   Serial.println("/wget <url> [file]       - Download file from URL to SD card");
   Serial.println("/ping <host>             - Test network connectivity");
   Serial.println("/backup [save|restore]   - Backup/restore configuration");
@@ -143,7 +156,20 @@ void SerialCommands::showStats() {
   Serial.printf("Total Heap: %s\n", formatBytes(ESP.getHeapSize()).c_str());
   Serial.printf("Free PSRAM: %s\n", formatBytes(ESP.getFreePsram()).c_str());
   Serial.printf("Total PSRAM: %s\n", formatBytes(ESP.getPsramSize()).c_str());
-  
+  Serial.printf("Min Free Heap: %s\n", formatBytes(esp_get_minimum_free_heap_size()).c_str());
+  Serial.printf("Largest Free Block: %s\n",
+                formatBytes(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)).c_str());
+
+  // JavaScript engine
+  uint32_t jsUsed = 0, jsTotal = 0;
+  webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
+  if (jsTotal > 0) {
+    Serial.printf("JS Arena Used: %s\n", formatBytes(jsUsed).c_str());
+    Serial.printf("JS Arena Total: %s\n", formatBytes(jsTotal).c_str());
+  } else {
+    Serial.println("JS Arena: Not running");
+  }
+
   // Storage
   if (SD_MMC.cardSize() > 0) {
     uint64_t cardSize = SD_MMC.cardSize();
@@ -184,6 +210,13 @@ void SerialCommands::showInfo() {
   Serial.printf("SDK Version: %s\n", ESP.getSdkVersion());
   Serial.println("WebScreen Version: " WEBSCREEN_VERSION_STRING);
   Serial.println("Build Date: " __DATE__ " " __TIME__);
+
+  uint32_t jsUsed = 0, jsTotal = 0;
+  webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
+  if (jsTotal > 0) {
+    Serial.printf("JS Arena Used: %s\n", formatBytes(jsUsed).c_str());
+    Serial.printf("JS Arena Total: %s\n", formatBytes(jsTotal).c_str());
+  }
 }
 
 void SerialCommands::writeScript(const String& args) {
@@ -213,21 +246,28 @@ void SerialCommands::writeScript(const String& args) {
   
   String line;
   while (true) {
+    unsigned long waitStart = millis();
     while (!Serial.available()) {
+      if (millis() - waitStart >= SERIAL_RX_TIMEOUT_MS) {
+        file.close();
+        SD_MMC.remove(filename);
+        printError("Write aborted: no data received for 30 seconds (" + filename + " removed)");
+        return;
+      }
       delay(10);
     }
-    
+
     line = Serial.readStringUntil('\n');
     line.trim();
-    
+
     if (line == "END") {
       break;
     }
-    
+
     file.println(line);
     Serial.println("+ " + line);
   }
-  
+
   file.close();
   printSuccess("Script saved: " + filename + " (" + formatBytes(SD_MMC.open(filename).size()) + ")");
 }
@@ -244,7 +284,9 @@ static const uint8_t base64_decode_table[128] = {
   41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 64, 64, 64, 64, 64
 };
 
-static size_t base64_decode(const char* input, size_t inputLen, uint8_t* output) {
+// Bounded decode: never writes more than outputSize bytes.
+// Returns the decoded byte count, or -1 if the decoded data would overflow output.
+static int base64_decode(const char* input, size_t inputLen, uint8_t* output, size_t outputSize) {
   size_t outputLen = 0;
   uint32_t buffer = 0;
   int bitsCollected = 0;
@@ -262,11 +304,14 @@ static size_t base64_decode(const char* input, size_t inputLen, uint8_t* output)
 
     if (bitsCollected >= 8) {
       bitsCollected -= 8;
+      if (outputLen >= outputSize) {
+        return -1;
+      }
       output[outputLen++] = (buffer >> bitsCollected) & 0xFF;
     }
   }
 
-  return outputLen;
+  return (int)outputLen;
 }
 
 void SerialCommands::uploadFile(const String& args) {
@@ -307,13 +352,26 @@ void SerialCommands::uploadFile(const String& args) {
 
   size_t totalBytes = 0;
   String line;
+  bool aborted = false;
+  String abortReason;
 
   // Buffer for base64 decoding
   uint8_t decodeBuffer[512];
 
   while (true) {
+    unsigned long waitStart = millis();
+    bool timedOut = false;
     while (!Serial.available()) {
+      if (millis() - waitStart >= SERIAL_RX_TIMEOUT_MS) {
+        timedOut = true;
+        break;
+      }
       delay(10);
+    }
+    if (timedOut) {
+      aborted = true;
+      abortReason = "no data received for 30 seconds";
+      break;
     }
 
     line = Serial.readStringUntil('\n');
@@ -323,12 +381,22 @@ void SerialCommands::uploadFile(const String& args) {
       break;
     }
 
+    if (aborted) {
+      continue;  // drain remaining chunks until END so the stream stays in sync
+    }
+
     if (isBase64) {
-      // Decode base64 and write binary data
-      size_t decodedLen = base64_decode(line.c_str(), line.length(), decodeBuffer);
+      // Decode base64 and write binary data (bounded by decodeBuffer)
+      int decodedLen = base64_decode(line.c_str(), line.length(), decodeBuffer, sizeof(decodeBuffer));
+      if (decodedLen < 0) {
+        aborted = true;
+        abortReason = "chunk exceeds " + String((unsigned int)sizeof(decodeBuffer)) + " decoded bytes per line";
+        printError("Upload aborted: " + abortReason);
+        continue;
+      }
       if (decodedLen > 0) {
-        file.write(decodeBuffer, decodedLen);
-        totalBytes += decodedLen;
+        file.write(decodeBuffer, (size_t)decodedLen);
+        totalBytes += (size_t)decodedLen;
       }
       // Show progress every 10KB
       if (totalBytes % 10240 < 512) {
@@ -344,7 +412,12 @@ void SerialCommands::uploadFile(const String& args) {
 
   file.close();
   Serial.println();
-  printSuccess("File saved: " + filename + " (" + formatBytes(totalBytes) + ")");
+  if (aborted) {
+    SD_MMC.remove(filename);  // partial file is unusable
+    printError("Upload failed: " + abortReason + " (" + filename + " removed)");
+  } else {
+    printSuccess("File saved: " + filename + " (" + formatBytes(totalBytes) + ")");
+  }
 }
 
 void SerialCommands::configSet(const String& args) {
@@ -546,15 +619,13 @@ void SerialCommands::loadApp(const String& scriptName) {
     return;
   }
   file.close();
-  
-  // Update global script filename for restart
-  extern String g_script_filename;
-  g_script_filename = fullPath;
-  
-  printSuccess("Script queued for loading: " + fullPath);
-  printSuccess("Restarting to load new script...");
-  delay(2000);
-  ESP.restart();
+
+  // In-place restart of the JS app with the new script (no device reboot)
+  if (webscreen_runtime_load_new_script(fullPath.c_str())) {
+    printSuccess("Loading script: " + fullPath);
+  } else {
+    printError("Cannot load script: " + fullPath);
+  }
 }
 
 void SerialCommands::printPrompt() {
@@ -947,8 +1018,14 @@ void SerialCommands::monitor(const String& args) {
   
   unsigned long lastUpdate = 0;
   const unsigned long updateInterval = 1000; // Update every second
-  
+  unsigned long monitorStart = millis();
+
   while (!Serial.available()) {
+    if (millis() - monitorStart >= SERIAL_RX_TIMEOUT_MS) {
+      Serial.println();
+      printError("Monitor stopped: no input for 30 seconds");
+      break;
+    }
     if (millis() - lastUpdate >= updateInterval) {
       lastUpdate = millis();
       
@@ -1118,4 +1195,19 @@ void SerialCommands::setTime(const String& args) {
                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   printSuccess("Device time synchronized");
+}
+
+void SerialCommands::restartApp() {
+  webscreen_runtime_request_restart("serial /restart_app");
+  printSuccess("JS app restart requested (in-place, no reboot)");
+}
+
+void SerialCommands::runGC() {
+  if (webscreen_runtime_garbage_collect()) {
+    uint32_t jsUsed = 0, jsTotal = 0;
+    webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
+    printSuccess("GC complete: JS arena " + formatBytes(jsUsed) + " / " + formatBytes(jsTotal) + " used");
+  } else {
+    printError("Garbage collection unavailable (JS engine not running)");
+  }
 }

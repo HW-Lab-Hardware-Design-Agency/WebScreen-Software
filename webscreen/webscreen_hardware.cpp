@@ -101,6 +101,11 @@ bool webscreen_display_set_brightness(uint8_t brightness) {
 uint8_t webscreen_display_get_brightness(void) {
   return g_brightness;
 }
+void webscreen_hardware_sync_brightness(uint8_t v) {
+  // Cache-only update for modules that drive the panel directly
+  // (e.g. JS set_brightness), so display off/on restores the latest value.
+  g_brightness = v;
+}
 bool webscreen_display_set_rotation(uint8_t rotation) {
   if (rotation > 3) {
     return false;
@@ -116,6 +121,9 @@ void webscreen_display_power(bool on) {
     webscreen_display_set_brightness(g_brightness);
   } else {
     WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
+    // Panel keeps rendering with the LED pin low; zero its own brightness
+    // too. Bypass the setter so g_brightness keeps the restore value.
+    lcd_brightness(0);
   }
 
   WEBSCREEN_DEBUG_PRINTF("Display power: %s\n", on ? "ON" : "OFF");

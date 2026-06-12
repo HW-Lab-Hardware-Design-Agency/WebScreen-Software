@@ -30,15 +30,44 @@ extern "C" {
   bool webscreen_runtime_start_javascript(const char* script_file);
 
   /**
- * @brief Start fallback application
- * 
- * Starts the built-in fallback application when JavaScript runtime
- * is unavailable or has failed.
- * 
- * @return true if fallback started successfully, false otherwise
+ * @brief Request an in-place restart of the JS app (no device reboot)
+ *
+ * The JS task tears down timers/widgets/styles/media buffers, re-creates the
+ * Elk engine over the same arena, and re-evaluates the current script.
+ * Safe to call from any task.
+ *
+ * @param reason Short human-readable reason for logging
  */
 
-  bool webscreen_runtime_start_fallback(void);
+  void webscreen_runtime_request_restart(const char* reason);
+
+  /**
+ * @brief Switch to a different script and restart the JS app in place
+ *
+ * @param script_file Path to JavaScript file on SD card
+ * @return true if the file exists and the restart was scheduled
+ */
+
+  bool webscreen_runtime_load_new_script(const char* script_file);
+
+  /**
+ * @brief Current Elk arena usage
+ *
+ * @param used  Out: bytes currently used (0 if engine not running)
+ * @param total Out: arena capacity in bytes
+ */
+
+  void webscreen_runtime_get_js_arena(uint32_t* used, uint32_t* total);
+
+  /**
+ * @brief Configure the Elk arena size before the engine starts
+ *
+ * Clamped to 64..1024 KB. No effect once the arena is allocated.
+ *
+ * @param kb Requested arena size in kilobytes
+ */
+
+  void webscreen_runtime_set_js_heap_kb(int kb);
 
   /**
  * @brief Run JavaScript runtime loop
@@ -48,15 +77,6 @@ extern "C" {
  */
 
   void webscreen_runtime_loop_javascript(void);
-
-  /**
- * @brief Run fallback application loop
- * 
- * Executes one iteration of the fallback application. Should be called
- * repeatedly from the main loop when in fallback mode.
- */
-
-  void webscreen_runtime_loop_fallback(void);
 
   /**
  * @brief Shutdown all runtimes
@@ -84,14 +104,6 @@ extern "C" {
   const char* webscreen_runtime_get_javascript_status(void);
 
   /**
- * @brief Execute JavaScript code
- * @param code JavaScript code string to execute
- * @return true if execution successful, false on error
- */
-
-  bool webscreen_runtime_execute_javascript(const char* code);
-
-  /**
  * @brief Get JavaScript execution statistics
  * @param exec_count Pointer to store execution count
  * @param avg_time_us Pointer to store average execution time in microseconds
@@ -112,59 +124,6 @@ extern "C" {
  */
 
   bool webscreen_runtime_is_fallback_active(void);
-
-  /**
- * @brief Update fallback display text
- * @param text Text to display in fallback application
- */
-
-  void webscreen_runtime_set_fallback_text(const char* text);
-
-  /**
- * @brief Get fallback application status
- * @return String describing current status
- */
-  const char* webscreen_runtime_get_fallback_status(void);
-
-  // ============================================================================
-  // LVGL INTEGRATION
-  // ============================================================================
-
-  /**
- * @brief Initialize LVGL graphics library
- * @return true if initialization successful, false otherwise
- */
-
-  bool webscreen_runtime_init_lvgl(void);
-
-  /**
- * @brief Run LVGL timer handler
- * 
- * Processes LVGL timers and animations. Should be called regularly
- * from both JavaScript and fallback runtime loops.
- */
-
-  void webscreen_runtime_lvgl_timer_handler(void);
-
-  /**
- * @brief Get LVGL display object
- * @return Pointer to LVGL display object, or NULL if not initialized
- */
-  void* webscreen_runtime_get_lvgl_display(void);
-
-  /**
- * @brief Set LVGL background color
- * @param color RGB color value (0xRRGGBB)
- */
-
-  void webscreen_runtime_set_background_color(uint32_t color);
-
-  /**
- * @brief Set LVGL foreground color
- * @param color RGB color value (0xRRGGBB)
- */
-
-  void webscreen_runtime_set_foreground_color(uint32_t color);
 
   // ============================================================================
   // MEMORY MANAGEMENT
@@ -212,26 +171,8 @@ extern "C" {
   bool webscreen_runtime_has_errors(void);
 
   // ============================================================================
-  // PERFORMANCE MONITORING
+  // STATUS
   // ============================================================================
-
-  /**
- * @brief Enable or disable performance monitoring
- * @param enable true to enable monitoring, false to disable
- */
-
-  void webscreen_runtime_set_performance_monitoring(bool enable);
-
-  /**
- * @brief Get performance statistics
- * @param avg_loop_time_us Average loop time in microseconds
- * @param max_loop_time_us Maximum loop time in microseconds
- * @param fps Frames per second (for display updates)
- */
-
-  void webscreen_runtime_get_performance_stats(uint32_t* avg_loop_time_us,
-                                               uint32_t* max_loop_time_us,
-                                               uint32_t* fps);
 
   /**
  * @brief Print runtime status to serial
@@ -307,18 +248,6 @@ extern "C" {
 
 #ifdef __cplusplus
 }
-#endif
-
-// ============================================================================
-// COMPATIBILITY WITH EXISTING CODE
-// ============================================================================
-
-// Legacy function names for backward compatibility
-#ifdef WEBSCREEN_ENABLE_DEPRECATED_API
-#define dynamic_js_setup() webscreen_runtime_start_javascript(g_webscreen_config.script_file)
-#define dynamic_js_loop() webscreen_runtime_loop_javascript()
-#define fallback_setup() webscreen_runtime_start_fallback()
-#define fallback_loop() webscreen_runtime_loop_fallback()
 #endif
 
 // ============================================================================

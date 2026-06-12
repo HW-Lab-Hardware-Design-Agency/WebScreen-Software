@@ -12,7 +12,7 @@
 #include "serial_commands.h"
 
 String g_script_filename = "/app.js";
-void dynamic_js_setup() {
+bool dynamic_js_setup() {
   LOG("DYNAMIC_JS: Setting up Elk + script scenario...");
 
   WiFi.mode(WIFI_STA);
@@ -20,10 +20,11 @@ void dynamic_js_setup() {
 
   if (!webscreen_runtime_start_javascript(g_script_filename.c_str())) {
     LOG("Failed to start JavaScript runtime");
-    return;
+    return false;
   }
 
   LOG("DYNAMIC_JS: setup done!");
+  return true;
 }
 void dynamic_js_loop() {
   // Handle power button (short press = display toggle, long press = power off)

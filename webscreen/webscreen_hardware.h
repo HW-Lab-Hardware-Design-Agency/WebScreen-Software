@@ -75,6 +75,17 @@ extern "C" {
   uint8_t webscreen_display_get_brightness(void);
 
   /**
+ * @brief Sync the cached brightness value without touching the panel
+ *
+ * For modules that write the panel directly (e.g. JS set_brightness),
+ * so a display off/on cycle restores the latest value.
+ *
+ * @param v Brightness level (0-255)
+ */
+
+  void webscreen_hardware_sync_brightness(uint8_t v);
+
+  /**
  * @brief Set display rotation
  * @param rotation Rotation value (0-3)
  * @return true if successful, false otherwise

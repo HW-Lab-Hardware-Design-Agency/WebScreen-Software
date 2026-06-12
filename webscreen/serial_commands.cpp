@@ -14,6 +14,50 @@
 // Abort blocking receive loops if the host stops sending (loopTask must never hang)
 static const unsigned long SERIAL_RX_TIMEOUT_MS = 30000;
 
+// How dispatch passes the raw argument string to a handler
+enum ArgStyle : uint8_t {
+  ARGS_IGNORED,       // handler takes no arguments
+  ARGS_RAW,           // pass through unmodified
+  ARGS_DEFAULT_ROOT,  // empty args defaults to "/" (for /ls)
+};
+
+struct SerialCommands::Command {
+  const char* name;                      // primary name, matched against lowercased input
+  const char* alias;                     // alternate spelling, or nullptr
+  void (*handler)(const String& args);   // nullptr = help-only continuation row
+  ArgStyle argStyle;
+  const char* usage;                     // /help usage column
+  const char* desc;                      // /help description column
+};
+
+// One row per command; table order is the /help listing order. Exact-match
+// dispatch means row order never changes which command wins.
+const SerialCommands::Command SerialCommands::kCommands[] = {
+  { "help",        "h",        [](const String&) { showHelp(); },   ARGS_IGNORED,      "/help",                    "Show this help" },
+  { "stats",       nullptr,    [](const String&) { showStats(); },  ARGS_IGNORED,      "/stats",                   "Show system statistics" },
+  { "info",        nullptr,    [](const String&) { showInfo(); },   ARGS_IGNORED,      "/info",                    "Show device information" },
+  { "write",       nullptr,    writeScript,                         ARGS_RAW,          "/write <filename>",        "Write JS script to SD card (interactive)" },
+  { "upload",      nullptr,    uploadFile,                          ARGS_RAW,          "/upload <file> [base64]",  "Upload any file (text or base64-encoded)" },
+  { "config",      nullptr,    configCommand,                       ARGS_RAW,          "/config get <key>",        "Get config value from webscreen.json" },
+  { "config",      nullptr,    nullptr,                             ARGS_RAW,          "/config set <key> <val>",  "Set config value in webscreen.json" },
+  { "ls",          "list",     listFiles,                           ARGS_DEFAULT_ROOT, "/ls [path]",               "List files/directories" },
+  { "cat",         "view",     catFile,                             ARGS_RAW,          "/cat <file>",              "Display file contents" },
+  { "rm",          "delete",   deleteFile,                          ARGS_RAW,          "/rm <file>",               "Delete file" },
+  { "load",        "run",      loadApp,                             ARGS_RAW,          "/load <script.js>",        "Load/switch to different JS app" },
+  { "restart_app", nullptr,    [](const String&) { restartApp(); }, ARGS_IGNORED,      "/restart_app",             "Restart the JS app in place (no reboot)" },
+  { "gc",          nullptr,    [](const String&) { runGC(); },      ARGS_IGNORED,      "/gc",                      "Run JS garbage collection" },
+  { "wget",        "download", wget,                                ARGS_RAW,          "/wget <url> [file]",       "Download file from URL to SD card" },
+  { "ping",        nullptr,    ping,                                ARGS_RAW,          "/ping <host>",             "Test network connectivity" },
+  { "backup",      nullptr,    backup,                              ARGS_RAW,          "/backup [save|restore]",   "Backup/restore configuration" },
+  { "monitor",     "mon",      monitor,                             ARGS_RAW,          "/monitor [cpu|mem|net]",   "Live system monitoring" },
+  { "brightness",  nullptr,    setBrightness,                       ARGS_RAW,          "/brightness <0-255>",      "Set display brightness" },
+  { "time",        nullptr,    [](const String&) { showTime(); },   ARGS_IGNORED,      "/time",                    "Show current device time" },
+  { "settime",     nullptr,    setTime,                             ARGS_RAW,          "/settime <epoch> [tz]",    "Set device time from epoch" },
+  { "reboot",      "restart",  [](const String&) { reboot(); },     ARGS_IGNORED,      "/reboot",                  "Restart the device" },
+};
+
+const size_t SerialCommands::kCommandCount = sizeof(SerialCommands::kCommands) / sizeof(SerialCommands::kCommands[0]);
+
 void SerialCommands::init() {
   Serial.println("\n=== WebScreen Serial Console ===");
   Serial.println("Type /help for available commands");
@@ -41,103 +85,47 @@ void SerialCommands::processCommand(const String& command) {
   String args = (spaceIndex > 0) ? cmd.substring(spaceIndex + 1) : "";
   
   baseCmd.toLowerCase();
-  
-  if (baseCmd == "help" || baseCmd == "h") {
-    showHelp();
-  }
-  else if (baseCmd == "stats") {
-    showStats();
-  }
-  else if (baseCmd == "info") {
-    showInfo();
-  }
-  else if (baseCmd == "write") {
-    writeScript(args);
-  }
-  else if (baseCmd == "upload") {
-    uploadFile(args);
-  }
-  else if (baseCmd == "config") {
-    if (args.startsWith("get ")) {
-      configGet(args.substring(4));
-    } else if (args.startsWith("set ")) {
-      configSet(args.substring(4));
-    } else {
-      printError("Usage: /config get <key> or /config set <key> <value>");
+
+  const Command* match = nullptr;
+  for (size_t i = 0; i < kCommandCount; i++) {
+    const Command& c = kCommands[i];
+    if (c.handler == nullptr) continue;  // help-only continuation row
+    if (baseCmd == c.name || (c.alias != nullptr && baseCmd == c.alias)) {
+      match = &c;
+      break;
     }
   }
-  else if (baseCmd == "ls" || baseCmd == "list") {
-    listFiles(args.length() > 0 ? args : "/");
-  }
-  else if (baseCmd == "rm" || baseCmd == "delete") {
-    deleteFile(args);
-  }
-  else if (baseCmd == "cat" || baseCmd == "view") {
-    catFile(args);
-  }
-  else if (baseCmd == "reboot" || baseCmd == "restart") {
-    reboot();
-  }
-  else if (baseCmd == "load" || baseCmd == "run") {
-    loadApp(args);
-  }
-  else if (baseCmd == "restart_app") {
-    restartApp();
-  }
-  else if (baseCmd == "gc") {
-    runGC();
-  }
-  else if (baseCmd == "wget" || baseCmd == "download") {
-    wget(args);
-  }
-  else if (baseCmd == "ping") {
-    ping(args);
-  }
-  else if (baseCmd == "backup") {
-    backup(args);
-  }
-  else if (baseCmd == "monitor" || baseCmd == "mon") {
-    monitor(args);
-  }
-  else if (baseCmd == "brightness") {
-    setBrightness(args);
-  }
-  else if (baseCmd == "time") {
-    showTime();
-  }
-  else if (baseCmd == "settime") {
-    setTime(args);
-  }
-  else {
+
+  if (match == nullptr) {
     printError("Unknown command: " + baseCmd + ". Type /help for available commands.");
+  } else if (match->argStyle == ARGS_DEFAULT_ROOT && args.length() == 0) {
+    match->handler("/");
+  } else {
+    match->handler(args);
   }
-  
+
   printPrompt();
+}
+
+// /config get|set subcommand parsing kept verbatim from the old dispatch chain
+void SerialCommands::configCommand(const String& args) {
+  if (args.startsWith("get ")) {
+    configGet(args.substring(4));
+  } else if (args.startsWith("set ")) {
+    configSet(args.substring(4));
+  } else {
+    printError("Usage: /config get <key> or /config set <key> <value>");
+  }
 }
 
 void SerialCommands::showHelp() {
   Serial.println("\n=== WebScreen Commands ===");
-  Serial.println("/help                    - Show this help");
-  Serial.println("/stats                   - Show system statistics");
-  Serial.println("/info                    - Show device information");
-  Serial.println("/write <filename>        - Write JS script to SD card (interactive)");
-  Serial.println("/upload <file> [base64]  - Upload any file (text or base64-encoded)");
-  Serial.println("/config get <key>        - Get config value from webscreen.json");
-  Serial.println("/config set <key> <val>  - Set config value in webscreen.json");
-  Serial.println("/ls [path]               - List files/directories");
-  Serial.println("/cat <file>              - Display file contents");
-  Serial.println("/rm <file>               - Delete file");
-  Serial.println("/load <script.js>        - Load/switch to different JS app");
-  Serial.println("/restart_app             - Restart the JS app in place (no reboot)");
-  Serial.println("/gc                      - Run JS garbage collection");
-  Serial.println("/wget <url> [file]       - Download file from URL to SD card");
-  Serial.println("/ping <host>             - Test network connectivity");
-  Serial.println("/backup [save|restore]   - Backup/restore configuration");
-  Serial.println("/monitor [cpu|mem|net]   - Live system monitoring");
-  Serial.println("/brightness <0-255>     - Set display brightness");
-  Serial.println("/time                    - Show current device time");
-  Serial.println("/settime <epoch> [tz]    - Set device time from epoch");
-  Serial.println("/reboot                  - Restart the device");
+  for (size_t i = 0; i < kCommandCount; i++) {
+    const Command& c = kCommands[i];
+    char line[96];
+    snprintf(line, sizeof(line), "%-25s- %s", c.usage, c.desc);
+    Serial.println(line);  // println keeps the original CRLF line endings
+  }
   Serial.println("\nExamples:");
   Serial.println("/write hello.js");
   Serial.println("/upload image.png base64");
@@ -156,7 +144,7 @@ void SerialCommands::showStats() {
   Serial.printf("Total Heap: %s\n", formatBytes(ESP.getHeapSize()).c_str());
   Serial.printf("Free PSRAM: %s\n", formatBytes(ESP.getFreePsram()).c_str());
   Serial.printf("Total PSRAM: %s\n", formatBytes(ESP.getPsramSize()).c_str());
-  Serial.printf("Min Free Heap: %s\n", formatBytes(esp_get_minimum_free_heap_size()).c_str());
+  Serial.printf("Heap Low Watermark: %s\n", formatBytes(esp_get_minimum_free_heap_size()).c_str());
   Serial.printf("Largest Free Block: %s\n",
                 formatBytes(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)).c_str());
 
@@ -601,7 +589,12 @@ void SerialCommands::loadApp(const String& scriptName) {
     printError("Usage: /load <script.js>");
     return;
   }
-  
+
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode). Set the script in webscreen.json (/config set script <file>) and /reboot.");
+    return;
+  }
+
   if (!SD_MMC.begin()) {
     printError("SD card not available");
     return;
@@ -1198,15 +1191,21 @@ void SerialCommands::setTime(const String& args) {
 }
 
 void SerialCommands::restartApp() {
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode). Use /reboot.");
+    return;
+  }
   webscreen_runtime_request_restart("serial /restart_app");
   printSuccess("JS app restart requested (in-place, no reboot)");
 }
 
 void SerialCommands::runGC() {
   if (webscreen_runtime_garbage_collect()) {
+    // The collection runs on the JS task at its next safe point, so the
+    // numbers reported here are pre-GC.
     uint32_t jsUsed = 0, jsTotal = 0;
     webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
-    printSuccess("GC complete: JS arena " + formatBytes(jsUsed) + " / " + formatBytes(jsTotal) + " used");
+    printSuccess("GC requested (runs at the JS task's next safe point). JS arena now: " + formatBytes(jsUsed) + " / " + formatBytes(jsTotal) + " used");
   } else {
     printError("Garbage collection unavailable (JS engine not running)");
   }

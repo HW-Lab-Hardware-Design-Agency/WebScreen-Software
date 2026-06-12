@@ -47,36 +47,45 @@ static void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, u
 
 void fallback_setup() {
   LOG("FALLBACK: Setting up scrolling label + GIF...");
-  lv_init();
+  // When fallback runs because the JS runtime FAILED TO START (rather than
+  // because there was no script), the display stack is already up from
+  // init_lvgl_display(): lv_init done, panel initialized, display driver
+  // registered. Re-running that here would double-init the SPI bus
+  // (ESP_ERROR_CHECK -> abort) and register a duplicate display. In that
+  // case just build the fallback UI on the existing display.
+  bool display_already_up = lv_is_initialized();
   SerialCommands::init();
-  start_lvgl_tick();
-  pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, HIGH);
-  rm67162_init();
-  lcd_setRotation(1);
+  if (!display_already_up) {
+    lv_init();
+    start_lvgl_tick();
+    pinMode(PIN_LED, OUTPUT);
+    digitalWrite(PIN_LED, HIGH);
+    rm67162_init();
+    lcd_setRotation(1);
 
-  // Apply configured brightness
-  if (g_webscreen_config.display.brightness > 0) {
-    lcd_brightness(g_webscreen_config.display.brightness);
-    // Keep the cached value in sync so the button's display off/on toggle
-    // restores the configured brightness, not the default.
-    webscreen_hardware_sync_brightness(g_webscreen_config.display.brightness);
+    // Apply configured brightness
+    if (g_webscreen_config.display.brightness > 0) {
+      lcd_brightness(g_webscreen_config.display.brightness);
+      // Keep the cached value in sync so the button's display off/on toggle
+      // restores the configured brightness, not the default.
+      webscreen_hardware_sync_brightness(g_webscreen_config.display.brightness);
+    }
+
+    fbBuf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
+    if (!fbBuf) {
+      LOG("FALLBACK: Failed to allocate buffer");
+      return;
+    }
+
+    lv_disp_draw_buf_init(&fbDrawBuf, fbBuf, nullptr, LVGL_LCD_BUF_SIZE);
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = 536;
+    disp_drv.ver_res = 240;
+    disp_drv.flush_cb = fallback_disp_flush;
+    disp_drv.draw_buf = &fbDrawBuf;
+    lv_disp_drv_register(&disp_drv);
   }
-
-  fbBuf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
-  if (!fbBuf) {
-    LOG("FALLBACK: Failed to allocate buffer");
-    return;
-  }
-
-  lv_disp_draw_buf_init(&fbDrawBuf, fbBuf, nullptr, LVGL_LCD_BUF_SIZE);
-  static lv_disp_drv_t disp_drv;
-  lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = 536;
-  disp_drv.ver_res = 240;
-  disp_drv.flush_cb = fallback_disp_flush;
-  disp_drv.draw_buf = &fbDrawBuf;
-  lv_disp_drv_register(&disp_drv);
 
   // Create a container for the image and label
   fb_container = lv_obj_create(lv_scr_act());

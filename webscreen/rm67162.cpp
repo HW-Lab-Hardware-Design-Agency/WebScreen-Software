@@ -115,6 +115,15 @@ static void lcd_send_cmd(uint32_t cmd, uint8_t *dat, uint32_t len) {
   panel_unlock();
 }
 void rm67162_init(void) {
+  // Idempotent: a second spi_bus_initialize() fails and ESP_ERROR_CHECK
+  // turns that into abort() — e.g. when fallback starts after a partially
+  // initialized JS runtime already brought the panel up.
+  static bool s_initialized = false;
+  if (s_initialized) {
+    return;
+  }
+  s_initialized = true;
+
   if (s_panel_mutex == NULL) {
     s_panel_mutex = xSemaphoreCreateRecursiveMutex();
   }

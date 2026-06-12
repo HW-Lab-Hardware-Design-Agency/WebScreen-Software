@@ -22,11 +22,17 @@ static const int MAX_METER_SCALES = 8;
 static lv_meter_scale_t *g_meter_scales[MAX_METER_SCALES] = { nullptr };
 static const int MAX_METER_INDICATORS = 16;
 static lv_meter_indicator_t *g_meter_indicators[MAX_METER_INDICATORS] = { nullptr };
+// Owning meter per slot (see g_chart_series_owner): lets js_obj_delete null
+// the slots whose scales/indicators die with a deleted widget subtree. Only
+// meaningful while the matching registry entry is non-null.
+static lv_obj_t *g_meter_scales_owner[MAX_METER_SCALES] = { nullptr };
+static lv_obj_t *g_meter_indicators_owner[MAX_METER_INDICATORS] = { nullptr };
 
-static int store_meter_scale(lv_meter_scale_t *sc) {
+static int store_meter_scale(lv_meter_scale_t *sc, lv_obj_t *owner) {
   for (int i = 0; i < MAX_METER_SCALES; i++) {
     if (!g_meter_scales[i]) {
       g_meter_scales[i] = sc;
+      g_meter_scales_owner[i] = owner;
       return i;
     }
   }
@@ -36,10 +42,11 @@ static lv_meter_scale_t *get_meter_scale(int handle) {
   if (handle < 0 || handle >= MAX_METER_SCALES) return nullptr;
   return g_meter_scales[handle];
 }
-static int store_meter_indicator(lv_meter_indicator_t *ind) {
+static int store_meter_indicator(lv_meter_indicator_t *ind, lv_obj_t *owner) {
   for (int i = 0; i < MAX_METER_INDICATORS; i++) {
     if (!g_meter_indicators[i]) {
       g_meter_indicators[i] = ind;
+      g_meter_indicators_owner[i] = owner;
       return i;
     }
   }
@@ -64,7 +71,7 @@ static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs) { 
 
   lv_meter_scale_t *sc = lv_meter_add_scale(mt);
   if (!sc) return js_mknum(-1);
-  int sh = store_meter_scale(sc);
+  int sh = store_meter_scale(sc, mt);
   if (sh < 0) {
     // LVGL has no API to remove a scale; it stays in the meter (freed with it)
     // but is unreachable from JS.
@@ -156,7 +163,7 @@ static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {  /
 
   lv_meter_indicator_t *ind = lv_meter_add_arc(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
   if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind);
+  int ih = store_meter_indicator(ind, mt);
   if (ih < 0) LOG("lv_meter_add_arc: no free indicator slots");
   return js_mknum(ih);
 }
@@ -184,7 +191,7 @@ static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nar
                                                        lv_color_hex((uint32_t)colorG),
                                                        local, widthMod);
   if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind);
+  int ih = store_meter_indicator(ind, mt);
   if (ih < 0) LOG("lv_meter_add_scale_lines: no free indicator slots");
   return js_mknum(ih);
 }
@@ -207,7 +214,7 @@ static jsval_t js_lv_meter_add_needle_line(struct js *js, jsval_t *args, int nar
 
   lv_meter_indicator_t *ind = lv_meter_add_needle_line(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
   if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind);
+  int ih = store_meter_indicator(ind, mt);
   if (ih < 0) LOG("lv_meter_add_needle_line: no free indicator slots");
   return js_mknum(ih);
 }
@@ -241,7 +248,7 @@ static jsval_t js_lv_meter_add_needle_img(struct js *js, jsval_t *args, int narg
 
   lv_meter_indicator_t *ind = lv_meter_add_needle_img(mt, sc, src_dsc, pivotX, pivotY);
   if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind);
+  int ih = store_meter_indicator(ind, mt);
   if (ih < 0) LOG("lv_meter_add_needle_img: no free indicator slots");
   return js_mknum(ih);
 }
@@ -308,11 +315,16 @@ static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int
 // doubles before — wild-pointer resets).
 static const int MAX_SPANS = 16;
 static lv_span_t *g_spans[MAX_SPANS] = { nullptr };
+// Owning spangroup per slot (see g_chart_series_owner): lets js_obj_delete
+// null span slots when the spangroup (or an ancestor) is deleted. Only
+// meaningful while the matching g_spans entry is non-null.
+static lv_obj_t *g_spans_owner[MAX_SPANS] = { nullptr };
 
-static int store_span(lv_span_t *sp) {
+static int store_span(lv_span_t *sp, lv_obj_t *owner) {
   for (int i = 0; i < MAX_SPANS; i++) {
     if (!g_spans[i]) {
       g_spans[i] = sp;
+      g_spans_owner[i] = owner;
       return i;
     }
   }
@@ -325,18 +337,25 @@ static lv_span_t *get_span(int handle) {
 
 // Copies span text into LVGL-owned storage, stripping the surrounding quotes
 // js_str() leaves on string values (same treatment as label_set_text).
+// The temp is heap-sized to the actual text (a fixed 256-byte buffer used to
+// silently truncate longer spans); lv_span_set_text copies it internally, so
+// the temp is freed right after.
 static void span_set_text_copy(lv_span_t *sp, const char *raw) {
-  static char buf[256];  // single-task only: all JS runs on the WebScreenJS task
   size_t len = strlen(raw);
   const char *start = raw;
   if (len >= 2 && raw[0] == '"' && raw[len - 1] == '"') {
     start = raw + 1;
     len -= 2;
   }
-  if (len >= sizeof(buf)) len = sizeof(buf) - 1;
-  memcpy(buf, start, len);
-  buf[len] = '\0';
-  lv_span_set_text(sp, buf);
+  char *tmp = (char *)malloc(len + 1);
+  if (!tmp) {
+    LOG("span_set_text: out of memory, span text unchanged");
+    return;
+  }
+  memcpy(tmp, start, len);
+  tmp[len] = '\0';
+  lv_span_set_text(sp, tmp);
+  free(tmp);
 }
 
 static jsval_t js_lv_spangroup_create(struct js *js, jsval_t *args, int nargs) {
@@ -397,7 +416,7 @@ static jsval_t js_lv_spangroup_new_span(struct js *js, jsval_t *args, int nargs)
 
   lv_span_t *sp = lv_spangroup_new_span(spg);
   if (!sp) return js_mknum(-1);
-  int sh = store_span(sp);
+  int sh = store_span(sp, spg);
   if (sh < 0) {
     // No free slot: delete the span again so it cannot leak unreferenced.
     LOG("lv_spangroup_new_span: no free span slots");
@@ -488,5 +507,61 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) { 
 
   lv_line_set_points(line, points, pairCount);
   return js_mknull();
+}
+
+/*******************************************************
+ * SUB-OBJECT REGISTRY SWEEP
+ *******************************************************/
+// Releases every chart-series / meter-scale / meter-indicator / span slot
+// whose owning widget is `root` or a descendant of it. Forward-declared in
+// ws_lvgl_widgets.h and called by js_obj_delete BEFORE lv_obj_del: LVGL 8.3
+// destructors free these sub-objects together with their widget, so a slot
+// left behind would let a stale JS handle pass get_*() validation and reach
+// freed memory. Walks each owner's parent chain (still valid at this point),
+// same technique as the g_objects sweep. Slots whose registry entry is
+// already null are skipped — their owner pointer may be stale (e.g. after
+// elk_teardown_ui) and must not be dereferenced. Defined at the end of this
+// fragment so every registry it sweeps is visible.
+static void release_subobjects_owned_by(lv_obj_t *root) {
+  for (int i = 0; i < MAX_CHART_SERIES; i++) {
+    if (!g_chart_series[i]) continue;
+    for (lv_obj_t *p = g_chart_series_owner[i]; p != nullptr; p = lv_obj_get_parent(p)) {
+      if (p == root) {
+        g_chart_series[i] = nullptr;
+        g_chart_series_owner[i] = nullptr;
+        break;
+      }
+    }
+  }
+  for (int i = 0; i < MAX_METER_SCALES; i++) {
+    if (!g_meter_scales[i]) continue;
+    for (lv_obj_t *p = g_meter_scales_owner[i]; p != nullptr; p = lv_obj_get_parent(p)) {
+      if (p == root) {
+        g_meter_scales[i] = nullptr;
+        g_meter_scales_owner[i] = nullptr;
+        break;
+      }
+    }
+  }
+  for (int i = 0; i < MAX_METER_INDICATORS; i++) {
+    if (!g_meter_indicators[i]) continue;
+    for (lv_obj_t *p = g_meter_indicators_owner[i]; p != nullptr; p = lv_obj_get_parent(p)) {
+      if (p == root) {
+        g_meter_indicators[i] = nullptr;
+        g_meter_indicators_owner[i] = nullptr;
+        break;
+      }
+    }
+  }
+  for (int i = 0; i < MAX_SPANS; i++) {
+    if (!g_spans[i]) continue;
+    for (lv_obj_t *p = g_spans_owner[i]; p != nullptr; p = lv_obj_get_parent(p)) {
+      if (p == root) {
+        g_spans[i] = nullptr;
+        g_spans_owner[i] = nullptr;
+        break;
+      }
+    }
+  }
 }
 

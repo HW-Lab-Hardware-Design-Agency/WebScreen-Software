@@ -7,6 +7,7 @@
 #pragma once
 
 #include "ws_elk_core.h"
+#include "ws_elk_util.h"
 #include "ws_lvgl_fs.h"
 #include "ws_lvgl_display.h"
 #include "ws_elk_basics.h"

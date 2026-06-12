@@ -42,6 +42,19 @@ extern "C" {
   void webscreen_runtime_request_restart(const char* reason);
 
   /**
+ * @brief Automatic restart request from the timer-error escalation path
+ *
+ * Unlike the explicit variant this does not lift safe mode, and repeated
+ * automatic restarts without a healthy interval park the app in safe mode.
+ * Internal use (timer bridge); user-facing code should call
+ * webscreen_runtime_request_restart().
+ *
+ * @param reason Short human-readable reason for logging
+ */
+
+  void webscreen_runtime_request_restart_auto(const char* reason);
+
+  /**
  * @brief Switch to a different script and restart the JS app in place
  *
  * @param script_file Path to JavaScript file on SD card

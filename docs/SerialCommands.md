@@ -51,29 +51,30 @@ WebScreen> /help
 /stats                   - Show system statistics
 /info                    - Show device information
 /write <filename>        - Write JS script to SD card (interactive)
+/upload <file> [base64]  - Upload any file (text or base64-encoded)
 /config get <key>        - Get config value from webscreen.json
 /config set <key> <val>  - Set config value in webscreen.json
 /ls [path]               - List files/directories
 /cat <file>              - Display file contents
 /rm <file>               - Delete file
 /load <script.js>        - Load/switch to different JS app
+/restart_app             - Restart the JS app in place (no reboot)
+/gc                      - Run JS garbage collection
 /wget <url> [file]       - Download file from URL to SD card
 /ping <host>             - Test network connectivity
 /backup [save|restore]   - Backup/restore configuration
+/monitor [cpu|mem|net]   - Live system monitoring
 /brightness <0-255>      - Set display brightness
 /time                    - Show current device time
 /settime <epoch> [tz]    - Set device time from epoch
-/monitor [cpu|mem|net]   - Live system monitoring
 /reboot                  - Restart the device
 
 Examples:
 /write hello.js
+/upload image.png base64
+/upload config.json
 /config get wifi.ssid
 /config set wifi.ssid MyNetwork
-/wget https://example.com/app.js
-/ping google.com
-/backup save production
-/monitor mem
 /ls /
 /cat webscreen.json
 ```
@@ -93,6 +94,10 @@ Free Heap: 234.5 KB
 Total Heap: 320.0 KB
 Free PSRAM: 7.2 MB
 Total PSRAM: 8.0 MB
+Min Free Heap: 180.2 KB
+Largest Free Block: 110.0 KB
+JS Arena Used: 42.3 KB
+JS Arena Total: 256.0 KB
 SD Card Size: 32.0 GB
 SD Card Used: 2.4 MB
 SD Card Free: 31.9 GB
@@ -103,11 +108,16 @@ Uptime: 3247 seconds
 CPU Frequency: 240 MHz
 ```
 
+**Memory Fields:**
+- **Min Free Heap**: lowest internal heap level observed since boot (high-water mark of memory pressure)
+- **Largest Free Block**: largest contiguous internal allocation currently possible (fragmentation indicator)
+- **JS Arena Used/Total**: Elk JavaScript heap usage (shows `JS Arena: Not running` if the engine is not active)
+
 **Use Cases:**
 - Monitor memory usage during development
 - Check SD card space before deploying applications
 - Verify network connectivity status
-- Debug memory leaks in JavaScript applications
+- Debug memory leaks in JavaScript applications (watch JS Arena Used between `/gc` runs)
 
 #### `/info`
 Displays detailed device information including hardware specifications, firmware version, and build details.
@@ -128,7 +138,11 @@ MAC Address: 24:6F:28:12:34:56
 SDK Version: v4.4.2
 WebScreen Version: 2.0.0
 Build Date: Dec 15 2024 14:30:25
+JS Arena Used: 42.3 KB
+JS Arena Total: 256.0 KB
 ```
+
+The JS Arena lines only appear while the JavaScript engine is running.
 
 #### `/brightness <0-255>`
 Sets or queries the display brightness level.
@@ -190,6 +204,7 @@ Enter JavaScript code. End with a line containing only 'END':
 - **Auto Extension**: Automatically adds `.js` extension if not provided
 - **Size Reporting**: Shows file size after successful save
 - **Error Handling**: Provides clear error messages for SD card issues
+- **Inactivity Timeout**: Aborts after 30 seconds without input (the partial file is removed)
 
 **Best Practices:**
 - Plan your code structure before starting
@@ -197,27 +212,102 @@ Enter JavaScript code. End with a line containing only 'END':
 - Test with small scripts first
 - Remember to type `END` exactly to finish
 
+#### `/upload <filename> [base64]`
+Uploads any file (text or binary) to the SD card. Without the `base64` argument, lines are written as plain text; with it, each line is base64-decoded and written as binary data. End the stream with a line containing only `END`.
+
+**Usage (text):**
+```
+WebScreen> /upload config.json
+Upload mode: text
+Target file: /config.json
+Send file data. End with a line containing only 'END':
+---
++ {"script": "app.js"}
++ END
+[OK] File saved: /config.json (21 B)
+```
+
+**Usage (binary):**
+```
+WebScreen> /upload image.png base64
+Upload mode: base64
+Target file: /image.png
+Send file data. End with a line containing only 'END':
+---
+[... base64 chunks, one per line ...]
+END
+[OK] File saved: /image.png (15.6 KB)
+```
+
+**Features:**
+- **Two Modes**: plain text (default) or `base64`/`b64` for binary data
+- **Progress Display**: base64 mode reports progress every ~10KB
+- **Bounded Decoding**: each base64 line may decode to at most 512 bytes; an oversized chunk aborts the upload with an `[ERROR]` line and the partial file is removed
+- **Inactivity Timeout**: aborts after 30 seconds without input (partial file removed)
+
+**Error Example:**
+```
+[ERROR] Upload aborted: chunk exceeds 512 decoded bytes per line
+[ERROR] Upload failed: chunk exceeds 512 decoded bytes per line (/image.png removed)
+```
+
+**Notes:**
+- Split base64 data into lines that decode to 512 bytes or less (e.g. 684 base64 characters per line)
+- After an error, the device keeps draining chunks until `END` so the stream stays in sync
+
 #### `/load <script.js>` or `/run <script.js>`
-Switches to a different JavaScript application without manually editing configuration files.
+Switches to a different JavaScript application by restarting the JS app **in place** — the device does not reboot.
 
 **Usage:**
 ```
 WebScreen> /load weather.js
-[OK] Script queued for loading: /weather.js
-[OK] Restarting to load new script...
+[OK] Loading script: /weather.js
 ```
 
 **Features:**
 - **Auto Extension**: Adds `.js` extension automatically
 - **File Validation**: Checks if script exists before switching
-- **Graceful Restart**: Cleanly stops current application and restarts
-- **Global Update**: Updates the global script filename for future boots
+- **In-place Restart**: The JS task tears down the current app (timers, widgets, styles, media buffers, MQTT state), re-creates the engine over the same arena, and evaluates the new script — no reboot
+- **Visible Failures**: If the new script fails to run, the error is shown on the display and over serial; after two failed restart attempts the device enters safe mode and waits for a corrected `/load` or `/restart_app`
+
+**Notes:**
+- The switch applies to the current session only. To change the script used on the next boot, also run `/config set script weather.js`
 
 **Use Cases:**
 - Switch between different applications for testing
 - Deploy new versions without SD card removal
 - A/B testing of application variants
 - Quick application switching for demonstrations
+
+#### `/restart_app`
+Restarts the currently loaded JavaScript application in place — same teardown and re-evaluation as `/load`, but with the current script. The device does not reboot.
+
+**Usage:**
+```
+WebScreen> /restart_app
+[OK] JS app restart requested (in-place, no reboot)
+```
+
+**Use Cases:**
+- Recover from a wedged or out-of-memory script without power-cycling
+- Re-run a script after editing it with `/write` or `/upload`
+- Leave safe mode after fixing a failing script
+
+#### `/gc`
+Runs a JavaScript garbage collection at the next safe point and reports the resulting arena usage.
+
+**Usage:**
+```
+WebScreen> /gc
+[OK] GC complete: JS arena 42.3 KB / 256.0 KB used
+
+WebScreen> /gc
+[ERROR] Garbage collection unavailable (JS engine not running)
+```
+
+**Use Cases:**
+- Check how much of the arena is live data versus garbage
+- Diagnose memory leaks: a steadily growing post-GC usage means the script is retaining objects
 
 ### Network and System Commands
 
@@ -361,6 +451,7 @@ Live Monitor - Press any key to stop
 **Features:**
 - **Real-time Updates**: Refreshes every second
 - **Non-blocking**: Press any key to stop
+- **Auto-stop**: Ends automatically after 30 seconds without input
 - **Timestamped**: Each update shows current time
 - **ANSI Formatting**: Clean single-line updates
 
@@ -569,8 +660,7 @@ Enter JavaScript code. End with a line containing only 'END':
 [OK] Script saved: /prototype.js (32 bytes)
 
 WebScreen> /load prototype.js
-[OK] Script queued for loading: /prototype.js
-[OK] Restarting to load new script...
+[OK] Loading script: /prototype.js
 ```
 
 **2. Monitor Resources:**
@@ -787,7 +877,7 @@ port.on('data', (data) => {
 ## Command Implementation Details
 
 ### Technical Architecture
-- Commands are processed in both `fallback.cpp` and `dynamic_js.cpp`
+- Commands are implemented in `serial_commands.cpp` and dispatched from both fallback and dynamic JS modes
 - Command parsing uses Arduino String class for simplicity
 - JSON configuration uses ArduinoJson library
 - File operations use ESP32 SD_MMC driver

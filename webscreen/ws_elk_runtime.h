@@ -65,6 +65,11 @@ static void elk_teardown_comm() {
   g_mqttCallbackName[0] = '\0';
   g_mqttMsgPending = false;
   g_mqttMsgReady = false;
+  // Disarm auto-reconnect: the stored credentials/subscription belong to the
+  // old script — without this, the maintain loop would resurrect the old
+  // broker session under the new app.
+  g_mqttHaveCreds = false;
+  g_mqttLastSubTopic[0] = '\0';
   g_http_headers.clear();
   g_js_gc_requested = false;
 }

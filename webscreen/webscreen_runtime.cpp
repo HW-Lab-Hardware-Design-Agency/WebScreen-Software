@@ -338,20 +338,69 @@ static volatile bool g_js_restart_requested = false;
 static char g_js_restart_reason[64] = "";
 static uint32_t g_js_restart_failures = 0;
 static const uint32_t JS_RESTART_FAILURE_LIMIT = 2;
-static bool g_js_safe_mode = false;  // Restarts kept failing; wait for user
+static volatile bool g_js_safe_mode = false;  // Restarts kept failing; wait for user
+// Script switch requested by /load. Requesters write this fixed buffer (a
+// String would be freed+reallocated under the JS task's feet); the JS task
+// alone assigns g_current_script_file, at restart time.
+static char g_js_pending_script[96] = "";
+// Guards reason/pending-script/safe-mode handoff between loopTask and JS task.
+static portMUX_TYPE g_js_restart_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Give-up ladder for AUTOMATIC restarts (timer error streaks): a script that
+// boots clean but whose timer callback always errors would otherwise restart
+// successfully forever (eval OK resets the failure counter), churning the
+// screen every ~1s. Three streak-triggered restarts without a healthy hour
+// of the app in between park the device in safe mode instead.
+static uint32_t g_js_auto_restart_cycles = 0;
+static uint32_t g_js_last_auto_restart_ms = 0;
+static const uint32_t JS_AUTO_RESTART_CYCLE_LIMIT = 3;
+static const uint32_t JS_HEALTHY_INTERVAL_MS = 60000;
 
 void webscreen_runtime_request_restart(const char *reason) {
+  taskENTER_CRITICAL(&g_js_restart_mux);
   strlcpy(g_js_restart_reason, reason ? reason : "unspecified", sizeof(g_js_restart_reason));
-  g_js_safe_mode = false;  // An explicit request always gets a fresh try
+  g_js_safe_mode = false;  // An explicit USER request always gets a fresh try
+  g_js_auto_restart_cycles = 0;
   g_js_restart_requested = true;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+}
+
+// Automatic escalation (elk_timer_cb error streak). Unlike an explicit
+// request this must not lift safe mode — leftover timers of a broken script
+// erroring against a parked engine would otherwise un-park it forever.
+void webscreen_runtime_request_restart_auto(const char *reason) {
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  if (g_js_safe_mode) {
+    taskEXIT_CRITICAL(&g_js_restart_mux);
+    return;  // Parked: only /restart_app or /load may revive the app
+  }
+  uint32_t now = WEBSCREEN_MILLIS();
+  if (now - g_js_last_auto_restart_ms > JS_HEALTHY_INTERVAL_MS) {
+    g_js_auto_restart_cycles = 0;  // App ran healthy for a while — fresh ladder
+  }
+  g_js_last_auto_restart_ms = now;
+  g_js_auto_restart_cycles++;
+  strlcpy(g_js_restart_reason, reason ? reason : "unspecified", sizeof(g_js_restart_reason));
+  g_js_restart_requested = true;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
 }
 
 bool webscreen_runtime_load_new_script(const char *script_file) {
   if (!script_file || !SD_MMC.exists(script_file)) {
     return false;
   }
-  g_current_script_file = script_file;
+  // A truncated path would pass the exists() check above but fail to load
+  // after tearing down the running app — reject oversized paths instead.
+  if (strlen(script_file) >= sizeof(g_js_pending_script)) {
+    WEBSCREEN_DEBUG_PRINTF("load_new_script: path too long (%u chars, max %u)\n",
+                           (unsigned)strlen(script_file),
+                           (unsigned)(sizeof(g_js_pending_script) - 1));
+    return false;
+  }
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(g_js_pending_script, script_file, sizeof(g_js_pending_script));
   g_js_restart_failures = 0;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
   webscreen_runtime_request_restart("script change");
   return true;
 }
@@ -389,8 +438,21 @@ static bool webscreen_runtime_eval_script(char *err_buf, size_t err_len) {
 // Runs ON the JS task. Teardown order matters: UI first (deletes lv_img
 // widgets referencing RAM-image descriptors), then media buffers, then comm.
 static void webscreen_runtime_perform_inplace_restart(void) {
+  // Consume the restart parameters under the lock (requests arrive from
+  // loopTask); no heap operations inside the critical section.
+  char reason[sizeof(g_js_restart_reason)];
+  char pending[sizeof(g_js_pending_script)];
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(reason, g_js_restart_reason, sizeof(reason));
+  strlcpy(pending, g_js_pending_script, sizeof(pending));
+  g_js_pending_script[0] = '\0';
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+  if (pending[0] != '\0') {
+    g_current_script_file = pending;  // String writes happen only on this task
+  }
+
   WEBSCREEN_DEBUG_PRINTF("In-place JS app restart (reason: %s, script: %s)\n",
-                         g_js_restart_reason, g_current_script_file.c_str());
+                         reason, g_current_script_file.c_str());
 
   elk_teardown_ui();
   elk_teardown_media();
@@ -409,6 +471,29 @@ static void webscreen_runtime_perform_inplace_restart(void) {
             webscreen_runtime_eval_script(err, sizeof(err));
 
   if (ok) {
+    if (g_js_auto_restart_cycles >= JS_AUTO_RESTART_CYCLE_LIMIT) {
+      // The script evals clean but its timer callbacks keep erroring badly
+      // enough to trigger restart after restart — restarting again would
+      // churn the screen forever. Park instead; the timers the fresh eval
+      // just created must go, or their error streaks would request again.
+      delete_all_elk_timers();
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+               "WebScreen: script '%s' keeps failing in its timer callbacks.\n\n"
+               "Fix the script, then run /load or /restart_app.",
+               g_current_script_file.c_str());
+      webscreen_runtime_show_error_screen(msg);
+      // Timers are gone, so no AUTO request can race this window — but an
+      // explicit /load or /restart_app from loopTask can; honor it instead
+      // of trapping it under safe mode (explicit requests reset the ladder).
+      taskENTER_CRITICAL(&g_js_restart_mux);
+      if (!g_js_restart_requested) {
+        g_js_safe_mode = true;
+      }
+      taskEXIT_CRITICAL(&g_js_restart_mux);
+      WEBSCREEN_DEBUG_PRINTLN("JS app parked in safe mode (timer-error restart loop)");
+      return;
+    }
     g_js_restart_failures = 0;
     WEBSCREEN_DEBUG_PRINTLN("JS app restarted successfully");
     return;
@@ -420,13 +505,23 @@ static void webscreen_runtime_perform_inplace_restart(void) {
   if (g_js_restart_failures >= JS_RESTART_FAILURE_LIMIT) {
     // Safe mode: stop retrying, show the error, keep the device alive —
     // serial commands still work, so the user can fix the script and /load.
+    // A partially-evaluated script may have created timers before failing;
+    // left alive they would error every tick and their streak would request
+    // an auto restart, churning the error screen. Remove them first.
+    delete_all_elk_timers();
     char msg[256];
     snprintf(msg, sizeof(msg),
              "WebScreen: script '%s' keeps failing:\n%s\n\n"
              "Fix the script, then run /load or /restart_app.",
              g_current_script_file.c_str(), err);
     webscreen_runtime_show_error_screen(msg);
-    g_js_safe_mode = true;
+    // Don't trap a fresh request that raced this failing restart: a /load
+    // that landed after our last check deserves its try, not safe mode.
+    taskENTER_CRITICAL(&g_js_restart_mux);
+    if (!g_js_restart_requested) {
+      g_js_safe_mode = true;
+    }
+    taskEXIT_CRITICAL(&g_js_restart_mux);
   } else {
     g_js_restart_requested = true;  // One more attempt
   }
@@ -462,9 +557,9 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
       g_js_gc_requested = false;
       js_gc(js);
     }
-    if (g_mqtt_enabled) {
-      webscreen_runtime_wifi_mqtt_maintain_loop();
-    }
+    // Unconditional: the maintain loop also handles WiFi reconnection,
+    // which non-MQTT apps need too (it gates the MQTT work internally).
+    webscreen_runtime_wifi_mqtt_maintain_loop();
     lv_timer_handler();
     vTaskDelay(pdMS_TO_TICKS(5));
   }
@@ -488,7 +583,11 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     g_was_wifi_connected = false;
     unsigned long now = WEBSCREEN_MILLIS();
 
-    if (now - g_last_wifi_reconnect_attempt > 10000) {
+    // Only reconnect when credentials were ever configured: offline devices
+    // (no SSID in webscreen.json) are a supported mode, and reconnect-spam
+    // against an empty STA config is just radio churn and log noise.
+    if (WiFi.SSID().length() > 0 &&
+        now - g_last_wifi_reconnect_attempt > 10000) {
       g_last_wifi_reconnect_attempt = now;
       WEBSCREEN_DEBUG_PRINTLN("Wi-Fi disconnected, attempting reconnection...");
       WiFi.reconnect();  // Previously this only logged — never reconnected
@@ -510,11 +609,18 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
       g_mqttClient.loop();
     } else {
       // Broker dropped — retry with the credentials from the last successful
-      // mqtt_connect() (elk_mqtt_try_reconnect in lvgl_elk.h), 5s backoff.
+      // mqtt_connect() (elk_mqtt_try_reconnect in lvgl_elk.h). Each attempt
+      // can block this task (the LVGL owner) up to the ~5s socket timeout,
+      // so back off exponentially while the broker stays down.
+      static unsigned long s_mqtt_backoff_ms = 5000;
       unsigned long now = WEBSCREEN_MILLIS();
-      if (now - g_last_mqtt_reconnect_attempt > 5000) {
+      if (now - g_last_mqtt_reconnect_attempt > s_mqtt_backoff_ms) {
         g_last_mqtt_reconnect_attempt = now;
-        elk_mqtt_try_reconnect();
+        if (elk_mqtt_try_reconnect()) {
+          s_mqtt_backoff_ms = 5000;
+        } else if (s_mqtt_backoff_ms < 60000) {
+          s_mqtt_backoff_ms *= 2;
+        }
       }
     }
     // Messages are queued by onMqttMessage callback.

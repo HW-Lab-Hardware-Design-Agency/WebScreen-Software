@@ -556,11 +556,17 @@ static inline uint8_t lookahead(struct js *js) {
   return tok;
 }
 
-static void mkscope(struct js *js) {
+static bool mkscope(struct js *js) {
   assert((js->flags & F_NOEXEC) == 0);
   jsoff_t prev = (jsoff_t)vdata(js->scope);
-  js->scope = mkobj(js, prev);
+  jsval_t scope = mkobj(js, prev);
+  // On OOM mkobj returns an error value; storing it as the scope would make
+  // every subsequent property lookup walk garbage. Keep the old scope and
+  // report failure so callers can propagate the OOM error.
+  if (is_err(scope)) return false;
+  js->scope = scope;
   // printf("ENTER SCOPE %u, prev %u\n", (jsoff_t) vdata(js->scope), prev);
+  return true;
 }
 
 static void delscope(struct js *js) {
@@ -570,7 +576,7 @@ static void delscope(struct js *js) {
 
 static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
-  if (create_scope) mkscope(js);  // Enter new scope
+  if (create_scope && !mkscope(js)) return js_mkerr(js, "oom");  // Enter new scope
   js->consumed = 1;
   // jsoff_t pos = js->pos;
   while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !is_err(res)) {
@@ -725,7 +731,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen) {
   // printf("JSCALL [%.*s] -> %.*s\n", (int) js->clen, js->code, (int) fnlen,
   // fn);
   // printf("JSCALL, nogc %u [%.*s]\n", js->nogc, (int) fnlen, fn);
-  mkscope(js);  // Create function call scope
+  if (!mkscope(js)) return js_mkerr(js, "oom");  // Create function call scope
   // Loop over arguments list "(a, b)" and set scope variables
   while (fnpos < fnlen) {
     fnpos = skiptonext(fn, fnlen, fnpos);          // Skip to the identifier
@@ -1225,7 +1231,7 @@ static jsval_t js_for(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t v, res = js_mkundef();
   jsoff_t pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-  if (exe) mkscope(js);  // Enter new scope
+  if (exe && !mkscope(js)) return js_mkerr(js, "oom");  // Enter new scope
   if (!expect(js, TOK_FOR, &res)) goto done;
   if (!expect(js, TOK_LPAREN, &res)) goto done;
 
@@ -1256,6 +1262,13 @@ static jsval_t js_for(struct js *js) {
   if (is_err2(&v, &res)) goto done;
   pos4 = js->pos;  // end of body
   while (!(flags & F_NOEXEC)) {
+    // Count loop ITERATIONS against the statement budget too: an empty body
+    // (for(;;){}) executes zero statements per spin, so counting only in
+    // js_stmt would let it run forever.
+    if (js->maxsteps != 0 && ++js->steps > js->maxsteps) {
+      res = js_mkerr(js, "step limit");
+      goto done;
+    }
     js->flags = flags, js->pos = pos1, js->consumed = 1;
     if (next(js) != TOK_SEMICOLON) {     // Is condition specified?
       v = resolveprop(js, js_expr(js));  // Yes. check condition
@@ -1320,7 +1333,11 @@ static jsval_t js_stmt(struct js *js) {
   // mid-call dangles them ("; expected" corruption). F_CALL covers the whole
   // function-body execution window, making top-level statement boundaries the
   // only — and safe — auto-GC points.
-  if (js->brk > js->gct && !(js->flags & F_CALL)) js_gc(js);
+  // F_NOEXEC must also block GC: js_func_literal parses function bodies via
+  // js_block -> js_stmt MID-EXPRESSION (F_CALL clear at top level), while
+  // C frames hold unrooted arena temporaries (partially built object
+  // literals, binop operands) that compaction would delete or move.
+  if (js->brk > js->gct && !(js->flags & (F_CALL | F_NOEXEC))) js_gc(js);
   // Statement budget: turns a runaway script (while(true){}) into a JS error
   // the host can handle, instead of a task starved forever inside js_eval().
   if (js->maxsteps != 0 && ++js->steps > js->maxsteps)
@@ -1437,8 +1454,17 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   js->code = buf;
   js->clen = (jsoff_t)len;
   js->pos = 0;
-  js->cstk = &res;
-  js->steps = 0;  // Fresh statement budget per top-level eval
+  // Function bodies execute through a NESTED js_eval (call_js sets F_CALL
+  // before recursing here). The C-stack baseline, its high-water mark and
+  // the statement budget must only reset for TOP-LEVEL evals — resetting
+  // them per nested eval would re-baseline recursion depth at every call
+  // (making the maxcss guard blind) and refill the step budget inside
+  // while(true){fn();} loops (making the step limit unreachable).
+  if (!(js->flags & F_CALL)) {
+    js->cstk = &res;
+    js->css = 0;
+    js->steps = 0;
+  }
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
   }

@@ -27,19 +27,20 @@ static int store_lv_obj(lv_obj_t *obj);
 static int alloc_tracked_style(void);
 static lv_style_t *get_lv_style(int handle);
 
+// Forward declaration for the sub-object registry sweep (defined at the end
+// of ws_lvgl_charts.h, after every registry it touches) so js_obj_delete can
+// release chart series / meter scales / meter indicators / spans owned by the
+// widget subtree it is about to delete.
+static void release_subobjects_owned_by(lv_obj_t *root);
+
 static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs) {  // We expect at least 3 args: text, x, y. 4th arg is optional fontSize
   if (nargs < 3) {
     LOG("draw_label: expects text, x, y, [fontSize]");
     return js_mknull();
   }
 
-  const char *rawText = js_str(js, args[0]);
-  if (!rawText) return js_mknull();
-  String txt(rawText);
-  if (txt.startsWith("\"") && txt.endsWith("\"")) {
-    txt.remove(0, 1);
-    txt.remove(txt.length() - 1, 1);
-  }
+  String txt = js_arg_str(js, args[0]);
+  if (txt.isEmpty()) return js_mknull();
 
   int x = (int)js_getnum(args[1]);
   int y = (int)js_getnum(args[2]);
@@ -99,19 +100,15 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
     LOG("show_image: expects path,x,y");
     return js_mknull();
   }
-  const char *rawPath = js_str(js, args[0]);
+  String path = js_arg_str(js, args[0]);
   int x = (int)js_getnum(args[1]);
   int y = (int)js_getnum(args[2]);
 
-  if (!rawPath) {
+  if (path.isEmpty()) {
     LOG("show_image: invalid path");
     return js_mknull();
   }
   // Build "S:/filename"
-  String path(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length() - 1);
-  }
   String lvglPath = "S:" + path;
 
   lv_obj_t *img = lv_img_create(lv_scr_act());
@@ -125,7 +122,7 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
 /******************************************************************************
  * G2) create_image, rotate_obj, move_obj, animate_obj (Object Handle Approach)
  ******************************************************************************/
-// std::vector‑based registry ----
+// std::vector-based registry
 #include <vector>
 #include <mutex>
 static std::vector<lv_obj_t *> g_objects;
@@ -170,15 +167,11 @@ static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
     LOG("create_image: expects path,x,y");
     return js_mknum(-1);
   }
-  const char *rawPath = js_str(js, args[0]);
+  String path = js_arg_str(js, args[0]);
   int x = (int)js_getnum(args[1]);
   int y = (int)js_getnum(args[2]);
-  if (!rawPath) return js_mknum(-1);
+  if (path.isEmpty()) return js_mknum(-1);
 
-  String path(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length() - 1);
-  }
   String fullPath = "S:" + path;
 
   lv_obj_t *img = lv_img_create(lv_scr_act());
@@ -197,10 +190,10 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
     return js_mknum(-1);
   }
 
-  const char *rawPath = js_str(js, args[0]);
+  String path = js_arg_str(js, args[0]);
   int x = (int)js_getnum(args[1]);
   int y = (int)js_getnum(args[2]);
-  if (!rawPath) return js_mknum(-1);
+  if (path.isEmpty()) return js_mknum(-1);
 
   int slot = -1;
   for (int i = 0; i < MAX_RAM_IMAGES; i++) {
@@ -214,11 +207,6 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
     return js_mknum(-1);
   }
   RamImage *ri = &g_ram_images[slot];
-
-  String path = String(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length() - 1);
-  }
 
   if (!load_image_file_into_ram(path.c_str(), ri)) {
     LOG("Could not load image into RAM");
@@ -379,6 +367,11 @@ static jsval_t js_obj_delete(struct js *js, jsval_t *args, int nargs) {
       }
     }
   }
+  // Same sweep for the sub-object registries: lv_obj_del's destructors free
+  // chart series, meter scales/indicators and spans together with their
+  // widget, so any slot owned by this subtree must be nulled first or a stale
+  // handle would pass validation and reach freed memory.
+  release_subobjects_owned_by(obj);
   lv_obj_del(obj);
   LOGF("obj_delete: handle %d deleted\n", handle);
   return js_mknull();

@@ -335,44 +335,66 @@ static bool elk_http_tls_heap_ok(void) {
   return true;
 }
 
-static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkstr(js, "", 0);
-  const char *rawUrl = js_str(js, args[0]);
-  if (!rawUrl) return js_mkstr(js, "", 0);
-
-  // Convert to Arduino String
-  String url(rawUrl);
-
-  // Strip quotes if needed
-  if (url.startsWith("\"") && url.endsWith("\"")) {
-    url.remove(0, 1);
-    url.remove(url.length() - 1, 1);
+// Shared tail of one HTTP attempt: write the request, read the body, close.
+// Takes the base WiFiClient so the TLS client passes through unchanged
+// (readHttpResponseBody relies on the same inheritance).
+static String elk_http_exchange(WiFiClient &client, const char *method, const String &host,
+                                const String &path, const String *body, const char *contentType) {
+  client.print(String(method) + " " + path + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+  for (auto &hdr : g_http_headers) {
+    client.print(hdr.first + ": " + hdr.second + "\r\n");
   }
+  if (body != NULL) {
+    client.print(String("Content-Type: ") + contentType + "\r\n");
+    client.printf("Content-Length: %d\r\n", body->length());
+  }
+  client.print("Connection: close\r\n\r\n");
+  if (body != NULL) {
+    client.print(*body);
+  }
+  String response = readHttpResponseBody(client);
+  client.stop();
+  return response;
+}
 
-  // Determine if HTTPS or HTTP
+// Shared scaffold for the http_get / http_post / http_delete bindings: URL
+// parse (scheme, host[:port] with https->443 / http->80 defaults, path),
+// TLS-vs-plain client, heap gate, request, response. Returns the exact string
+// the binding hands back to JS — including the literal "ERROR: low memory"
+// from the per-attempt TLS heap gate.
+//
+// maxRetries > 0 selects the historical GET behavior wholesale: retry with
+// 1s/2s/4s backoff, explicit 15s socket / 10s connect timeouts, and verbose
+// per-step logging. Single-shot verbs (maxRetries == 0) keep library-default
+// timeouts, the quiet "manual approach" logging, and bail out on connect
+// failure without the trailing "Done ..." log. These quirks are preserved
+// observable behavior, not style — do not unify them here.
+static String elk_http_request(const char *method, const String &url, const String *body,
+                               const char *contentType, int maxRetries,
+                               const char *logName, const char *connectFailMsg) {
+  // Determine if HTTPS or HTTP; no scheme prefix => assume HTTPS
   bool useSSL = true;
   const String HTTPS_PREFIX = "https://";
   const String HTTP_PREFIX = "http://";
-
-  String urlWithoutPrefix = url;
-  if (url.startsWith(HTTPS_PREFIX)) {
-    urlWithoutPrefix = url.substring(HTTPS_PREFIX.length());
+  String rest = url;
+  if (rest.startsWith(HTTPS_PREFIX)) {
+    rest.remove(0, HTTPS_PREFIX.length());
     useSSL = true;
-  } else if (url.startsWith(HTTP_PREFIX)) {
-    urlWithoutPrefix = url.substring(HTTP_PREFIX.length());
+  } else if (rest.startsWith(HTTP_PREFIX)) {
+    rest.remove(0, HTTP_PREFIX.length());
     useSSL = false;
-  } else {
-    useSSL = true;
   }
 
-  int slashPos = urlWithoutPrefix.indexOf('/');
+  // Find first slash => host + path
+  int slashPos = rest.indexOf('/');
   String hostWithPort, path;
   if (slashPos < 0) {
-    hostWithPort = urlWithoutPrefix;
+    hostWithPort = rest;
     path = "/";
   } else {
-    hostWithPort = urlWithoutPrefix.substring(0, slashPos);
-    path = urlWithoutPrefix.substring(slashPos);
+    hostWithPort = rest.substring(0, slashPos);
+    path = rest.substring(slashPos);
   }
 
   // Parse port from host (e.g., "192.168.1.20:2000" or "example.com:8080")
@@ -389,15 +411,22 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
     host = hostWithPort;
   }
 
-  LOG("\njs_http_get => " + String(useSSL ? "HTTPS" : "HTTP"));
+  const bool verbose = (maxRetries > 0);
+  if (verbose) {
+    LOG(String("\n") + logName + " => " + (useSSL ? "HTTPS" : "HTTP"));
+  } else {
+    LOG(String("\n") + logName + " => manual approach");
+  }
   LOG("Host: " + host);
   LOGF("Port: %d\n", port);
   LOG("Path: " + path);
+  if (body != NULL) {
+    LOGF("Body length=%d\n", body->length());
+  }
 
   String response;
-  const int MAX_RETRIES = 3;  // Up to 4 attempts total
 
-  for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (int attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       LOGF("Retry attempt %d...\n", attempt);
       // Exponential backoff: 1s, 2s, 4s between retries
@@ -407,63 +436,49 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
 
     if (useSSL) {
       if (!elk_http_tls_heap_ok()) {
-        return js_mkstr(js, "ERROR: low memory", 17);
+        return String("ERROR: low memory");  // Gated per attempt; returned to JS verbatim
       }
       WiFiClientSecure client;
-      client.setTimeout(15000);  // 15 second timeout for read/write operations
+      if (verbose) client.setTimeout(15000);  // 15 second timeout for read/write operations
       if (g_httpCAcert) {
         client.setCACert(g_httpCAcert);
-        LOG("Using CA cert for HTTPS");
+        if (verbose) LOG("Using CA cert for HTTPS");
       } else {
         client.setInsecure();
-        LOG("Using insecure mode for HTTPS");
+        if (verbose) LOG("Using insecure mode for HTTPS");
       }
 
-      LOGF("Connecting to %s:%d (HTTPS)...\n", host.c_str(), port);
-      if (!client.connect(host.c_str(), port, 10000)) {  // 10 second connection timeout
-        LOG("Connection failed!");
+      if (verbose) LOGF("Connecting to %s:%d (HTTPS)...\n", host.c_str(), port);
+      // Verbose (GET) uses a 10 second connection timeout; single-shot verbs
+      // keep the library default
+      bool connected = verbose ? client.connect(host.c_str(), port, 10000)
+                               : client.connect(host.c_str(), port);
+      if (!connected) {
+        LOG(connectFailMsg);
+        if (maxRetries == 0) return String("");  // Single-shot: no "Done ..." log
         continue;  // Retry
       }
-      LOG("Connected!");
+      if (verbose) LOG("Connected!");
 
-      client.print(String("GET ") + path + " HTTP/1.1\r\n");
-      client.print(String("Host: ") + host + "\r\n");
-      for (auto &hdr : g_http_headers) {
-        client.print(hdr.first);
-        client.print(": ");
-        client.print(hdr.second);
-        client.print("\r\n");
-      }
-      client.print("Connection: close\r\n\r\n");
-
-      response = readHttpResponseBody(client);
-      client.stop();
+      response = elk_http_exchange(client, method, host, path, body, contentType);
     } else {
       WiFiClient client;
-      client.setTimeout(15000);  // 15 second timeout for read/write operations
+      if (verbose) client.setTimeout(15000);  // 15 second timeout for read/write operations
 
-      LOGF("Connecting to %s:%d (HTTP)...\n", host.c_str(), port);
-      if (!client.connect(host.c_str(), port, 10000)) {  // 10 second connection timeout
-        LOG("Connection failed!");
+      if (verbose) LOGF("Connecting to %s:%d (HTTP)...\n", host.c_str(), port);
+      bool connected = verbose ? client.connect(host.c_str(), port, 10000)
+                               : client.connect(host.c_str(), port);
+      if (!connected) {
+        LOG(connectFailMsg);
+        if (maxRetries == 0) return String("");  // Single-shot: no "Done ..." log
         continue;  // Retry
       }
-      LOG("Connected!");
+      if (verbose) LOG("Connected!");
 
-      client.print(String("GET ") + path + " HTTP/1.1\r\n");
-      client.print(String("Host: ") + host + "\r\n");
-      for (auto &hdr : g_http_headers) {
-        client.print(hdr.first);
-        client.print(": ");
-        client.print(hdr.second);
-        client.print("\r\n");
-      }
-      client.print("Connection: close\r\n\r\n");
-
-      response = readHttpResponseBody(client);
-      client.stop();
+      response = elk_http_exchange(client, method, host, path, body, contentType);
     }
 
-    LOGF("Response length: %d bytes\n", response.length());
+    if (verbose) LOGF("Response length: %d bytes\n", response.length());
 
     // If we got a response, break out of retry loop
     if (response.length() > 0) {
@@ -471,254 +486,47 @@ static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
     }
   }
 
-  if (response.length() == 0) {
-    LOG("HTTP GET failed after all retries!");
+  if (verbose) {
+    if (response.length() == 0) {
+      LOG("HTTP GET failed after all retries!");  // Only the retrying verb (GET) gets here
+    }
+  } else {
+    LOGF("Done %s. response size=%d\n", method, response.length());
   }
+  return response;
+}
 
+static jsval_t js_http_get(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkstr(js, "", 0);
+  String url = js_arg_str(js, args[0]);
+  // 3 retries => up to 4 attempts total
+  String response = elk_http_request("GET", url, NULL, NULL, 3,
+                                     "js_http_get", "Connection failed!");
   return js_mkstr(js, response.c_str(), response.length());
 }
 
 static jsval_t js_http_post(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkstr(js, "", 0);
-  const char *rawUrl = js_str(js, args[0]);
-  const char *body = js_str(js, args[1]);
-  if (!rawUrl || !body) return js_mkstr(js, "", 0);
-
-  // Convert to Arduino Strings for easy manipulation
-  String url(rawUrl);
-  String jsonBody(body);
-
-  // Strip quotes if any
-  if (url.startsWith("\"") && url.endsWith("\"")) {
-    url.remove(0, 1);
-    url.remove(url.length() - 1, 1);
-  }
-  if (jsonBody.startsWith("\"") && jsonBody.endsWith("\"")) {
-    jsonBody.remove(0, 1);
-    jsonBody.remove(jsonBody.length() - 1, 1);
-  }
-
-  // Determine if HTTPS or HTTP
-  bool useSSL = true;
-  const String HTTPS_PREFIX = "https://";
-  const String HTTP_PREFIX = "http://";
-  if (url.startsWith(HTTPS_PREFIX)) {
-    url.remove(0, HTTPS_PREFIX.length());
-    useSSL = true;
-  } else if (url.startsWith(HTTP_PREFIX)) {
-    url.remove(0, HTTP_PREFIX.length());
-    useSSL = false;
-  }
-
-  // Find first slash => host + path
-  int slashPos = url.indexOf('/');
-  String hostWithPort, path;
-  if (slashPos < 0) {
-    hostWithPort = url;
-    path = "/";
-  } else {
-    hostWithPort = url.substring(0, slashPos);
-    path = url.substring(slashPos);
-  }
-
-  // Parse port from host
-  String host;
-  int port = useSSL ? 443 : 80;
-  int colonPos = hostWithPort.indexOf(':');
-  if (colonPos > 0) {
-    host = hostWithPort.substring(0, colonPos);
-    port = hostWithPort.substring(colonPos + 1).toInt();
-    if (port <= 0 || port > 65535) {
-      port = useSSL ? 443 : 80;
-    }
-  } else {
-    host = hostWithPort;
-  }
-
-  LOG("\njs_http_post => manual approach");
-  LOG("Host: " + host);
-  LOGF("Port: %d\n", port);
-  LOG("Path: " + path);
-  LOGF("Body length=%d\n", jsonBody.length());
-
-  String response;
-
-  if (useSSL) {
-    if (!elk_http_tls_heap_ok()) {
-      return js_mkstr(js, "ERROR: low memory", 17);
-    }
-    WiFiClientSecure client;
-    if (g_httpCAcert) {
-      client.setCACert(g_httpCAcert);
-    } else {
-      client.setInsecure();
-    }
-
-    if (!client.connect(host.c_str(), port)) {
-      LOG("Connection failed (POST)!");
-      return js_mkstr(js, "", 0);
-    }
-
-    client.print(String("POST ") + path + " HTTP/1.1\r\n");
-    client.print(String("Host: ") + host + "\r\n");
-    for (auto &hdr : g_http_headers) {
-      client.print(hdr.first + ": " + hdr.second + "\r\n");
-    }
-    client.print("Content-Type: application/json\r\n");
-    client.printf("Content-Length: %d\r\n", jsonBody.length());
-    client.print("Connection: close\r\n\r\n");
-    client.print(jsonBody);
-
-    response = readHttpResponseBody(client);
-    client.stop();
-  } else {
-    WiFiClient client;
-    if (!client.connect(host.c_str(), port)) {
-      LOG("Connection failed (POST)!");
-      return js_mkstr(js, "", 0);
-    }
-
-    client.print(String("POST ") + path + " HTTP/1.1\r\n");
-    client.print(String("Host: ") + host + "\r\n");
-    for (auto &hdr : g_http_headers) {
-      client.print(hdr.first + ": " + hdr.second + "\r\n");
-    }
-    client.print("Content-Type: application/json\r\n");
-    client.printf("Content-Length: %d\r\n", jsonBody.length());
-    client.print("Connection: close\r\n\r\n");
-    client.print(jsonBody);
-
-    response = readHttpResponseBody(client);
-    client.stop();
-  }
-
-  LOGF("Done POST. response size=%d\n", response.length());
+  String url = js_arg_str(js, args[0]);
+  String jsonBody = js_arg_str(js, args[1]);
+  String response = elk_http_request("POST", url, &jsonBody, "application/json", 0,
+                                     "js_http_post", "Connection failed (POST)!");
   return js_mkstr(js, response.c_str(), response.length());
 }
 
 static jsval_t js_http_delete(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "", 0);
-  const char *rawUrl = js_str(js, args[0]);
-  if (!rawUrl) return js_mkstr(js, "", 0);
-
-  String url(rawUrl);
-
-  // Remove quotes if any
-  if (url.startsWith("\"") && url.endsWith("\"")) {
-    url.remove(0, 1);
-    url.remove(url.length() - 1, 1);
-  }
-
-  // Determine if HTTPS or HTTP
-  bool useSSL = true;
-  const String HTTPS_PREFIX = "https://";
-  const String HTTP_PREFIX = "http://";
-  if (url.startsWith(HTTPS_PREFIX)) {
-    url.remove(0, HTTPS_PREFIX.length());
-    useSSL = true;
-  } else if (url.startsWith(HTTP_PREFIX)) {
-    url.remove(0, HTTP_PREFIX.length());
-    useSSL = false;
-  }
-
-  // Split host/path
-  int slashPos = url.indexOf('/');
-  String hostWithPort, path;
-  if (slashPos < 0) {
-    hostWithPort = url;
-    path = "/";
-  } else {
-    hostWithPort = url.substring(0, slashPos);
-    path = url.substring(slashPos);
-  }
-
-  // Parse port from host
-  String host;
-  int port = useSSL ? 443 : 80;
-  int colonPos = hostWithPort.indexOf(':');
-  if (colonPos > 0) {
-    host = hostWithPort.substring(0, colonPos);
-    port = hostWithPort.substring(colonPos + 1).toInt();
-    if (port <= 0 || port > 65535) {
-      port = useSSL ? 443 : 80;
-    }
-  } else {
-    host = hostWithPort;
-  }
-
-  LOG("\njs_http_delete => manual approach");
-  LOG("Host: " + host);
-  LOGF("Port: %d\n", port);
-  LOG("Path: " + path);
-
-  String response;
-
-  if (useSSL) {
-    if (!elk_http_tls_heap_ok()) {
-      return js_mkstr(js, "ERROR: low memory", 17);
-    }
-    WiFiClientSecure client;
-    if (g_httpCAcert) {
-      client.setCACert(g_httpCAcert);
-    } else {
-      client.setInsecure();
-    }
-
-    if (!client.connect(host.c_str(), port)) {
-      LOG("Connection failed (DELETE)!");
-      return js_mkstr(js, "", 0);
-    }
-
-    client.print(String("DELETE ") + path + " HTTP/1.1\r\n");
-    client.print(String("Host: ") + host + "\r\n");
-    for (auto &hdr : g_http_headers) {
-      client.print(hdr.first + ": " + hdr.second + "\r\n");
-    }
-    client.print("Connection: close\r\n\r\n");
-
-    response = readHttpResponseBody(client);
-    client.stop();
-  } else {
-    WiFiClient client;
-    if (!client.connect(host.c_str(), port)) {
-      LOG("Connection failed (DELETE)!");
-      return js_mkstr(js, "", 0);
-    }
-
-    client.print(String("DELETE ") + path + " HTTP/1.1\r\n");
-    client.print(String("Host: ") + host + "\r\n");
-    for (auto &hdr : g_http_headers) {
-      client.print(hdr.first + ": " + hdr.second + "\r\n");
-    }
-    client.print("Connection: close\r\n\r\n");
-
-    response = readHttpResponseBody(client);
-    client.stop();
-  }
-
-  LOGF("Done DELETE. response size=%d\n", response.length());
+  String url = js_arg_str(js, args[0]);
+  String response = elk_http_request("DELETE", url, NULL, NULL, 0,
+                                     "js_http_delete", "Connection failed (DELETE)!");
   return js_mkstr(js, response.c_str(), response.length());
 }
 
 static jsval_t js_http_set_header(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkfalse();
 
-  const char *key = js_str(js, args[0]);
-  const char *value = js_str(js, args[1]);
-  if (!key || !value) return js_mkfalse();
-
-  // Convert to Arduino Strings for easy storage
-  String k(key), v(value);
-
-  // Optionally strip leading/trailing quotes if needed
-  if (k.startsWith("\"") && k.endsWith("\"")) {
-    k.remove(0, 1);
-    k.remove(k.length() - 1, 1);
-  }
-  if (v.startsWith("\"") && v.endsWith("\"")) {
-    v.remove(0, 1);
-    v.remove(v.length() - 1, 1);
-  }
+  String k = js_arg_str(js, args[0]);
+  String v = js_arg_str(js, args[1]);
 
   // Append to our global vector
   g_http_headers.push_back(std::make_pair(k, v));
@@ -733,14 +541,7 @@ static jsval_t js_http_clear_headers(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t js_http_set_ca_cert_from_sd(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
-  const char *rawPath = js_str(js, args[0]);
-  if (!rawPath) return js_mkfalse();
-
-  // Strip quotes if present
-  String path(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length() - 1);
-  }
+  String path = js_arg_str(js, args[0]);
 
   // Open file from SD
   File f = SD_MMC.open(path, FILE_READ);

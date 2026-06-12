@@ -110,21 +110,6 @@ static jsval_t js_style_set_text_font(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-// style_set_text_align(styleHandle, align)
-static jsval_t js_style_set_text_align(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int alignVal = (int)js_getnum(args[1]);  // e.g. 0 for LEFT, 1 for CENTER, etc.
-
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-
-  // In LVGL 8.x: LV_TEXT_ALIGN_LEFT=0, _CENTER=1, _RIGHT=2, _AUTO=3
-  lv_style_set_text_align(st, (lv_text_align_t)alignVal);
-
-  return js_mknull();
-}
-
 // create_style()
 static jsval_t js_create_style(struct js *js, jsval_t *args, int nargs) {
   int handle = alloc_tracked_style();
@@ -151,362 +136,90 @@ static jsval_t js_obj_add_style(struct js *js, jsval_t *args, int nargs) {
 }
 
 // ***Full style property setters***
-static jsval_t js_style_set_radius(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int radius = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_radius(st, (lv_coord_t)radius);
-  return js_mknull();
-}
+//
+// All mechanical js_style_set_* bindings share one shape:
+// (styleHandle, value) -> look up the style, apply one lv_style_set_* call,
+// return null. They are generated from the table below; only
+// js_style_set_text_font stays hand-written (size -> font pointer lookup,
+// defined above).
+//
+// argtype is the intermediate C type the JS number is parsed into; cast is
+// the type used at the LVGL call site. Both are kept per property so the
+// generated code converts exactly like the former hand-written functions.
+#define WS_STYLE_SETTER_NUM(fn, lv_setter, argtype, cast)        \
+  static jsval_t fn(struct js *js, jsval_t *args, int nargs) {   \
+    if (nargs < 2) return js_mknull();                           \
+    int styleH = (int)js_getnum(args[0]);                        \
+    argtype val = (argtype)js_getnum(args[1]);                   \
+    lv_style_t *st = get_lv_style(styleH);                       \
+    if (!st) return js_mknull();                                 \
+    lv_setter(st, (cast)val);                                    \
+    return js_mknull();                                          \
+  }
 
-static jsval_t js_style_set_bg_opa(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int opaVal = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_bg_opa(st, (lv_opa_t)opaVal);
-  return js_mknull();
-}
+// Color variant: numeric hex argument goes through lv_color_hex().
+#define WS_STYLE_SETTER_COLOR(fn, lv_setter)                     \
+  static jsval_t fn(struct js *js, jsval_t *args, int nargs) {   \
+    if (nargs < 2) return js_mknull();                           \
+    int styleH = (int)js_getnum(args[0]);                        \
+    double color = js_getnum(args[1]);                           \
+    lv_style_t *st = get_lv_style(styleH);                       \
+    if (!st) return js_mknull();                                 \
+    lv_setter(st, lv_color_hex((uint32_t)color));                \
+    return js_mknull();                                          \
+  }
 
-static jsval_t js_style_set_bg_color(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);  // numeric hex
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_bg_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_color(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_border_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_width(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int bw = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_border_width(st, bw);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_opa(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int opa = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_border_opa(st, (lv_opa_t)opa);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_border_side(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int side = (int)js_getnum(args[1]);  // e.g. LV_BORDER_SIDE_BOTTOM|LV_BORDER_SIDE_RIGHT
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_border_side(st, side);
-  return js_mknull();
-}
+// Background / border
+WS_STYLE_SETTER_NUM(js_style_set_radius, lv_style_set_radius, int, lv_coord_t)
+WS_STYLE_SETTER_NUM(js_style_set_bg_opa, lv_style_set_bg_opa, int, lv_opa_t)
+WS_STYLE_SETTER_COLOR(js_style_set_bg_color, lv_style_set_bg_color)
+WS_STYLE_SETTER_COLOR(js_style_set_border_color, lv_style_set_border_color)
+WS_STYLE_SETTER_NUM(js_style_set_border_width, lv_style_set_border_width, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_border_opa, lv_style_set_border_opa, int, lv_opa_t)
+WS_STYLE_SETTER_NUM(js_style_set_border_side, lv_style_set_border_side, int, int)  // e.g. LV_BORDER_SIDE_BOTTOM|LV_BORDER_SIDE_RIGHT
 
 // Outline
-static jsval_t js_style_set_outline_width(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_outline_width(st, w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_outline_color(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double col = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_outline_color(st, lv_color_hex((uint32_t)col));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_outline_pad(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_outline_pad(st, pad);
-  return js_mknull();
-}
+WS_STYLE_SETTER_NUM(js_style_set_outline_width, lv_style_set_outline_width, int, int)
+WS_STYLE_SETTER_COLOR(js_style_set_outline_color, lv_style_set_outline_color)
+WS_STYLE_SETTER_NUM(js_style_set_outline_pad, lv_style_set_outline_pad, int, int)
 
 // Shadow
-static jsval_t js_style_set_shadow_width(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_shadow_width(st, w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_shadow_color(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_shadow_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_shadow_ofs_x(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int ofs = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_shadow_ofs_x(st, ofs);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_shadow_ofs_y(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int ofs = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_shadow_ofs_y(st, ofs);
-  return js_mknull();
-}
+WS_STYLE_SETTER_NUM(js_style_set_shadow_width, lv_style_set_shadow_width, int, int)
+WS_STYLE_SETTER_COLOR(js_style_set_shadow_color, lv_style_set_shadow_color)
+WS_STYLE_SETTER_NUM(js_style_set_shadow_ofs_x, lv_style_set_shadow_ofs_x, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_shadow_ofs_y, lv_style_set_shadow_ofs_y, int, int)
 
 // Image recolor, transform
-static jsval_t js_style_set_img_recolor(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_img_recolor(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
+WS_STYLE_SETTER_COLOR(js_style_set_img_recolor, lv_style_set_img_recolor)
+WS_STYLE_SETTER_NUM(js_style_set_img_recolor_opa, lv_style_set_img_recolor_opa, int, lv_opa_t)
+WS_STYLE_SETTER_NUM(js_style_set_transform_angle, lv_style_set_transform_angle, int, lv_coord_t)
 
-static jsval_t js_style_set_img_recolor_opa(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int opa = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_img_recolor_opa(st, (lv_opa_t)opa);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_transform_angle(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int angle = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_transform_angle(st, (lv_coord_t)angle);
-  return js_mknull();
-}
-
-// Text
-static jsval_t js_style_set_text_color(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_text_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_text_letter_space(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int space = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_text_letter_space(st, space);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_text_line_space(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int space = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_text_line_space(st, space);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_text_decor(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int decor = (int)js_getnum(args[1]);  // e.g. LV_TEXT_DECOR_UNDERLINE
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_text_decor(st, decor);
-  return js_mknull();
-}
+// Text (text_font is hand-written above)
+WS_STYLE_SETTER_NUM(js_style_set_text_align, lv_style_set_text_align, int, lv_text_align_t)  // LV_TEXT_ALIGN_LEFT=0, _CENTER=1, _RIGHT=2, _AUTO=3
+WS_STYLE_SETTER_COLOR(js_style_set_text_color, lv_style_set_text_color)
+WS_STYLE_SETTER_NUM(js_style_set_text_letter_space, lv_style_set_text_letter_space, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_text_line_space, lv_style_set_text_line_space, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_text_decor, lv_style_set_text_decor, int, int)  // e.g. LV_TEXT_DECOR_UNDERLINE
 
 // Line
-static jsval_t js_style_set_line_color(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double color = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_line_color(st, lv_color_hex((uint32_t)color));
-  return js_mknull();
-}
-
-static jsval_t js_style_set_line_width(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_line_width(st, w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_line_rounded(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  bool round = (bool)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_line_rounded(st, round);
-  return js_mknull();
-}
+WS_STYLE_SETTER_COLOR(js_style_set_line_color, lv_style_set_line_color)
+WS_STYLE_SETTER_NUM(js_style_set_line_width, lv_style_set_line_width, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_line_rounded, lv_style_set_line_rounded, bool, bool)
 
 // Padding
-static jsval_t js_style_set_pad_all(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_pad_all(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_left(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_pad_left(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_right(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_pad_right(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_top(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_pad_top(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_bottom(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_pad_bottom(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_ver(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_pad_ver(st, pad);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_pad_hor(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int pad = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_pad_hor(st, pad);
-  return js_mknull();
-}
+WS_STYLE_SETTER_NUM(js_style_set_pad_all, lv_style_set_pad_all, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_pad_left, lv_style_set_pad_left, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_pad_right, lv_style_set_pad_right, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_pad_top, lv_style_set_pad_top, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_pad_bottom, lv_style_set_pad_bottom, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_pad_ver, lv_style_set_pad_ver, int, int)
+WS_STYLE_SETTER_NUM(js_style_set_pad_hor, lv_style_set_pad_hor, int, int)
 
 // Some dimension-related style props
-static jsval_t js_style_set_width(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int w = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_width(st, (lv_coord_t)w);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_height(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  int h = (int)js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_height(st, (lv_coord_t)h);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_x(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double val = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_x(st, (lv_coord_t)val);
-  return js_mknull();
-}
-
-static jsval_t js_style_set_y(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mknull();
-  int styleH = (int)js_getnum(args[0]);
-  double val = js_getnum(args[1]);
-  lv_style_t *st = get_lv_style(styleH);
-  if (!st) return js_mknull();
-  lv_style_set_y(st, (lv_coord_t)val);
-  return js_mknull();
-}
+WS_STYLE_SETTER_NUM(js_style_set_width, lv_style_set_width, int, lv_coord_t)
+WS_STYLE_SETTER_NUM(js_style_set_height, lv_style_set_height, int, lv_coord_t)
+WS_STYLE_SETTER_NUM(js_style_set_x, lv_style_set_x, double, lv_coord_t)
+WS_STYLE_SETTER_NUM(js_style_set_y, lv_style_set_y, double, lv_coord_t)
 
 /******************************************************************************
  * H2) Additional object property functions
@@ -665,11 +378,17 @@ static jsval_t js_obj_set_style_base_dir(struct js *js, jsval_t *args, int nargs
 // index; apps that just pass the returned number back in keep working.
 static const int MAX_CHART_SERIES = 16;
 static lv_chart_series_t *g_chart_series[MAX_CHART_SERIES] = { nullptr };
+// Owning chart per slot: lv_obj_del frees a chart's series with it, so
+// js_obj_delete (via release_subobjects_owned_by) uses this to null every
+// slot owned by a deleted widget subtree. Only meaningful while the matching
+// g_chart_series entry is non-null.
+static lv_obj_t *g_chart_series_owner[MAX_CHART_SERIES] = { nullptr };
 
-static int store_chart_series(lv_chart_series_t *ser) {
+static int store_chart_series(lv_chart_series_t *ser, lv_obj_t *owner) {
   for (int i = 0; i < MAX_CHART_SERIES; i++) {
     if (!g_chart_series[i]) {
       g_chart_series[i] = ser;
+      g_chart_series_owner[i] = owner;
       return i;
     }
   }
@@ -781,7 +500,7 @@ static jsval_t js_lv_chart_add_series(struct js *js, jsval_t *args, int nargs) {
 
   lv_chart_series_t *ser = lv_chart_add_series(obj, lv_color_hex((uint32_t)col), (lv_chart_axis_t)axis);
   if (!ser) return js_mknum(-1);
-  int sh = store_chart_series(ser);
+  int sh = store_chart_series(ser, obj);
   if (sh < 0) {
     // No free slot: remove the series again so it cannot leak unreferenced.
     LOG("lv_chart_add_series: no free series slots");

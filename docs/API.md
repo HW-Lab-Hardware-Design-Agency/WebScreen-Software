@@ -39,11 +39,38 @@ The following functions are available in your JavaScript applications:
 - **mem_stats()**
   Print memory statistics (ESP32 heap and LVGL memory usage) to the serial console. Returns the free heap size in bytes. Useful for debugging memory issues.
 
+- **mem_info()**
+  Returns a JSON string describing all memory pools: internal heap (`heap_free`, `heap_min`, `heap_largest`), PSRAM (`psram_free`), and the JavaScript arena (`js_used`, `js_total`). All values are in bytes.
+  ```javascript
+  let info = mem_info();
+  print(info);  // {"heap_free":123456,"heap_min":98760,...,"js_used":40960,"js_total":262144}
+  let used = toNumber(parse_json_value(info, "js_used"));
+  ```
+
+- **gc()**
+  Request a JavaScript garbage collection. The collection runs at the next safe point (between timer callbacks), not immediately inside the call. Returns the number of free bytes in the JS arena before the collection.
+  ```javascript
+  let free_before = gc();
+  print("Arena free: " + numberToString(free_before));
+  ```
+
 - **delay(milliseconds)**
   Pause execution for the specified number of milliseconds.
 
-- **create_timer()**
-  Create a timer object for periodic execution.
+- **create_timer(function_name, period_ms)**
+  Create an LVGL timer that calls the named global function every `period_ms` milliseconds.
+  ```javascript
+  let update = function() { print("tick"); };
+  create_timer("update", 1000);
+  ```
+
+- **timer_delete(function_name)**
+  Stop and delete the timer created with `create_timer(function_name, period_ms)`. Returns `true` if a matching timer was found and deleted, `false` otherwise.
+  ```javascript
+  create_timer("update", 1000);
+  // ... later ...
+  timer_delete("update");
+  ```
 
 ### Display Control
 
@@ -218,6 +245,14 @@ if (wifi_status() && ntp_synced()) {
 - **mqtt_on_message(callback_function_name)**  
   Set the callback function name for handling incoming MQTT messages.
 
+- **mqtt_dropped()**
+  Returns the number of incoming MQTT messages that were lost because the single message slot was overwritten before the app consumed it, or because a payload was truncated. Useful for detecting that an app is polling too slowly.
+  ```javascript
+  if (mqtt_dropped() > 0) {
+    print("Losing MQTT messages - poll faster");
+  }
+  ```
+
 ### UI Drawing Functions
 
 - **draw_label(text, x, y)**  
@@ -230,11 +265,19 @@ if (wifi_status() && ntp_synced()) {
   Display an image from SD card at the specified position.
 
 - **show_gif_from_sd(filepath, x, y)**
-  Display an animated GIF from SD card at the specified position.
+  Display an animated GIF from SD card at the specified position. Loading a new GIF automatically frees the previous one's buffer.
   ```javascript
   show_gif_from_sd("/animation.gif", 100, 50)
   ```
   **Note:** For best performance, keep GIFs under 50KB. Large animated GIFs may cause memory issues.
+
+- **gif_free()**
+  Delete the GIF widget created by `show_gif_from_sd()` and free its PSRAM buffer. Returns `true` if anything was freed, `false` if no GIF was loaded.
+  ```javascript
+  show_gif_from_sd("/animation.gif", 100, 50);
+  // ... later, when the GIF is no longer needed ...
+  gif_free();
+  ```
 
 ### LVGL Widget Functions
 
@@ -252,11 +295,21 @@ if (wifi_status() && ntp_synced()) {
 
 #### Image Widgets
 
-- **create_image(parent)**  
-  Create a new image widget.
+- **create_image(filepath, x, y)**
+  Create an image widget from an SD card file at the given position. Returns an object handle, or -1 on failure.
 
-- **create_image_from_ram(parent, image_data)**  
-  Create an image widget from RAM data.
+- **create_image_from_ram(filepath, x, y)**
+  Load an image file from SD card into a PSRAM buffer (a "RAM image" slot, max 16) and create an image widget from it. Returns an object handle, or -1 on failure. The slot index used is printed to the serial log; slots are assigned lowest-free-first starting at 0.
+
+- **ram_image_free(slot)**
+  Free a RAM image slot's PSRAM buffer and mark the slot reusable. Returns `true` on success, `false` for an invalid or unused slot.
+  **Important:** if a live image widget still displays this slot, delete that widget first with `obj_delete()` — LVGL keeps a raw pointer to the buffer and would render freed memory.
+  ```javascript
+  let img = create_image_from_ram("/photo.bin", 0, 0);  // uses slot 0 if free
+  // ... later ...
+  obj_delete(img);
+  ram_image_free(0);
+  ```
 
 #### Object Manipulation
 
@@ -268,6 +321,14 @@ if (wifi_status() && ntp_synced()) {
 
 - **animate_obj(object, property, target_value, duration)**  
   Animate an object property over time.
+
+- **obj_delete(handle)**
+  Delete an object created through the handle-based API (and all of its children) and free its registry slot. Handles of deleted descendants are invalidated too, so they can never be served stale. Invalid handles are reported as an error instead of crashing.
+  ```javascript
+  let label = create_label(100, 50);
+  // ... later ...
+  obj_delete(label);
+  ```
 
 #### Object Properties
 
@@ -438,11 +499,13 @@ if (wifi_status() && ntp_synced()) {
 
 #### Meter Widget
 
+Scales and indicators are returned to JavaScript as small slot-index handles (not pointers): `lv_meter_add_scale()` returns a scale handle and the `lv_meter_add_*` indicator functions return indicator handles, with **-1 on failure**. Pass the returned handle back into the corresponding `lv_meter_set_*` functions; an invalid handle produces an error instead of crashing the device.
+
 - **lv_meter_create(parent)**  
-  Create a meter widget.
+  Create a meter widget. Returns an object handle.
 
 - **lv_meter_add_scale(meter)**  
-  Add a scale to the meter.
+  Add a scale to the meter. Returns a scale handle, or -1 on failure.
 
 - **lv_meter_set_scale_ticks(meter, scale, count, width, length, color)**  
   Configure scale tick marks.
@@ -454,16 +517,16 @@ if (wifi_status() && ntp_synced()) {
   Set the scale's value range and angular range.
 
 - **lv_meter_add_arc(meter, scale, width, color)**  
-  Add an arc indicator to the meter.
+  Add an arc indicator to the meter. Returns an indicator handle, or -1 on failure.
 
 - **lv_meter_add_scale_lines(meter, scale, color, width, length, r_mod)**  
-  Add scale lines to the meter.
+  Add scale lines to the meter. Returns an indicator handle, or -1 on failure.
 
 - **lv_meter_add_needle_line(meter, scale, width, color, r_mod)**  
-  Add a needle line indicator.
+  Add a needle line indicator. Returns an indicator handle, or -1 on failure.
 
 - **lv_meter_add_needle_img(meter, scale, img_src, pivot_x, pivot_y)**  
-  Add a needle image indicator.
+  Add a needle image indicator. Returns an indicator handle, or -1 on failure.
 
 - **lv_meter_set_indicator_value(meter, indicator, value)**  
   Set the value of an indicator.
@@ -486,13 +549,13 @@ if (wifi_status() && ntp_synced()) {
   Set spangroup display mode.
 
 - **lv_spangroup_new_span(spangroup)**  
-  Create a new span within the spangroup.
+  Create a new span within the spangroup. Returns a span handle (small slot index, max 16 spans), or -1 if no slot is free. Pass this handle to the `lv_span_set_text*` functions; an invalid handle produces an error instead of crashing.
 
 - **lv_span_set_text(span, text)**  
-  Set text content of a span.
+  Set text content of a span. The text is copied into LVGL-owned storage.
 
 - **lv_span_set_text_static(span, text)**  
-  Set static text content of a span.
+  Same as `lv_span_set_text()` — the name is kept for compatibility, but the text is always copied. (A truly static reference would point into the JS arena, which the garbage collector moves.)
 
 - **lv_spangroup_refr_mode(spangroup)**  
   Refresh the spangroup display.
@@ -602,6 +665,15 @@ if (response === null || response === "") {
 }
 ```
 
+### Runtime Guards
+
+Runaway scripts no longer crash or reboot the device — they get a JavaScript error instead:
+
+- **Step limit**: each evaluation (the initial script run, and each timer callback) has a statement budget of 2,000,000 statements. An infinite loop terminates with a `step limit` error.
+- **C-stack guard**: deeply recursive code terminates with a `C stack` error instead of overflowing the task stack and crashing the device.
+
+Errors raised in a timer callback are printed to the serial console together with arena and heap statistics. After 10 consecutive failing callbacks, the firmware restarts the JavaScript app in place (no device reboot); if the script keeps failing, the error is shown on the display and the device stays alive so you can fix the script over serial (`/load`, `/restart_app`).
+
 ## Performance Considerations
 
 - Use `delay()` appropriately to prevent blocking the system
@@ -696,7 +768,7 @@ The following widgets are **not available** to save memory:
 
 ## Memory Guidelines
 
-WebScreen uses the Elk JavaScript engine with **256KB of heap memory** allocated in PSRAM. To ensure stable operation:
+WebScreen uses the Elk JavaScript engine with **256KB of heap memory** (the "JS arena") allocated in PSRAM by default. The size is configurable with the flat `"js_heap_kb"` key in `webscreen.json` (clamped to 64-1024 KB). Garbage collection runs automatically when the arena fills up; use `mem_info()` and `gc()` to observe and influence it. To ensure stable operation:
 
 ### Script Size
 - Keep scripts under **3KB** for best stability

@@ -1,12 +1,17 @@
-// ws_elk_mqtt.h — fragment of the WebScreen Elk/LVGL bridge.
+// ws_elk_mqtt.h — fragment of the WebScreen Elk/LVGL bridge: MQTT support.
 //
 // NOT a standalone header: it is included exactly once, in order, by
 // lvgl_elk.h (which is itself included only by webscreen_runtime.cpp).
 // Symbols here may depend on every fragment included before it.
-// Split from the former 3,700-line lvgl_elk.h monolith; see lvgl_elk.h
-// for the include order.
-
-// MQTT message callback from PubSubClient
+//
+// Contents:
+//  - onMqttMessage(): PubSubClient receive callback feeding a single-slot
+//    message queue (never calls js_eval — Elk is not re-entrant)
+//  - processPendingMqttMessage(): promotes the queued message for JS polling
+//  - elk_mqtt_try_reconnect(): one reconnect + re-subscribe attempt with the
+//    last working credentials (backoff lives in the runtime maintain loop)
+//  - mqtt_* JS bindings: init, connect, publish, subscribe, loop, on_message,
+//    plus the has_message/get_payload/msg_clear/dropped polling API
 
 // Messages lost to single-slot overwrite or payload truncation — JS: mqtt_dropped()
 static uint32_t g_mqttDroppedCount = 0;
@@ -251,81 +256,5 @@ static jsval_t js_mqtt_on_message(struct js *js, jsval_t *args, int nargs) {
   Serial.print("[MQTT] JS callback name set to: ");
   LOG(g_mqttCallbackName);
   return js_mktrue();
-}
-
-// This function tries to connect to your MQTT broker
-
-bool doMqttConnect() {  // extern const char* g_mqttBroker;
-  // extern int         g_mqttPort;
-  // g_mqttClient.setServer(g_mqttBroker, g_mqttPort);
-
-  LOG("[MQTT] Checking broker connection...");
-
-  // Attempt to connect with e.g. a default clientID (or user/pass if needed)
-  bool ok = g_mqttClient.connect("WebScreenClient");
-  if (!ok) {  // Print the reason code: g_mqttClient.state()
-    LOGF("[MQTT] Connect fail, rc=%d\n", g_mqttClient.state());
-    return false;
-  }
-
-  // If connected, subscribe to any default topic if you want:
-  // g_mqttClient.subscribe("some/topic");
-
-  LOG("[MQTT] Connected successfully");
-  return true;
-}
-
-// This function tries to reconnect Wi-Fi if Wi-Fi is down
-
-bool doWiFiReconnect() {
-  LOG("[WiFi] Checking connection...");
-
-  // If you have an SSID/pass stored
-  // extern String g_ssid;
-  // extern String g_pass;
-  // WiFi.begin(g_ssid.c_str(), g_pass.c_str());
-
-  // We'll do a quick wait for up to ~3 seconds, just for example:
-  // (Tune to your needs)
-  for (int i = 0; i < 15; i++) {
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.print("[WiFi] Reconnected. IP=");
-      LOG(WiFi.localIP());
-      return true;
-    }
-    vTaskDelay(pdMS_TO_TICKS(200));
-  }
-  LOG("[WiFi] Still not connected");
-  return false;
-}
-
-// Call this regularly to maintain Wi-Fi + MQTT
-
-void wifiMqttMaintainLoop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    unsigned long now = millis();
-    // Try reconnect every 10 seconds
-    if (now - lastWiFiReconnectAttempt > 10000) {
-      lastWiFiReconnectAttempt = now;
-      LOG("[WiFi] Connection lost, attempting recon...");
-      doWiFiReconnect();
-    }
-    // If Wi-Fi is still down, we skip MQTT
-    return;
-  }
-
-  if (!g_mqttClient.connected()) {
-    unsigned long now = millis();
-    if (now - lastMqttReconnectAttempt > 10000) {
-      lastMqttReconnectAttempt = now;
-      LOG("[MQTT] Lost MQTT, trying reconnect...");
-      if (doMqttConnect()) {
-        lastMqttReconnectAttempt = 0;
-      }
-    }
-  }
-
-  // If connected, let PubSubClient process inbound/outbound messages
-  g_mqttClient.loop();
 }
 

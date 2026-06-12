@@ -37,18 +37,33 @@ public:
 
 // ble_init(devName, serviceUUID, charUUID)
 static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs) {
-  // Idempotent: repeated init leaked fresh callback objects each call, and
-  // NimBLE (~70-100KB internal heap) can never be deinit'd — reuse the first
-  // server/service/characteristic.
-  if (g_bleServer != nullptr && g_bleChar != nullptr) {
-    LOG("BLE already initialized");
-    return js_mktrue();
-  }
+  // Identity captured at the first successful init. NimBLE (~70-100KB
+  // internal heap) can never be deinit'd, so the stack keeps this identity
+  // until reboot; repeated init must compare against it (matters for the
+  // in-place app switch, where a new script may request different UUIDs).
+  static char s_bleName[64] = { 0 };
+  static char s_bleSvcUUID[40] = { 0 };
+  static char s_bleCharUUID[40] = { 0 };
+
   if (nargs < 3) return js_mkfalse();
   const char *devName = js_str(js, args[0]);
   const char *svcUUID = js_str(js, args[1]);
   const char *charUUID = js_str(js, args[2]);
   if (!devName || !svcUUID || !charUUID) return js_mkfalse();
+
+  // Idempotent: repeated init leaked fresh callback objects each call, and
+  // NimBLE can never be deinit'd — reuse the first server/service/
+  // characteristic, but only when the requested identity matches the live one.
+  if (g_bleServer != nullptr && g_bleChar != nullptr) {
+    if (strcmp(devName, s_bleName) == 0
+        && strcmp(svcUUID, s_bleSvcUUID) == 0
+        && strcmp(charUUID, s_bleCharUUID) == 0) {
+      LOG("BLE already initialized");
+      return js_mktrue();
+    }
+    LOG("BLE already initialized with different identity — reboot to change UUIDs");
+    return js_mkfalse();
+  }
 
   // Initialize NimBLE
   NimBLEDevice::init(devName);
@@ -72,6 +87,11 @@ static jsval_t js_ble_init(struct js *js, jsval_t *args, int nargs) {
   // Start advertising
   g_bleServer->getAdvertising()->start();
   LOG("NimBLE advertising started");
+
+  // Record the live identity for the idempotency check above.
+  snprintf(s_bleName, sizeof(s_bleName), "%s", devName);
+  snprintf(s_bleSvcUUID, sizeof(s_bleSvcUUID), "%s", svcUUID);
+  snprintf(s_bleCharUUID, sizeof(s_bleCharUUID), "%s", charUUID);
   return js_mktrue();
 }
 

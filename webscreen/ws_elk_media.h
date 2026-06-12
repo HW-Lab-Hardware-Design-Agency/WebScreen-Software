@@ -59,14 +59,8 @@ static jsval_t js_show_gif_from_sd(struct js *js, jsval_t *args, int nargs) {  /
   }
 
   // Argument 0: Get the path string
-  const char *rawPath = js_str(js, args[0]);
-  if (!rawPath) return js_mknull();
-
-  // Strip quotes from the path
-  String path(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length() - 1);
-  }
+  String path = js_arg_str(js, args[0]);
+  if (path.isEmpty()) return js_mknull();
 
   // Argument 1 & 2: Get the x and y coordinates
   int x = (int)js_getnum(args[1]);
@@ -119,7 +113,7 @@ static jsval_t js_gif_free(struct js *js, jsval_t *args, int nargs) {
 }
 
 /******************************************************************************
- * J) Load image file from SD into a RamImage slot
+ * F2) Load image file from SD into a RamImage slot
  ******************************************************************************/
 
 bool load_image_file_into_ram(const char *path, RamImage *outImg) {
@@ -151,7 +145,6 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   outImg->buffer = buf;
   outImg->size = fileSize;
 
-  //    - If it's a "raw" or "true color" format, you can do:
   lv_img_dsc_t *d = &outImg->dsc;
   memset(d, 0, sizeof(*d));
 

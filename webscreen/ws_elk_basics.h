@@ -66,19 +66,11 @@ static jsval_t js_request_gc(struct js *js, jsval_t *args, int nargs) {
 // Wi-Fi connect
 static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 2) return js_mkfalse();
-  const char *ssidQ = js_str(js, args[0]);
-  const char *passQ = js_str(js, args[1]);
-  if (!ssidQ || !passQ) return js_mkfalse();
-
-  // Strip quotes if any
-  String ssid(ssidQ);
-  String pass(passQ);
-  if (ssid.startsWith("\"") && ssid.endsWith("\"")) {
-    ssid = ssid.substring(1, ssid.length() - 1);
-  }
-  if (pass.startsWith("\"") && pass.endsWith("\"")) {
-    pass = pass.substring(1, pass.length() - 1);
-  }
+  String ssid = js_arg_str(js, args[0]);
+  String pass = js_arg_str(js, args[1]);
+  if (ssid.isEmpty()) return js_mkfalse();
+  // No isEmpty() bail for pass: an empty password is valid (open AP) and has
+  // always been forwarded to WiFi.begin() as-is.
 
   LOGF("Connecting to Wi-Fi SSID: %s\n", ssid.c_str());
   WiFi.begin(ssid.c_str(), pass.c_str());
@@ -137,22 +129,36 @@ static jsval_t js_str_length(struct js *js, jsval_t *args, int nargs) {
 
 // LVGL Timer Bridging Functions
 
-// Implemented in webscreen_runtime.cpp — asks the JS task to tear down and
-// re-start the app in place. NEVER reboots the device. (extern "C" to match
-// the declaration in webscreen_runtime.h.)
+// Implemented in webscreen_runtime.cpp — ask the JS task to tear down and
+// re-start the app in place. NEVER reboots the device. The _auto variant is
+// for error-streak escalation: unlike an explicit user request it does not
+// lift safe mode and it counts toward the give-up ladder. (extern "C" to
+// match the declarations in webscreen_runtime.h.)
 extern "C" void webscreen_runtime_request_restart(const char *reason);
+extern "C" void webscreen_runtime_request_restart_auto(const char *reason);
 
-// Consecutive failed JS timer evals before we give up on the current app
-// state and do an in-place restart (engine re-created over the same arena,
-// script re-evaluated). An OOM'd or wedged script recovers in ~1s instead of
-// power-cycling the device.
-static uint32_t g_js_error_streak = 0;
+// Per-timer state carried as lv_timer user_data. The streak lives per timer
+// so one healthy timer cannot mask a permanently broken one (a single global
+// counter would reset on every interleaved success and never escalate).
+struct ElkTimerCtx {
+  uint32_t streak;  // Consecutive failed evals of THIS timer's function
+  char name[56];    // JS function name to call
+};
+
+// Consecutive failed evals of one timer before we give up on the current app
+// state and request an in-place restart (engine re-created over the same
+// arena, script re-evaluated). An OOM'd or wedged script recovers in ~1s
+// instead of power-cycling the device.
 static const uint32_t JS_ERROR_STREAK_LIMIT = 10;
+
+// Retained for teardown bookkeeping (reset between app generations).
+static uint32_t g_js_error_streak = 0;
 
 // This C++ function will be the callback for LVGL. It will execute a JS function.
 static void elk_timer_cb(lv_timer_t *timer) {
-  char *func_name = (char *)timer->user_data;
-  if (func_name == NULL || js == NULL) return;
+  ElkTimerCtx *ctx = (ElkTimerCtx *)timer->user_data;
+  if (ctx == NULL || js == NULL) return;
+  const char *func_name = ctx->name;
 
   // Internal-DRAM guard: TLS, lwip, MQTT and LVGL all allocate from internal
   // heap; when it is genuinely low the only safe move is to shed load for a
@@ -184,19 +190,22 @@ static void elk_timer_cb(lv_timer_t *timer) {
   // Use js_eval to execute the function call.
   jsval_t res = js_eval(js, snippet, strlen(snippet));
   if (js_type(res) == JS_ERR) {
-    g_js_error_streak++;
+    ctx->streak++;
     LOGF("[TIMER CB] Error in %s (streak %u/%u): %s | arena %u/%u, heap %u\n",
-         snippet, g_js_error_streak, JS_ERROR_STREAK_LIMIT, js_str(js, res),
+         snippet, ctx->streak, JS_ERROR_STREAK_LIMIT, js_str(js, res),
          (unsigned)js_usage(js), (unsigned)js_total(js), (unsigned)ESP.getFreeHeap());
-    // An error often leaves garbage at a high-water mark; collect now so a
-    // transient OOM can clear itself before the next tick.
-    js_gc(js);
-    if (g_js_error_streak >= JS_ERROR_STREAK_LIMIT) {
-      g_js_error_streak = 0;
-      webscreen_runtime_request_restart("repeated JS timer errors");
+    // An error often leaves garbage at a high-water mark; collect on the
+    // FIRST error of a streak so a transient OOM can clear itself — but not
+    // on every tick (a full mark-compact per 100ms tick is pure churn).
+    if (ctx->streak == 1) {
+      js_gc(js);
+    }
+    if (ctx->streak >= JS_ERROR_STREAK_LIMIT) {
+      ctx->streak = 0;
+      webscreen_runtime_request_restart_auto("repeated JS timer errors");
     }
   } else {
-    g_js_error_streak = 0;
+    ctx->streak = 0;
   }
 }
 
@@ -226,10 +235,10 @@ static jsval_t js_timer_delete(struct js *js, jsval_t *args, int nargs) {
   lv_timer_t *t = lv_timer_get_next(NULL);
   while (t != NULL) {
     lv_timer_t *next = lv_timer_get_next(t);
-    if (t->timer_cb == elk_timer_cb && t->user_data != NULL &&
-        strlen((const char *)t->user_data) == len &&
-        memcmp(t->user_data, name, len) == 0) {
-      free(t->user_data);
+    ElkTimerCtx *ctx = (ElkTimerCtx *)t->user_data;
+    if (t->timer_cb == elk_timer_cb && ctx != NULL &&
+        strlen(ctx->name) == len && memcmp(ctx->name, name, len) == 0) {
+      free(ctx);
       lv_timer_del(t);  // Safe even for the currently-running timer in LVGL 8
       return js_mktrue();
     }
@@ -254,33 +263,33 @@ static jsval_t js_create_timer(struct js *js, jsval_t *args, int nargs) {
     return js_mknull();
   }
 
-  char *name_for_timer = (char *)malloc(func_name_len + 1);
-  if (!name_for_timer) {
-    LOG("Failed to allocate memory for timer callback name");
+  ElkTimerCtx *ctx = (ElkTimerCtx *)malloc(sizeof(ElkTimerCtx));
+  if (!ctx) {
+    LOG("Failed to allocate memory for timer context");
     return js_mknull();
   }
-  memcpy(name_for_timer, func_name_str, func_name_len);
-  name_for_timer[func_name_len] = '\0';
+  ctx->streak = 0;
+  if (func_name_len >= sizeof(ctx->name)) {
+    LOGF("create_timer: function name too long (max %u chars)\n",
+         (unsigned)(sizeof(ctx->name) - 1));
+    free(ctx);
+    return js_mknull();
+  }
+  memcpy(ctx->name, func_name_str, func_name_len);
+  ctx->name[func_name_len] = '\0';
 
   // Create the LVGL timer
-  lv_timer_create(elk_timer_cb, (uint32_t)period, name_for_timer);
+  lv_timer_create(elk_timer_cb, (uint32_t)period, ctx);
 
-  LOGF("Created LVGL timer to call JS function '%s' every %dms\n", name_for_timer, (int)period);
+  LOGF("Created LVGL timer to call JS function '%s' every %dms\n", ctx->name, (int)period);
   return js_mknull();
 }
 
 // sd_read_file(path)
 static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
-  const char *rawPath = js_str(js, args[0]);
-  if (!rawPath) return js_mknull();
-
-  // Strip quotes if present
-  String path(rawPath);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path.remove(0, 1);
-    path.remove(path.length() - 1, 1);
-  }
+  String path = js_arg_str(js, args[0]);
+  if (path.isEmpty()) return js_mknull();
 
   File file = SD_MMC.open(path);
   if (!file) {
@@ -321,14 +330,8 @@ static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
 // sd_list_dir(path)
 static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
-  const char *pathQ = js_str(js, args[0]);
-  if (!pathQ) return js_mknull();
-
-  // Strip quotes
-  String path(pathQ);
-  if (path.startsWith("\"") && path.endsWith("\"")) {
-    path = path.substring(1, path.length() - 1);
-  }
+  String path = js_arg_str(js, args[0]);
+  if (path.isEmpty()) return js_mknull();
 
   File root = SD_MMC.open(path);
   if (!root) {

@@ -12,11 +12,17 @@ public:
   static void processCommand(const String& command);
   
 private:
+  // Single source of truth for command dispatch and /help (defined in serial_commands.cpp)
+  struct Command;
+  static const Command kCommands[];
+  static const size_t kCommandCount;
+
   static void showHelp();
   static void showStats();
   static void showInfo();
   static void writeScript(const String& args);
   static void uploadFile(const String& args);
+  static void configCommand(const String& args);
   static void configSet(const String& args);
   static void configGet(const String& args);
   static void listFiles(const String& path);

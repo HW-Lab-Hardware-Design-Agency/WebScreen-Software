@@ -41,7 +41,7 @@ struct js {
   jsoff_t css;        // Max observed C stack size
   jsoff_t lwm;        // JS RAM low watermark: min free RAM observed
   const char *code;   // Currently parsed code snippet
-  char errmsg[33];    // Error message placeholder
+  char errmsg[64];    // Error message placeholder (incl. " (line N)" suffix)
   uint8_t tok;        // Last parsed token value
   uint8_t consumed;   // Indicator that last parsed token was consumed
   uint8_t flags;      // Execution flags, see F_* constants below
@@ -240,9 +240,24 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
 jsval_t js_mkerr(struct js *js, const char *xx, ...) {
   va_list ap;
   size_t n = cpy(js->errmsg, sizeof(js->errmsg), "ERROR: ", 7);
+  int k;
   va_start(ap, xx);
-  vsnprintf(js->errmsg + n, sizeof(js->errmsg) - n, xx, ap);
+  k = vsnprintf(js->errmsg + n, sizeof(js->errmsg) - n, xx, ap);
   va_end(ap);
+  if (k > 0) n += (size_t) k;
+  if (n > sizeof(js->errmsg) - 1) n = sizeof(js->errmsg) - 1;
+  // Append the 1-based source line of the failing token. js->toff must be
+  // read before the jump-to-end below clobbers parser state. Inside a
+  // function call js->code is the function body, so the line is relative
+  // to that function's first line, not the file.
+  if (js->code != NULL && js->clen > 0 && js->toff <= js->clen) {
+    jsoff_t line = 1, i;
+    for (i = 0; i < js->toff; i++) {
+      if (js->code[i] == '\n') line++;
+    }
+    snprintf(js->errmsg + n, sizeof(js->errmsg) - n, " (line %u)",
+             (unsigned) line);
+  }
   js->errmsg[sizeof(js->errmsg) - 1] = '\0';
   js->pos = js->clen, js->tok = TOK_EOF, js->consumed = 0;  // Jump to the end
   return mkval(T_ERR, 0);

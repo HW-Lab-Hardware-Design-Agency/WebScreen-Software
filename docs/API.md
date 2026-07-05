@@ -89,6 +89,36 @@ The following functions are available in your JavaScript applications:
   print("Current brightness: " + numberToString(current));
   ```
 
+### Button Events
+
+The power button's short press (< 3s) can be delivered to JavaScript; the long press (>= 3s) is always handled by the firmware as power-off and never reaches JS. While an app is using the button, the default display on/off toggle is suppressed so the press is yours to handle.
+
+Button state is reset whenever the app is restarted or switched: the handler is cleared, the default toggle is restored, and any queued presses are drained.
+
+- **on_button("fn_name")**
+  Register the named global function as the button handler. On each short press it is called as `fn_name(1)` at the next safe point. While a handler is registered the default display toggle is suppressed. Call `on_button("")` to release the button and restore the default toggle. Returns `true` on success, `false` if the name is too long.
+  ```javascript
+  let onPress = function(evt) { print("button pressed"); };
+  on_button("onPress");
+  // ... later ...
+  on_button("");   // release, default toggle returns
+  ```
+
+- **get_button_event()**
+  Poll-style alternative to `on_button()`. Returns `1` if a short press was pending (consuming it), or `0` otherwise. Pair it with `button_set_toggle(false)` so polled presses are not also consumed by the default toggle.
+  ```javascript
+  button_set_toggle(false);
+  let update = function() {
+    if (get_button_event()) {
+      print("button pressed");
+    }
+  };
+  create_timer("update", 100);
+  ```
+
+- **button_set_toggle(enabled)**
+  Keep (`true`) or suppress (`false`) the default display on/off toggle. Used by poll-style apps that read `get_button_event()` without registering a handler.
+
 ### String Utilities
 
 - **str_index_of(haystack, needle)**  
@@ -102,6 +132,47 @@ The following functions are available in your JavaScript applications:
 
 - **numberToString(number)**  
   Convert a number to a string.
+
+- **str_split(str, sep, idx)**
+  Split `str` by `sep` and return the `idx`-th field (0-based), or `null` past the last field. The separator may be multiple characters. Empty fields are returned as `""`.
+  ```javascript
+  str_split("a,b,c", ",", 1);   // "b"
+  str_split("a,,c", ",", 1);    // "" (empty field)
+  str_split("a,b", ",", 5);     // null (past the end)
+  ```
+
+- **str_split_count(str, sep)**
+  Returns the number of fields produced by splitting `str` on `sep`. An empty string returns `0`; a string with no separator returns `1`.
+  ```javascript
+  str_split_count("a,b,c", ",");   // 3
+  ```
+
+### Number Formatting
+
+- **format_number(value, decimals)**
+  Format `value` as a fixed-point string with the given number of decimals (clamped to 0-9).
+  ```javascript
+  format_number(3.14159, 2);   // "3.14"
+  format_number(42, 0);        // "42"
+  ```
+
+- **pad_number(value, width)**
+  Format `value` as a zero-padded integer string of at least `width` digits (clamped to 1-16).
+  ```javascript
+  pad_number(7, 2);    // "07"
+  pad_number(123, 2);  // "123"
+  ```
+
+- **random()** / **random(max)** / **random(min, max)**
+  Returns a random number from the ESP32 hardware RNG:
+  - `random()` — a float in `[0, 1)`
+  - `random(max)` — an integer in `[0, max)`
+  - `random(min, max)` — an integer in `[min, max)`
+  ```javascript
+  random();         // e.g. 0.4821...
+  random(6);        // integer 0-5
+  random(1, 7);     // integer 1-6 (a die roll)
+  ```
 
 ### WiFi Functions
 
@@ -149,6 +220,14 @@ Time is automatically synchronized via NTP when the device connects to WiFi. The
 
 - **get_epoch()**
   Returns the current Unix timestamp in seconds, or -1 if time is not valid (before 2021).
+
+- **format_time(fmt)** / **format_time(fmt, epoch)**
+  Returns a `strftime`-formatted string of the current local time, or of the given `epoch` (interpreted in the configured local timezone). See `man strftime` for format specifiers.
+  ```javascript
+  format_time("%H:%M:%S");      // "14:05:09"
+  format_time("%a %d %b");      // "Fri 13 Jun"
+  format_time("%Y-%m-%d", 1771337025);  // format a specific epoch
+  ```
 
 **Example: Simple Clock**
 ```javascript
@@ -531,6 +610,49 @@ Scales and indicators are returned to JavaScript as small slot-index handles (no
 - **lv_meter_set_indicator_value(meter, indicator, value)**  
   Set the value of an indicator.
 
+#### Chart Widget
+
+Charts plot one or more data series. `lv_chart_create()` returns an object handle; `lv_chart_add_series()` returns a small slot-index series handle (not a pointer), with **-1 on failure**. Pass both handles back into the `lv_chart_set_next_value*` functions. The various axis/range constants (`LV_CHART_TYPE_*`, `LV_CHART_AXIS_*`, `LV_CHART_UPDATE_MODE_*`) are passed as integers.
+
+- **lv_chart_create(parent)**  
+  Create a chart widget. Returns an object handle.
+
+- **lv_chart_set_type(chart, type)**  
+  Set the chart type (e.g. `LV_CHART_TYPE_LINE`, `LV_CHART_TYPE_BAR`).
+
+- **lv_chart_set_div_line_count(chart, y_div, x_div)**  
+  Set the number of horizontal and vertical division lines.
+
+- **lv_chart_set_update_mode(chart, mode)**  
+  Set the update mode (e.g. `LV_CHART_UPDATE_MODE_SHIFT`, `LV_CHART_UPDATE_MODE_CIRCULAR`).
+
+- **lv_chart_set_range(chart, axis, min, max)**  
+  Set the value range for an axis (e.g. `LV_CHART_AXIS_PRIMARY_Y`).
+
+- **lv_chart_set_point_count(chart, count)**  
+  Set the number of points shown per series.
+
+- **lv_chart_refresh(chart)**  
+  Redraw the chart after changing its data.
+
+- **lv_chart_add_series(chart, color, axis)**  
+  Add a data series with the given color and axis. Returns a series handle, or -1 on failure.
+
+- **lv_chart_set_next_value(chart, series, value)**  
+  Append the next Y value to a series (for line/bar charts).
+
+- **lv_chart_set_next_value2(chart, series, x_value, y_value)**  
+  Append the next X/Y pair to a series (for scatter charts).
+
+- **lv_chart_set_axis_tick(chart, axis, major_len, minor_len, major_count, minor_count, label_enable, draw_size)**  
+  Configure tick marks and labels on an axis.
+
+- **lv_chart_set_zoom_x(chart, zoom)**  
+  Set the horizontal zoom (256 = no zoom).
+
+- **lv_chart_set_zoom_y(chart, zoom)**  
+  Set the vertical zoom (256 = no zoom).
+
 #### Spangroup Widget (Rich Text)
 
 - **lv_spangroup_create(parent)**  
@@ -664,6 +786,16 @@ if (response === null || response === "") {
   return;
 }
 ```
+
+### Error Messages and Line Numbers
+
+JavaScript errors carry a 1-based source line number suffix, e.g.:
+
+```
+ERROR: 'foo' not found (line 12)
+```
+
+For an error raised inside a function body, the line number is **relative to that function's first line** (Elk re-parses each function body as a separate snippet), not the line within the whole file. Errors from timer callbacks, button callbacks, and `/eval` are also recorded and can be reviewed with the `/errors` serial command.
 
 ### Runtime Guards
 

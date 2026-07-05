@@ -136,6 +136,7 @@ static jsval_t js_str_length(struct js *js, jsval_t *args, int nargs) {
 // match the declarations in webscreen_runtime.h.)
 extern "C" void webscreen_runtime_request_restart(const char *reason);
 extern "C" void webscreen_runtime_request_restart_auto(const char *reason);
+extern "C" void webscreen_runtime_note_js_error(const char *msg);
 
 // Per-timer state carried as lv_timer user_data. The streak lives per timer
 // so one healthy timer cannot mask a permanently broken one (a single global
@@ -191,9 +192,15 @@ static void elk_timer_cb(lv_timer_t *timer) {
   jsval_t res = js_eval(js, snippet, strlen(snippet));
   if (js_type(res) == JS_ERR) {
     ctx->streak++;
+    const char *errstr = js_str(js, res);
     LOGF("[TIMER CB] Error in %s (streak %u/%u): %s | arena %u/%u, heap %u\n",
-         snippet, ctx->streak, JS_ERROR_STREAK_LIMIT, js_str(js, res),
+         snippet, ctx->streak, JS_ERROR_STREAK_LIMIT, errstr,
          (unsigned)js_usage(js), (unsigned)js_total(js), (unsigned)ESP.getFreeHeap());
+    {
+      char rec[128];
+      snprintf(rec, sizeof(rec), "timer %s: %s", ctx->name, errstr ? errstr : "?");
+      webscreen_runtime_note_js_error(rec);
+    }
     // An error often leaves garbage at a high-water mark; collect on the
     // FIRST error of a streak so a transient OOM can clear itself — but not
     // on every tick (a full mark-compact per 100ms tick is pure churn).
@@ -403,5 +410,152 @@ static jsval_t js_number_to_string(struct js *js, jsval_t *args, int nargs) {
   }
 
   return js_mkstr(js, "", 0);
+}
+
+/******************************************************************************
+ * E2) String / number / random helpers
+ *
+ * Elk has no Math.random, no String.split and no printf-style formatting;
+ * every example app used to hand-roll these (LCGs that overflow doubles,
+ * 25-line CSV parsers, duplicated padZero functions). One binding each.
+ ******************************************************************************/
+
+// random()            => float in [0, 1)
+// random(max)         => integer in [0, max)
+// random(min, max)    => integer in [min, max)
+static jsval_t js_random(struct js *js, jsval_t *args, int nargs) {
+  double r = (double)esp_random() / 4294967296.0;  // hardware RNG, [0, 1)
+  if (nargs == 0) return js_mknum(r);
+  double lo = (nargs >= 2) ? js_getnum(args[0]) : 0.0;
+  double hi = (nargs >= 2) ? js_getnum(args[1]) : js_getnum(args[0]);
+  if (hi <= lo) return js_mknum(lo);
+  return js_mknum(lo + floor(r * (hi - lo)));
+}
+
+// str_split(str, sep, idx) => idx-th field (0-based), or null past the end.
+// The separator may be multi-character. Empty fields are returned as "".
+static jsval_t js_str_split(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 3) return js_mknull();
+  String s = js_arg_str(js, args[0]);
+  String sep = js_arg_str(js, args[1]);
+  int idx = (int)js_getnum(args[2]);
+  if (sep.length() == 0 || idx < 0) return js_mknull();
+  int start = 0;
+  for (int i = 0; i < idx; i++) {
+    int p = s.indexOf(sep, start);
+    if (p < 0) return js_mknull();
+    start = p + sep.length();
+  }
+  int end = s.indexOf(sep, start);
+  String field = (end < 0) ? s.substring(start) : s.substring(start, end);
+  return js_mkstr(js, field.c_str(), field.length());
+}
+
+// str_split_count(str, sep) => number of fields ("" => 0, no sep => 1)
+static jsval_t js_str_split_count(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mknum(0);
+  String s = js_arg_str(js, args[0]);
+  String sep = js_arg_str(js, args[1]);
+  if (s.length() == 0 || sep.length() == 0) return js_mknum(0);
+  int count = 1, start = 0, p;
+  while ((p = s.indexOf(sep, start)) >= 0) {
+    count++;
+    start = p + sep.length();
+  }
+  return js_mknum((double)count);
+}
+
+// format_number(value, decimals) => fixed-point string, e.g. (3.14159, 2) => "3.14"
+static jsval_t js_format_number(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkstr(js, "", 0);
+  double v = js_getnum(args[0]);
+  int dec = (nargs >= 2) ? (int)js_getnum(args[1]) : 0;
+  if (dec < 0) dec = 0;
+  if (dec > 9) dec = 9;
+  char buf[40];
+  snprintf(buf, sizeof(buf), "%.*f", dec, v);
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+// pad_number(value, width) => zero-padded integer string, e.g. (7, 2) => "07"
+static jsval_t js_pad_number(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkstr(js, "", 0);
+  long v = (long)js_getnum(args[0]);
+  int w = (int)js_getnum(args[1]);
+  if (w < 1) w = 1;
+  if (w > 16) w = 16;
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%0*ld", w, v);
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+/******************************************************************************
+ * E3) Button events
+ *
+ * The power button's short press is debounced on loopTask
+ * (webscreen_hardware_handle_button); long press is power-off and never
+ * reaches JS. Events cross to the JS task through two single-writer
+ * counters (produced: loopTask, consumed: JS task) — lock-free by design.
+ *
+ * An app claims the button with on_button("fn"): the named function is
+ * called with the event code at the JS task's next safe point, and the
+ * default display-toggle is disabled while a handler is registered.
+ * Poll-style apps use get_button_event() + button_set_toggle(false).
+ ******************************************************************************/
+static volatile uint32_t g_button_evt_produced = 0;  // written by loopTask only
+static volatile uint32_t g_button_evt_consumed = 0;  // written by JS task only
+static char g_button_cb_name[56] = "";
+
+extern "C" void webscreen_hardware_set_button_toggle(bool enabled);
+
+// on_button("fn") => deliver short presses to fn(1); on_button("") releases
+// the button (handler removed, display toggle restored).
+static jsval_t js_on_button(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkfalse();
+  String name = js_arg_str(js, args[0]);
+  if (name.length() >= sizeof(g_button_cb_name)) {
+    LOGF("on_button: function name too long (max %u chars)\n",
+         (unsigned)(sizeof(g_button_cb_name) - 1));
+    return js_mkfalse();
+  }
+  strlcpy(g_button_cb_name, name.c_str(), sizeof(g_button_cb_name));
+  webscreen_hardware_set_button_toggle(g_button_cb_name[0] == '\0');
+  return js_mktrue();
+}
+
+// get_button_event() => 1 if a short press was pending (consumes it), else 0.
+static jsval_t js_get_button_event(struct js *js, jsval_t *args, int nargs) {
+  if (g_button_evt_produced != g_button_evt_consumed) {
+    g_button_evt_consumed++;
+    return js_mknum(1);
+  }
+  return js_mknum(0);
+}
+
+// button_set_toggle(bool) => keep/suppress the default display on/off toggle
+// (for poll-style apps that read get_button_event() without a handler).
+static jsval_t js_button_set_toggle(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkfalse();
+  webscreen_hardware_set_button_toggle(js_truthy(js, args[0]));
+  return js_mktrue();
+}
+
+// Called by the JS task loop at its safe point: dispatch one pending button
+// event to the registered handler. Mirrors the timer bridge's eval-by-name
+// pattern (Elk cannot hold function values across C callbacks).
+static void elk_dispatch_button_event(void) {
+  if (js == NULL || g_button_cb_name[0] == '\0') return;
+  if (g_button_evt_produced == g_button_evt_consumed) return;
+  g_button_evt_consumed++;
+  char snippet[72];
+  snprintf(snippet, sizeof(snippet), "%s(1);", g_button_cb_name);
+  jsval_t res = js_eval(js, snippet, strlen(snippet));
+  if (js_type(res) == JS_ERR) {
+    const char *errstr = js_str(js, res);
+    LOGF("[BUTTON CB] Error in %s: %s\n", snippet, errstr);
+    char rec[128];
+    snprintf(rec, sizeof(rec), "button %s: %s", g_button_cb_name, errstr ? errstr : "?");
+    webscreen_runtime_note_js_error(rec);
+  }
 }
 

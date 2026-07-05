@@ -83,8 +83,61 @@ extern "C" {
   void webscreen_runtime_set_js_heap_kb(int kb);
 
   /**
+ * @brief Queue a one-shot JS snippet for evaluation (serial /eval REPL)
+ *
+ * The snippet is evaluated by the JS task at its next safe point; the
+ * result (or error) is printed to Serial with an [EVAL] prefix. One
+ * snippet can be in flight at a time.
+ *
+ * @param code JS source, at most 255 chars
+ * @return true if queued, false if busy / not running / too long
+ */
+
+  bool webscreen_runtime_eval_snippet(const char* code);
+
+  /**
+ * @brief Record the most recent JS error (kept for the /errors command)
+ *
+ * Called from the eval/timer/button error paths. Safe from any task.
+ *
+ * @param msg Short error description
+ */
+
+  void webscreen_runtime_note_js_error(const char* msg);
+
+  /**
+ * @brief Print the JS error/restart-ladder report to Serial (/errors)
+ */
+
+  void webscreen_runtime_print_error_report(void);
+
+  /**
+ * @brief Notify the runtime of a power-button short press (loopTask)
+ *
+ * Queued lock-free for the JS task, which delivers it to the app via
+ * on_button()/get_button_event(). Registered as the hardware button
+ * callback by dynamic_js_setup().
+ *
+ * @param pressed Always true (release events are not delivered)
+ */
+
+  void webscreen_runtime_notify_button(bool pressed);
+
+  /**
+ * @brief Queue a screen capture (/screenshot)
+ *
+ * The JS task renders the active screen into a PSRAM snapshot at its next
+ * safe point and streams it to Serial as base64 between
+ * "=== SCREENSHOT <w>x<h> RGB565_SWAP ===" and "=== SCREENSHOT END ===".
+ *
+ * @return true if queued, false if the runtime is not running or busy
+ */
+
+  bool webscreen_runtime_request_screenshot(void);
+
+  /**
  * @brief Run JavaScript runtime loop
- * 
+ *
  * Executes one iteration of the JavaScript runtime. Should be called
  * repeatedly from the main loop when in JavaScript mode.
  */

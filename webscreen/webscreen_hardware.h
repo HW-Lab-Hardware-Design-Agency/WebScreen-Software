@@ -134,6 +134,18 @@ extern "C" {
 
   void webscreen_hardware_set_button_callback(void (*callback)(bool pressed));
 
+  /**
+ * @brief Enable/disable the default short-press display toggle
+ *
+ * When a JS app claims the button (on_button), the display toggle is
+ * suppressed so presses reach the app instead. Long-press power-off is
+ * never affected.
+ *
+ * @param enabled true = short press toggles the display (default)
+ */
+
+  void webscreen_hardware_set_button_toggle(bool enabled);
+
   // ============================================================================
   // POWER MANAGEMENT
   // ============================================================================

@@ -34,9 +34,9 @@ If USB port not detected:
 
 #### Main Application (`webscreen.ino`)
 - **Configuration Loading**: Reads `/webscreen.json` from SD card for WiFi, MQTT, colors, and script selection
-- **SD Card Initialization**: Robust mounting with retry logic and speed fallback (400kHz to 10MHz)
+- **SD Card Initialization**: Robust mounting with retry logic — probe-mount at a safe 400 kHz first, then remount at 10 MHz (3 retries, low-speed fallback). Do NOT mount at a high frequency directly: `send_op_cond` times out (0x107) and leaves the host wedged so even later 400 kHz mounts fail. Serial commands only (re)mount the card when it is actually absent
 - **Mode Selection**: Chooses between dynamic JavaScript execution or fallback notification app
-- **Power Button**: Uses INPUT_PIN (pin 33) for screen on/off toggle with brightness control
+- **Power Button**: Uses INPUT_PIN (GPIO 21, `WEBSCREEN_PIN_BUTTON`) for screen on/off toggle with brightness control. NEVER move this to GPIO 33-37: with octal (OPI) PSRAM those pins are the PSRAM bus and a single `pinMode()` on them corrupts all PSRAM access (boot dies at the next allocation with a wedged panic and TG1WDT reset loop, no backtrace over USB-CDC)
 - **Global State**: Manages MQTT enablement, color scheme, script filename, and screen power state
 
 #### Dual Runtime System
@@ -52,13 +52,23 @@ If USB port not detected:
 Exposes comprehensive API to JavaScript applications:
 - **Network**: WiFi management, HTTP/HTTPS requests with custom ports
 - **Storage**: SD card file operations
-- **UI**: LVGL widget creation, styling, animation
+- **UI**: LVGL widget creation, styling, animation (full `lv_chart_*` family now registered)
 - **Communication**: BLE and MQTT protocols
-- **Hardware**: GPIO, display control (brightness via `set_brightness()`/`get_brightness()`)
+- **Hardware**: GPIO, display control (brightness via `set_brightness()`/`get_brightness()`), power-button short-press events (`on_button()`/`get_button_event()`/`button_set_toggle()`; long press is firmware power-off)
+- **Utilities**: `random()`, `str_split()`/`str_split_count()`, `format_number()`/`pad_number()`, `format_time()`
 
-**Memory**: The Elk arena defaults to 256KB allocated in PSRAM, configurable via the flat `webscreen.json` key `"js_heap_kb"` (clamped to 64-1024 KB; must be set before the engine starts). LVGL allocations prefer PSRAM (`heap_caps_*_prefer` wrappers in `lv_conf.h`), keeping internal DRAM free for TLS/lwip/DMA. The firmware never self-reboots on memory pressure: low internal heap sheds JS timer ticks, arena pressure triggers GC at safe points, and repeated script errors trigger an in-place JS app restart — escalating to safe mode with an on-screen error (device stays alive for serial commands) rather than a reboot.
+JS errors carry a 1-based `(line N)` suffix (relative to a function body's first line when raised inside one). The JS/LVGL task runs on **core 1** (same priority as loopTask) so it does not compete with the WiFi/lwip stack; button responsiveness comes from FreeRTOS time-slicing. Scripts are loaded with a single sized read into PSRAM.
+
+**Memory**: The Elk arena defaults to 256KB allocated in PSRAM, configurable via the flat `webscreen.json` key `"js_heap_kb"` (clamped to 64-1024 KB; must be set before the engine starts). LVGL's own allocations stay on plain `malloc` (internal DRAM) — a PSRAM-first allocator was tried and reverted. The firmware never self-reboots on memory pressure: low internal heap sheds JS timer ticks, arena pressure triggers GC at safe points, and repeated script errors trigger an in-place JS app restart — escalating to safe mode with an on-screen error (device stays alive for serial commands) rather than a reboot.
 
 **Bridge structure**: `lvgl_elk.h` is an aggregator that includes 14 `ws_*.h` fragment headers in a fixed order (the concatenation matches the former ~3,700-line monolith, so fragments are order-dependent and not individually includable). It is included exactly once, by `webscreen_runtime.cpp`.
+
+### Serial Console (`serial_commands.cpp`)
+
+Table-driven dispatch (`kCommands[]`, one row per command; table order = `/help` order). Commands: `/help`, `/stats`, `/info`, `/write`, `/upload <file> [base64]`, `/config get|set`, `/ls [path] [json]` (json = single-line machine-readable listing; plain listing ends with a `Total: N files, M directories` marker), `/cat`, `/rm <file|empty-dir>` (empty directories removed via `rmdir`), `/mkdir <path>`, `/download <file>` (alias `/dl`; base64 dump between `=== DOWNLOAD <path> SIZE <n> ===` / `=== DOWNLOAD END ===` markers), `/load [save]`, `/restart_app`, `/eval`, `/errors`, `/gc`, `/screenshot` (alias `/ss`), `/wget` (alias `/fetch` — the old `download` alias now belongs to the base64 dump), `/ping`, `/backup`, `/monitor`, `/brightness`, `/time`, `/settime`, `/factory_reset confirm` (requires the literal `confirm`; deletes `/webscreen.json` and reboots to fallback), `/reboot`.
+
+- **`webscreen_base64.h`**: shared header-only base64 encoder used by `/download` and `/screenshot` (57 raw bytes → one 76-char MIME-width line).
+- **Screenshot handoff pattern**: same discipline as `/eval` — the serial handler on loopTask only sets `g_js_screenshot_pending` (via `webscreen_runtime_request_screenshot()`); the JS task notices the flag at its next safe point, takes an `lv_snapshot` (LVGL objects must never be touched from another task), and streams the base64 RGB565 dump between `=== SCREENSHOT <w>x<h> RGB565_SWAP ===` / `=== SCREENSHOT END ===` markers. Requires the JS runtime to be active; refuses while a capture is in flight.
 
 ### LVGL Configuration (lv_conf.h)
 
@@ -84,6 +94,8 @@ Exposes comprehensive API to JavaScript applications:
 **Layouts**: Flexbox and Grid enabled
 
 **Display**: 16-bit color (RGB565), 130 DPI, 30ms refresh
+
+**Rendering**: a single internal-DRAM draw buffer (the second PSRAM buffer was removed — LVGL 8 alternates buffers, so under a synchronous flush half of all rendering hit slow OPI PSRAM for no benefit). Image cache enabled (`LV_IMG_CACHE_DEF_SIZE 2`) so PNG/SJPG/GIF images from SD are not re-decoded on every redraw. Snapshot support enabled (`LV_USE_SNAPSHOT 1`) for the `/screenshot` serial command. `lv_conf.h` was changed for these — copy the updated file to the Arduino libraries folder (`~/Arduino/libraries/lv_conf.h`).
 
 ### Configuration System
 Uses `/webscreen.json` on SD card:
@@ -126,7 +138,8 @@ Follows Conventional Commits v1.0.0:
 - `webscreen/webscreen.ino` - Main application entry point
 - `webscreen/dynamic_js.cpp` - JavaScript runtime implementation  
 - `webscreen/lvgl_elk.h` - Elk JS <-> LVGL bridge aggregator (includes the `ws_*.h` fragment headers in order; only `webscreen_runtime.cpp` includes it)
-- `webscreen/serial_commands.cpp` - Interactive serial console (`/help`, `/stats`, `/upload`, `/load`, `/restart_app`, `/gc`, ...)
+- `webscreen/serial_commands.cpp` - Interactive serial console (`/help`, `/stats`, `/upload`, `/download`, `/screenshot`, `/mkdir`, `/load [save]`, `/restart_app`, `/eval`, `/errors`, `/gc`, `/factory_reset confirm`, ...)
+- `webscreen/webscreen_base64.h` - Shared base64 encoder for serial streaming (`/download`, `/screenshot`)
 - `webscreen/fallback.cpp` - Fallback notification app
 - `webscreen/pins_config.h` - Hardware pin definitions
 - `webscreen/globals.h` - Global variable declarations

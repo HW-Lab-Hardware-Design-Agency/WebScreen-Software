@@ -85,3 +85,23 @@ static jsval_t js_ntp_synced(struct js *js, jsval_t *args, int nargs) {
   return js_mkfalse();
 }
 
+// format_time(fmt)        => strftime of the current local time
+// format_time(fmt, epoch) => strftime of the given epoch (local timezone)
+// e.g. format_time("%H:%M:%S") => "14:05:09", format_time("%a %d %b") => "Fri 13 Jun"
+static jsval_t js_format_time(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkstr(js, "", 0);
+  String fmt = js_arg_str(js, args[0]);
+  if (fmt.length() == 0) return js_mkstr(js, "", 0);
+  time_t t;
+  if (nargs >= 2) {
+    t = (time_t)js_getnum(args[1]);
+  } else {
+    time(&t);
+  }
+  struct tm timeinfo;
+  localtime_r(&t, &timeinfo);
+  char buf[64];
+  size_t n = strftime(buf, sizeof(buf), fmt.c_str(), &timeinfo);
+  return js_mkstr(js, buf, n);
+}
+

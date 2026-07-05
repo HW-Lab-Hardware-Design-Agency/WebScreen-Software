@@ -21,6 +21,7 @@
 #include <PubSubClient.h>  // For MQTT
 #include <time.h>
 #include <esp_task_wdt.h>
+#include <esp_random.h>
 
 #include <vector>
 #include <utility>  // for std::pair

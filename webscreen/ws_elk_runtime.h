@@ -72,6 +72,11 @@ static void elk_teardown_comm() {
   g_mqttLastSubTopic[0] = '\0';
   g_http_headers.clear();
   g_js_gc_requested = false;
+  // Button state belongs to the old script: release the handler, restore the
+  // default display toggle, and drain any queued presses.
+  g_button_cb_name[0] = '\0';
+  webscreen_hardware_set_button_toggle(true);
+  g_button_evt_consumed = g_button_evt_produced;
 }
 
 /******************************************************************************
@@ -114,6 +119,19 @@ void register_js_functions() {
   // bridging for indexOf / substring
   js_set(js, global, "str_index_of", js_mkfun(js_str_index_of));
   js_set(js, global, "str_substring", js_mkfun(js_str_substring));
+
+  // String/number/random helpers
+  js_set(js, global, "random", js_mkfun(js_random));
+  js_set(js, global, "str_split", js_mkfun(js_str_split));
+  js_set(js, global, "str_split_count", js_mkfun(js_str_split_count));
+  js_set(js, global, "format_number", js_mkfun(js_format_number));
+  js_set(js, global, "pad_number", js_mkfun(js_pad_number));
+  js_set(js, global, "format_time", js_mkfun(js_format_time));
+
+  // Button events (power button short press; long press = power off)
+  js_set(js, global, "on_button", js_mkfun(js_on_button));
+  js_set(js, global, "get_button_event", js_mkfun(js_get_button_event));
+  js_set(js, global, "button_set_toggle", js_mkfun(js_button_set_toggle));
 
   js_set(js, global, "http_get", js_mkfun(js_http_get));
   js_set(js, global, "http_post", js_mkfun(js_http_post));
@@ -224,6 +242,23 @@ void register_js_functions() {
   js_set(js, global, "lv_meter_set_indicator_start_value", js_mkfun(js_lv_meter_set_indicator_start_value));
   js_set(js, global, "lv_meter_set_indicator_end_value", js_mkfun(js_lv_meter_set_indicator_end_value));
   js_set(js, global, "lv_meter_set_indicator_value", js_mkfun(js_lv_meter_set_indicator_value));
+
+  //==================== CHART ===========================
+  // (js_lv_chart_get_y_array exists but is NOT registered: it returns a raw
+  // C pointer as a JS number, which Elk cannot dereference.)
+  js_set(js, global, "lv_chart_create", js_mkfun(js_lv_chart_create));
+  js_set(js, global, "lv_chart_set_type", js_mkfun(js_lv_chart_set_type));
+  js_set(js, global, "lv_chart_set_div_line_count", js_mkfun(js_lv_chart_set_div_line_count));
+  js_set(js, global, "lv_chart_set_update_mode", js_mkfun(js_lv_chart_set_update_mode));
+  js_set(js, global, "lv_chart_set_range", js_mkfun(js_lv_chart_set_range));
+  js_set(js, global, "lv_chart_set_point_count", js_mkfun(js_lv_chart_set_point_count));
+  js_set(js, global, "lv_chart_refresh", js_mkfun(js_lv_chart_refresh));
+  js_set(js, global, "lv_chart_add_series", js_mkfun(js_lv_chart_add_series));
+  js_set(js, global, "lv_chart_set_next_value", js_mkfun(js_lv_chart_set_next_value));
+  js_set(js, global, "lv_chart_set_next_value2", js_mkfun(js_lv_chart_set_next_value2));
+  js_set(js, global, "lv_chart_set_axis_tick", js_mkfun(js_lv_chart_set_axis_tick));
+  js_set(js, global, "lv_chart_set_zoom_x", js_mkfun(js_lv_chart_set_zoom_x));
+  js_set(js, global, "lv_chart_set_zoom_y", js_mkfun(js_lv_chart_set_zoom_y));
 
   //==================== SPAN ============================
   js_set(js, global, "lv_spangroup_create", js_mkfun(js_lv_spangroup_create));

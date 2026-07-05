@@ -19,6 +19,7 @@ static uint32_t g_last_button_time = 0;
 static uint32_t g_button_press_start = 0;
 static bool g_button_held = false;
 static void (*g_button_callback)(bool) = nullptr;
+static bool g_button_toggle_enabled = true;
 bool webscreen_hardware_init(void) {
   if (g_hardware_initialized) {
     return true;
@@ -54,6 +55,12 @@ void webscreen_hardware_shutdown(void) {
 bool webscreen_hardware_init_sd_card(void) {
   WEBSCREEN_DEBUG_PRINTLN("Initializing SD Card...");
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
+
+  // The card must be initialized at a low frequency first; starting
+  // straight at a high frequency makes send_op_cond time out (0x107) and
+  // leaves the host in a state where even subsequent 400kHz mounts fail.
+  // So: probe-mount at 400kHz, then remount at 10MHz, keeping the low
+  // speed mount as a fallback.
   for (int i = 0; i < 3; i++) {
 
     WEBSCREEN_DEBUG_PRINTF("Attempt %d: Mounting SD card at a safe, low frequency...\n", i + 1);
@@ -156,14 +163,16 @@ void webscreen_hardware_handle_button(void) {
   // Button released (LOW -> HIGH transition)
   if (g_last_button_state == LOW && current_button_state == HIGH) {
     if (g_button_held && (current_time - g_button_press_start < WEBSCREEN_POWER_OFF_HOLD_MS)) {
-      // Short press — toggle display
-      g_display_on = !g_display_on;
-      webscreen_display_power(g_display_on);
+      // Short press — toggle display unless a JS app has claimed the button
+      if (g_button_toggle_enabled) {
+        g_display_on = !g_display_on;
+        webscreen_display_power(g_display_on);
+        WEBSCREEN_DEBUG_PRINTF("Button short press - Display %s\n",
+                               g_display_on ? "ON" : "OFF");
+      }
       if (g_button_callback) {
         g_button_callback(true);
       }
-      WEBSCREEN_DEBUG_PRINTF("Button short press - Display %s\n",
-                             g_display_on ? "ON" : "OFF");
     }
     g_button_held = false;
   }
@@ -175,6 +184,9 @@ bool webscreen_hardware_button_pressed(void) {
 }
 void webscreen_hardware_set_button_callback(void (*callback)(bool pressed)) {
   g_button_callback = callback;
+}
+void webscreen_hardware_set_button_toggle(bool enabled) {
+  g_button_toggle_enabled = enabled;
 }
 uint16_t webscreen_hardware_get_battery_voltage(void) {
 
@@ -197,7 +209,7 @@ void webscreen_hardware_set_power_saving(bool enable) {
 void webscreen_hardware_deep_sleep(uint32_t duration_ms) {
   WEBSCREEN_DEBUG_PRINTF("Entering deep sleep for %lu ms\n", duration_ms);
   esp_sleep_enable_timer_wakeup(duration_ms * 1000);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)WEBSCREEN_PIN_BUTTON, 0);
   esp_deep_sleep_start();
 }
 void webscreen_hardware_power_off(void) {

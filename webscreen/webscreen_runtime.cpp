@@ -1,6 +1,7 @@
 #include "webscreen_runtime.h"
 #include "webscreen_main.h"
 #include "webscreen_network.h"
+#include "webscreen_base64.h"
 #include <lvgl.h>
 #include "tick.h"
 #include "pins_config.h"
@@ -272,31 +273,43 @@ bool webscreen_runtime_load_script(const char* script_file) {
     return false;
   }
 
-  g_js_script_content = file.readString();
-  file.close();
-
-  if (g_js_script_content.length() == 0) {
+  // The script lives in PSRAM so Elk's function-body pointers survive any
+  // regular-heap corruption from MQTT / lwip / PubSubClient operations.
+  // One sized read straight into the buffer — readString() reads byte-at-a-
+  // time with per-char timeout handling and reallocs the heap String as it
+  // grows, which is needlessly slow over the 1-bit SD bus.
+  size_t fsize = file.size();
+  if (fsize == 0) {
     WEBSCREEN_DEBUG_PRINTLN("Script file is empty");
+    file.close();
     return false;
   }
 
-  // Copy script to PSRAM so Elk's function-body pointers survive any
-  // regular-heap corruption from MQTT / lwip / PubSubClient operations.
   if (g_js_script_psram) { free(g_js_script_psram); g_js_script_psram = nullptr; }
-  g_js_script_psram_len = g_js_script_content.length();
-  g_js_script_psram = (char *)ps_malloc(g_js_script_psram_len + 1);
-  if (g_js_script_psram) {
-    memcpy(g_js_script_psram, g_js_script_content.c_str(), g_js_script_psram_len + 1);
-    // Free the regular-heap copy — we no longer need it
-    g_js_script_content = "";
-    WEBSCREEN_DEBUG_PRINTF("Script copied to PSRAM (%u bytes)\n", g_js_script_psram_len);
+  g_js_script_psram_len = 0;
+  g_js_script_content = "";
+
+  char *buf = (char *)ps_malloc(fsize + 1);
+  if (buf) {
+    size_t got = file.read((uint8_t *)buf, fsize);
+    file.close();
+    buf[got] = '\0';
+    if (got == 0) {
+      free(buf);
+      WEBSCREEN_DEBUG_PRINTLN("Script read failed");
+      return false;
+    }
+    g_js_script_psram = buf;
+    g_js_script_psram_len = got;
+    WEBSCREEN_DEBUG_PRINTF("Script loaded to PSRAM (%u bytes)\n", (unsigned)got);
   } else {
     WEBSCREEN_DEBUG_PRINTLN("WARNING: ps_malloc failed for script, using heap copy (vulnerable to corruption)");
-    g_js_script_psram_len = 0;
+    g_js_script_content = file.readString();
+    file.close();
+    if (g_js_script_content.length() == 0) {
+      return false;
+    }
   }
-
-  WEBSCREEN_DEBUG_PRINTF("Script loaded successfully (%u bytes)\n",
-      g_js_script_psram ? g_js_script_psram_len : g_js_script_content.length());
   return true;
 }
 bool webscreen_runtime_start_javascript_task(void) {
@@ -307,6 +320,10 @@ bool webscreen_runtime_start_javascript_task(void) {
 
   WEBSCREEN_DEBUG_PRINTLN("Starting JavaScript execution task...");
 
+  // Core 1: WiFi/lwip run high-priority on core 0 and used to starve the
+  // JS/LVGL task exactly when the network was busy. Core 1 only hosts
+  // loopTask (serial + power button polling); same priority 1 so FreeRTOS
+  // time-slices them — a long JS eval can never lock out the power button.
   BaseType_t result = xTaskCreatePinnedToCore(
     webscreen_runtime_javascript_task,
     "WebScreenJS",
@@ -314,7 +331,7 @@ bool webscreen_runtime_start_javascript_task(void) {
     NULL,   // Parameters
     1,      // Priority
     &g_js_task_handle,
-    0  // Core
+    1  // Core
   );
 
   if (result != pdPASS) {
@@ -403,6 +420,127 @@ bool webscreen_runtime_load_new_script(const char *script_file) {
   taskEXIT_CRITICAL(&g_js_restart_mux);
   webscreen_runtime_request_restart("script change");
   return true;
+}
+
+// ---- /eval REPL ----------------------------------------------------------
+//
+// Same handoff discipline as g_js_pending_script: loopTask writes the fixed
+// buffer only while the pending flag is clear; the JS task evaluates at its
+// safe point (no Elk C frames on the stack) and clears the flag when done.
+static char g_js_eval_buf[256] = "";
+static volatile bool g_js_eval_pending = false;
+
+bool webscreen_runtime_eval_snippet(const char *code) {
+  if (!g_javascript_active || js == NULL || g_js_safe_mode) return false;
+  if (g_js_eval_pending) return false;  // previous snippet still in flight
+  if (!code || code[0] == '\0' || strlen(code) >= sizeof(g_js_eval_buf)) return false;
+  strlcpy(g_js_eval_buf, code, sizeof(g_js_eval_buf));
+  g_js_eval_pending = true;
+  return true;
+}
+
+// ---- Last-error record (/errors) -----------------------------------------
+//
+// g_last_error (String) only ever captures startup failures; JS eval errors
+// land here instead — a fixed buffer so any task can write it, guarded by
+// the restart mux (the copy is a few hundred ns, fine inside a critical
+// section).
+static char g_js_last_error[160] = "";
+static uint32_t g_js_last_error_ms = 0;
+
+void webscreen_runtime_note_js_error(const char *msg) {
+  if (!msg) return;
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(g_js_last_error, msg, sizeof(g_js_last_error));
+  g_js_last_error_ms = WEBSCREEN_MILLIS();
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+}
+
+void webscreen_runtime_print_error_report(void) {
+  char last[sizeof(g_js_last_error)];
+  uint32_t when, failures, cycles;
+  bool safe_mode;
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(last, g_js_last_error, sizeof(last));
+  when = g_js_last_error_ms;
+  failures = g_js_restart_failures;
+  cycles = g_js_auto_restart_cycles;
+  safe_mode = g_js_safe_mode;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+
+  Serial.println("\n=== JS Error Report ===");
+  if (last[0] != '\0') {
+    Serial.printf("Last JS error (%lus ago): %s\n",
+                  (unsigned long)((WEBSCREEN_MILLIS() - when) / 1000), last);
+  } else {
+    Serial.println("Last JS error: none");
+  }
+  if (g_last_error.length() > 0) {
+    Serial.printf("Startup error: %s\n", g_last_error.c_str());
+  }
+  Serial.printf("Restart failures: %lu/%lu\n",
+                (unsigned long)failures, (unsigned long)JS_RESTART_FAILURE_LIMIT);
+  Serial.printf("Auto-restart cycles: %lu/%lu\n",
+                (unsigned long)cycles, (unsigned long)JS_AUTO_RESTART_CYCLE_LIMIT);
+  Serial.printf("Safe mode: %s\n", safe_mode ? "YES (fix the script, then /load or /restart_app)" : "no");
+  Serial.printf("Script: %s\n", g_current_script_file.length() > 0 ? g_current_script_file.c_str() : "(none)");
+}
+
+// ---- Button events --------------------------------------------------------
+//
+// Registered as the hardware button callback by dynamic_js_setup(); runs on
+// loopTask. The counters live in ws_elk_basics.h next to their JS bindings.
+void webscreen_runtime_notify_button(bool pressed) {
+  if (pressed) {
+    g_button_evt_produced++;
+  }
+}
+
+// ---- /screenshot ----------------------------------------------------------
+//
+// Same handoff discipline as /eval: loopTask sets the flag, the JS task
+// captures at its safe point (LVGL objects must not be touched from any
+// other task) and streams the snapshot over Serial. USB-CDC ignores the
+// virtual baud rate, so the ~340KB base64 dump takes low single-digit
+// seconds; LVGL is paused for the duration, which is fine — the screen
+// content is what's being captured.
+static volatile bool g_js_screenshot_pending = false;
+
+bool webscreen_runtime_request_screenshot(void) {
+  if (!g_javascript_active || js == NULL) return false;
+  if (g_js_screenshot_pending) return false;  // previous capture still in flight
+  g_js_screenshot_pending = true;
+  return true;
+}
+
+static void webscreen_runtime_stream_screenshot(void) {
+  lv_img_dsc_t *snap = lv_snapshot_take(lv_scr_act(), LV_IMG_CF_TRUE_COLOR);
+  if (snap == NULL) {
+    Serial.println("[ERROR] Screenshot failed (snapshot allocation)");
+    return;
+  }
+
+  Serial.printf("=== SCREENSHOT %ux%u RGB565%s ===\n",
+                (unsigned)snap->header.w, (unsigned)snap->header.h,
+                LV_COLOR_16_SWAP ? "_SWAP" : "");
+
+  // 57 raw bytes -> 76 base64 chars per line (classic MIME width)
+  const uint8_t *data = snap->data;
+  size_t len = snap->data_size;
+  char b64[80];
+  size_t lines = 0;
+  for (size_t off = 0; off < len; off += 57) {
+    size_t chunk = len - off;
+    if (chunk > 57) chunk = 57;
+    webscreen_base64_encode(data + off, chunk, b64);
+    Serial.println(b64);
+    // Yield periodically so the USB-CDC TX buffer drains and the watchdog
+    // stays fed on slow hosts.
+    if ((++lines & 0xFF) == 0) vTaskDelay(1);
+  }
+  Serial.println("=== SCREENSHOT END ===");
+
+  lv_snapshot_free(snap);
 }
 
 // Full-width wrapped error label so a broken script is visible on the device
@@ -502,6 +640,7 @@ static void webscreen_runtime_perform_inplace_restart(void) {
   g_js_restart_failures++;
   WEBSCREEN_DEBUG_PRINTF("JS app restart failed (%u/%u): %s\n",
                          g_js_restart_failures, JS_RESTART_FAILURE_LIMIT, err);
+  webscreen_runtime_note_js_error(err);
   if (g_js_restart_failures >= JS_RESTART_FAILURE_LIMIT) {
     // Safe mode: stop retrying, show the error, keep the device alive —
     // serial commands still work, so the user can fix the script and /load.
@@ -535,6 +674,7 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
   if (!webscreen_runtime_eval_script(err, sizeof(err))) {
     WEBSCREEN_DEBUG_PRINT("JavaScript execution error: ");
     WEBSCREEN_DEBUG_PRINTLN(err);
+    webscreen_runtime_note_js_error(err);
     // Make the failure visible on the device instead of a black screen.
     char msg[256];
     snprintf(msg, sizeof(msg),
@@ -557,6 +697,32 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
       g_js_gc_requested = false;
       js_gc(js);
     }
+    // /eval snippet queued by loopTask. The flag stays set until after the
+    // eval so loopTask never overwrites a buffer in use. A snippet that
+    // raced into a safe-mode transition is dropped, not left pending.
+    if (g_js_eval_pending && js != NULL) {
+      if (g_js_safe_mode) {
+        Serial.println("[EVAL] dropped: app is parked in safe mode");
+      } else {
+        jsval_t v = js_eval(js, g_js_eval_buf, strlen(g_js_eval_buf));
+        const char *s = js_str(js, v);
+        Serial.printf("[EVAL] %s\n", s ? s : "(no result)");
+        if (js_type(v) == JS_ERR && s) {
+          char rec[160];
+          snprintf(rec, sizeof(rec), "eval: %s", s);
+          webscreen_runtime_note_js_error(rec);
+        }
+      }
+      g_js_eval_pending = false;
+    }
+    // /screenshot queued by loopTask — capture at this safe point (no eval
+    // in progress, LVGL idle between timer runs).
+    if (g_js_screenshot_pending) {
+      webscreen_runtime_stream_screenshot();
+      g_js_screenshot_pending = false;
+    }
+    // Pending power-button short press -> registered JS handler
+    elk_dispatch_button_event();
     // Unconditional: the maintain loop also handles WiFi reconnection,
     // which non-MQTT apps need too (it gates the MQTT work internally).
     webscreen_runtime_wifi_mqtt_maintain_loop();

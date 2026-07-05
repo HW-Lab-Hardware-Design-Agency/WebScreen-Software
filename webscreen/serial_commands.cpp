@@ -3,6 +3,7 @@
 #include "webscreen_config.h"
 #include "webscreen_hardware.h"
 #include "webscreen_runtime.h"
+#include "webscreen_base64.h"
 #include <WiFi.h>
 #include <time.h>
 #include <sys/time.h>
@@ -40,19 +41,25 @@ const SerialCommands::Command SerialCommands::kCommands[] = {
   { "upload",      nullptr,    uploadFile,                          ARGS_RAW,          "/upload <file> [base64]",  "Upload any file (text or base64-encoded)" },
   { "config",      nullptr,    configCommand,                       ARGS_RAW,          "/config get <key>",        "Get config value from webscreen.json" },
   { "config",      nullptr,    nullptr,                             ARGS_RAW,          "/config set <key> <val>",  "Set config value in webscreen.json" },
-  { "ls",          "list",     listFiles,                           ARGS_DEFAULT_ROOT, "/ls [path]",               "List files/directories" },
+  { "ls",          "list",     listFiles,                           ARGS_DEFAULT_ROOT, "/ls [path] [json]",        "List files/directories (json = machine-readable)" },
   { "cat",         "view",     catFile,                             ARGS_RAW,          "/cat <file>",              "Display file contents" },
-  { "rm",          "delete",   deleteFile,                          ARGS_RAW,          "/rm <file>",               "Delete file" },
-  { "load",        "run",      loadApp,                             ARGS_RAW,          "/load <script.js>",        "Load/switch to different JS app" },
+  { "rm",          "delete",   deleteFile,                          ARGS_RAW,          "/rm <file|empty-dir>",     "Delete file or empty directory" },
+  { "mkdir",       nullptr,    makeDirectory,                       ARGS_RAW,          "/mkdir <path>",            "Create directory on SD card" },
+  { "download",    "dl",       downloadFile64,                      ARGS_RAW,          "/download <file>",         "Dump file as base64 (host-side download)" },
+  { "load",        "run",      loadApp,                             ARGS_RAW,          "/load <script.js> [save]", "Load/switch to different JS app (save = persist to config)" },
   { "restart_app", nullptr,    [](const String&) { restartApp(); }, ARGS_IGNORED,      "/restart_app",             "Restart the JS app in place (no reboot)" },
+  { "eval",        nullptr,    evalJs,                              ARGS_RAW,          "/eval <js-code>",          "Evaluate JS in the running app (REPL)" },
+  { "errors",      nullptr,    [](const String&) { showErrors(); }, ARGS_IGNORED,      "/errors",                  "Show last JS error and restart-ladder state" },
   { "gc",          nullptr,    [](const String&) { runGC(); },      ARGS_IGNORED,      "/gc",                      "Run JS garbage collection" },
-  { "wget",        "download", wget,                                ARGS_RAW,          "/wget <url> [file]",       "Download file from URL to SD card" },
+  { "screenshot",  "ss",       [](const String&) { screenshot(); }, ARGS_IGNORED,      "/screenshot",              "Capture the screen as base64 RGB565" },
+  { "wget",        "fetch",    wget,                                ARGS_RAW,          "/wget <url> [file]",       "Download file from URL to SD card" },
   { "ping",        nullptr,    ping,                                ARGS_RAW,          "/ping <host>",             "Test network connectivity" },
   { "backup",      nullptr,    backup,                              ARGS_RAW,          "/backup [save|restore]",   "Backup/restore configuration" },
   { "monitor",     "mon",      monitor,                             ARGS_RAW,          "/monitor [cpu|mem|net]",   "Live system monitoring" },
   { "brightness",  nullptr,    setBrightness,                       ARGS_RAW,          "/brightness <0-255>",      "Set display brightness" },
   { "time",        nullptr,    [](const String&) { showTime(); },   ARGS_IGNORED,      "/time",                    "Show current device time" },
   { "settime",     nullptr,    setTime,                             ARGS_RAW,          "/settime <epoch> [tz]",    "Set device time from epoch" },
+  { "factory_reset", nullptr,  factoryReset,                        ARGS_RAW,          "/factory_reset confirm",   "Delete webscreen.json and reboot to fallback" },
   { "reboot",      "restart",  [](const String&) { reboot(); },     ARGS_IGNORED,      "/reboot",                  "Restart the device" },
 };
 
@@ -213,7 +220,7 @@ void SerialCommands::writeScript(const String& args) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -308,7 +315,7 @@ void SerialCommands::uploadFile(const String& args) {
     return;
   }
 
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -418,7 +425,7 @@ void SerialCommands::configSet(const String& args) {
   String key = args.substring(0, spaceIndex);
   String value = args.substring(spaceIndex + 1);
 
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -463,7 +470,7 @@ void SerialCommands::configGet(const String& args) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -503,31 +510,89 @@ void SerialCommands::configGet(const String& args) {
   }
 }
 
+// Print a string as a JSON value, escaping quotes/backslashes/control chars
+static void printJsonString(const char* s) {
+  Serial.print('"');
+  for (; *s; s++) {
+    char c = *s;
+    if (c == '"' || c == '\\') {
+      Serial.print('\\');
+      Serial.print(c);
+    } else if ((uint8_t)c < 0x20) {
+      Serial.printf("\\u%04x", (unsigned)c);
+    } else {
+      Serial.print(c);
+    }
+  }
+  Serial.print('"');
+}
+
 void SerialCommands::listFiles(const String& path) {
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
-  
-  File root = SD_MMC.open(path);
+
+  // Optional trailing "json" token switches to a single-line
+  // machine-readable listing (for host tools)
+  String p = path;
+  p.trim();
+  bool json = false;
+  if (p == "json") {
+    json = true;
+    p = "/";
+  } else if (p.endsWith(" json")) {
+    json = true;
+    p = p.substring(0, p.length() - 5);
+    p.trim();
+  }
+  if (p.length() == 0) p = "/";
+
+  File root = SD_MMC.open(p);
   if (!root || !root.isDirectory()) {
-    printError("Cannot open directory: " + path);
+    printError("Cannot open directory: " + p);
     return;
   }
-  
-  Serial.println("\nDirectory listing for: " + path);
-  Serial.println("Type    Size        Name");
-  Serial.println("--------------------------------");
-  
-  File file = root.openNextFile();
-  while (file) {
-    Serial.printf("%-7s %-10s %s\n", 
-                  file.isDirectory() ? "DIR" : "FILE",
-                  file.isDirectory() ? "" : formatBytes(file.size()).c_str(),
-                  file.name());
-    file = root.openNextFile();
+
+  size_t fileCount = 0, dirCount = 0;
+
+  if (json) {
+    Serial.print("{\"path\":");
+    printJsonString(p.c_str());
+    Serial.print(",\"entries\":[");
+    File file = root.openNextFile();
+    bool first = true;
+    while (file) {
+      if (!first) Serial.print(',');
+      first = false;
+      Serial.print("{\"name\":");
+      printJsonString(file.name());
+      Serial.printf(",\"dir\":%s,\"size\":%u}",
+                    file.isDirectory() ? "true" : "false",
+                    file.isDirectory() ? 0 : (unsigned)file.size());
+      if (file.isDirectory()) dirCount++; else fileCount++;
+      file = root.openNextFile();
+    }
+    Serial.println("]}");
+  } else {
+    Serial.println("\nDirectory listing for: " + p);
+    Serial.println("Type    Size        Name");
+    Serial.println("--------------------------------");
+
+    File file = root.openNextFile();
+    while (file) {
+      Serial.printf("%-7s %-10s %s\n",
+                    file.isDirectory() ? "DIR" : "FILE",
+                    file.isDirectory() ? "" : formatBytes(file.size()).c_str(),
+                    file.name());
+      if (file.isDirectory()) dirCount++; else fileCount++;
+      file = root.openNextFile();
+    }
+    // End marker so host tools know the listing is complete
+    Serial.printf("Total: %u files, %u directories\n",
+                  (unsigned)fileCount, (unsigned)dirCount);
   }
-  
+
   root.close();
 }
 
@@ -537,17 +602,123 @@ void SerialCommands::deleteFile(const String& path) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
   
   String fullPath = path.startsWith("/") ? path : ("/" + path);
-  
-  if (SD_MMC.remove(fullPath)) {
+
+  // Directories are removed with rmdir (must be empty)
+  File f = SD_MMC.open(fullPath);
+  bool isDir = f && f.isDirectory();
+  if (f) f.close();
+
+  if (isDir) {
+    if (SD_MMC.rmdir(fullPath)) {
+      printSuccess("Directory removed: " + fullPath);
+    } else {
+      printError("Cannot remove directory (not empty?): " + fullPath);
+    }
+  } else if (SD_MMC.remove(fullPath)) {
     printSuccess("File deleted: " + fullPath);
   } else {
     printError("Cannot delete file: " + fullPath);
+  }
+}
+
+void SerialCommands::makeDirectory(const String& path) {
+  if (path.length() == 0) {
+    printError("Usage: /mkdir <path>");
+    return;
+  }
+
+  if (!sdReady()) {
+    printError("SD card not available");
+    return;
+  }
+
+  String fullPath = path.startsWith("/") ? path : ("/" + path);
+  fullPath.trim();
+
+  if (SD_MMC.exists(fullPath)) {
+    printError("Already exists: " + fullPath);
+  } else if (SD_MMC.mkdir(fullPath)) {
+    printSuccess("Directory created: " + fullPath);
+  } else {
+    printError("Cannot create directory: " + fullPath);
+  }
+}
+
+void SerialCommands::downloadFile64(const String& path) {
+  if (path.length() == 0) {
+    printError("Usage: /download <file>");
+    return;
+  }
+
+  if (!sdReady()) {
+    printError("SD card not available");
+    return;
+  }
+
+  String fullPath = path.startsWith("/") ? path : ("/" + path);
+  fullPath.trim();
+
+  File file = SD_MMC.open(fullPath, FILE_READ);
+  if (!file || file.isDirectory()) {
+    if (file) file.close();
+    printError("Cannot open file: " + fullPath);
+    return;
+  }
+
+  Serial.printf("=== DOWNLOAD %s SIZE %u ===\n", fullPath.c_str(), (unsigned)file.size());
+
+  // 57 raw bytes -> one 76-char base64 line (classic MIME width)
+  uint8_t raw[57 * 8];
+  char b64[80];
+  size_t n;
+  while ((n = file.read(raw, sizeof(raw))) > 0) {
+    for (size_t off = 0; off < n; off += 57) {
+      size_t chunk = n - off;
+      if (chunk > 57) chunk = 57;
+      webscreen_base64_encode(raw + off, chunk, b64);
+      Serial.println(b64);
+    }
+  }
+  file.close();
+
+  Serial.println("=== DOWNLOAD END ===");
+}
+
+void SerialCommands::factoryReset(const String& args) {
+  String a = args;
+  a.trim();
+  a.toLowerCase();
+  if (a != "confirm") {
+    printError("This deletes /webscreen.json and reboots into fallback mode. Run '/factory_reset confirm' to proceed.");
+    return;
+  }
+
+  if (!sdReady()) {
+    printError("SD card not available");
+    return;
+  }
+
+  if (SD_MMC.exists("/webscreen.json") && !SD_MMC.remove("/webscreen.json")) {
+    printError("Cannot delete /webscreen.json");
+    return;
+  }
+
+  printSuccess("Configuration deleted. Rebooting into fallback mode in 3 seconds...");
+  delay(3000);
+  ESP.restart();
+}
+
+void SerialCommands::screenshot() {
+  if (webscreen_runtime_request_screenshot()) {
+    Serial.println("Queued. Data follows as an '=== SCREENSHOT ... ===' block");
+  } else {
+    printError("Screenshot unavailable (JS runtime not running, or a capture is in flight)");
   }
 }
 
@@ -557,7 +728,7 @@ void SerialCommands::catFile(const String& path) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -586,7 +757,7 @@ void SerialCommands::reboot() {
 
 void SerialCommands::loadApp(const String& scriptName) {
   if (scriptName.length() == 0) {
-    printError("Usage: /load <script.js>");
+    printError("Usage: /load <script.js> [save]");
     return;
   }
 
@@ -595,16 +766,31 @@ void SerialCommands::loadApp(const String& scriptName) {
     return;
   }
 
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
-  
-  String fullPath = scriptName.startsWith("/") ? scriptName : ("/" + scriptName);
+
+  // Optional trailing "save": also persist the script into webscreen.json
+  // so it survives the next boot (otherwise /load is session-only).
+  String name = scriptName;
+  bool persist = false;
+  int spaceIndex = name.indexOf(' ');
+  if (spaceIndex > 0) {
+    String opt = name.substring(spaceIndex + 1);
+    opt.trim();
+    opt.toLowerCase();
+    if (opt == "save") {
+      persist = true;
+      name = name.substring(0, spaceIndex);
+    }
+  }
+
+  String fullPath = name.startsWith("/") ? name : ("/" + name);
   if (!fullPath.endsWith(".js")) {
     fullPath += ".js";
   }
-  
+
   // Check if file exists
   File file = SD_MMC.open(fullPath, FILE_READ);
   if (!file) {
@@ -616,9 +802,22 @@ void SerialCommands::loadApp(const String& scriptName) {
   // In-place restart of the JS app with the new script (no device reboot)
   if (webscreen_runtime_load_new_script(fullPath.c_str())) {
     printSuccess("Loading script: " + fullPath);
+    if (persist) {
+      configSet("script " + fullPath);
+    }
   } else {
     printError("Cannot load script: " + fullPath);
   }
+}
+
+// The card is mounted at boot; re-running SD_MMC.begin() on every command
+// re-takes the SDMMC lock and can re-probe the card. Only attempt a (re)mount
+// when the card is actually absent (e.g. inserted after boot).
+bool SerialCommands::sdReady() {
+  if (SD_MMC.cardType() != CARD_NONE) {
+    return true;
+  }
+  return SD_MMC.begin();
 }
 
 void SerialCommands::printPrompt() {
@@ -675,7 +874,7 @@ void SerialCommands::wget(const String& args) {
   }
   
   // Check SD card
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -841,7 +1040,7 @@ void SerialCommands::ping(const String& args) {
 }
 
 void SerialCommands::backup(const String& args) {
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -1197,6 +1396,28 @@ void SerialCommands::restartApp() {
   }
   webscreen_runtime_request_restart("serial /restart_app");
   printSuccess("JS app restart requested (in-place, no reboot)");
+}
+
+void SerialCommands::evalJs(const String& args) {
+  String code = args;
+  code.trim();
+  if (code.length() == 0) {
+    printError("Usage: /eval <js-code>   e.g. /eval print(mem_info())");
+    return;
+  }
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode)");
+    return;
+  }
+  if (webscreen_runtime_eval_snippet(code.c_str())) {
+    Serial.println("Queued. Result follows as [EVAL] ...");
+  } else {
+    printError("Cannot queue eval (busy, safe mode, or snippet longer than 255 chars)");
+  }
+}
+
+void SerialCommands::showErrors() {
+  webscreen_runtime_print_error_report();
 }
 
 void SerialCommands::runGC() {

@@ -13,10 +13,13 @@
 // ============================================================================
 // FIRMWARE VERSION
 // ============================================================================
+// Keep the 2.x scheme (git tags 2.0.x, main shipped "2.0.8"): WebScreen-Admin
+// parses "WebScreen Version:" from /info and enables /upload only for
+// major >= 2, so a 0.x string silently downgrades uploads to legacy /write.
 #define WEBSCREEN_VERSION_MAJOR 2
-#define WEBSCREEN_VERSION_MINOR 0
+#define WEBSCREEN_VERSION_MINOR 2
 #define WEBSCREEN_VERSION_PATCH 0
-#define WEBSCREEN_VERSION_STRING "0.2.3-dev"
+#define WEBSCREEN_VERSION_STRING "2.2.0-dev"
 
 // ============================================================================
 // HARDWARE CONFIGURATION
@@ -29,7 +32,12 @@
 
 // Pin Definitions (ESP32-S3 WebScreen Hardware)
 #define WEBSCREEN_PIN_LED 38
-#define WEBSCREEN_PIN_BUTTON 33
+// GPIO 21 is the board's user button (PIN_BUTTON_2 in pins_config.h).
+// NEVER use GPIO 33-37 here: on the ESP32-S3 with octal (OPI) PSRAM those
+// pins ARE the PSRAM bus — a single pinMode() on them corrupts all PSRAM
+// access and the firmware dies at the next allocation (wedged panic, no
+// backtrace over USB-CDC, TG1WDT reset loop).
+#define WEBSCREEN_PIN_BUTTON 21
 #define WEBSCREEN_PIN_OUTPUT 1
 
 // Display Pins (RM67162 AMOLED)

@@ -10,7 +10,6 @@
  * B) LVGL + Display
  ******************************************************************************/
 static lv_disp_draw_buf_t draw_buf;
-static lv_color_t *buf = NULL;
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {  // Calculate width/height from the area
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -53,22 +52,16 @@ void init_lvgl_display() {
   lv_init();
   start_lvgl_tick();
 
-  // Use double buffering: draw BUF in internal RAM (DMA capable),
-  // flush BUF in PSRAM (big but non‑DMA).
+  // Single DRAM draw buffer. With two buffers LVGL 8 ALTERNATES render
+  // targets, and the old second buffer lived in PSRAM — so half of all
+  // rendering (read-modify-write blends and fills) ran against slow OPI
+  // PSRAM for zero benefit: the flush below is synchronous, so double
+  // buffering never overlapped render with transfer anyway.
   static const uint32_t DRAW_BUF_LINES = 40;  // tweak later
   static lv_color_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES];
-  // The second buffer only needs DRAW_BUF_LINES as well — lv_disp_draw_buf_init
-  // below is told size EXAMPLE_LCD_H_RES * DRAW_BUF_LINES, so allocating a
-  // full-screen LVGL_LCD_BUF_SIZE here wasted ~214KB of PSRAM that LVGL could
-  // never address.
-  buf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * EXAMPLE_LCD_H_RES * DRAW_BUF_LINES);  // PSRAM
-  if (!buf) {
-    LOG("Failed to allocate LVGL buffer in PSRAM");
-    return;
-  }
 
   // Initialize LVGL draw buffer
-  lv_disp_draw_buf_init(&draw_buf, draw_buf_int, buf, EXAMPLE_LCD_H_RES * DRAW_BUF_LINES);
+  lv_disp_draw_buf_init(&draw_buf, draw_buf_int, NULL, EXAMPLE_LCD_H_RES * DRAW_BUF_LINES);
 
   // Register the display driver
   static lv_disp_drv_t disp_drv;

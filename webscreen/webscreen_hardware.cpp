@@ -56,11 +56,7 @@ bool webscreen_hardware_init_sd_card(void) {
   WEBSCREEN_DEBUG_PRINTLN("Initializing SD Card...");
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
 
-  // The card must be initialized at a low frequency first; starting
-  // straight at a high frequency makes send_op_cond time out (0x107) and
-  // leaves the host in a state where even subsequent 400kHz mounts fail.
-  // So: probe-mount at 400kHz, then remount at 10MHz, keeping the low
-  // speed mount as a fallback.
+  // Card must init at 400 kHz first; a high-frequency first mount times out and wedges the host.
   for (int i = 0; i < 3; i++) {
 
     WEBSCREEN_DEBUG_PRINTF("Attempt %d: Mounting SD card at a safe, low frequency...\n", i + 1);
@@ -109,8 +105,7 @@ uint8_t webscreen_display_get_brightness(void) {
   return g_brightness;
 }
 void webscreen_hardware_sync_brightness(uint8_t v) {
-  // Cache-only update for modules that drive the panel directly
-  // (e.g. JS set_brightness), so display off/on restores the latest value.
+  // Cache-only, for modules that drive the panel directly; display off/on restores the latest value
   g_brightness = v;
 }
 bool webscreen_display_set_rotation(uint8_t rotation) {
@@ -128,8 +123,7 @@ void webscreen_display_power(bool on) {
     webscreen_display_set_brightness(g_brightness);
   } else {
     WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
-    // Panel keeps rendering with the LED pin low; zero its own brightness
-    // too. Bypass the setter so g_brightness keeps the restore value.
+    // Panel keeps rendering with LED low; bypass the setter so g_brightness keeps the restore value
     lcd_brightness(0);
   }
 

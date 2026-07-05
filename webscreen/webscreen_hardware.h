@@ -74,14 +74,7 @@ extern "C" {
 
   uint8_t webscreen_display_get_brightness(void);
 
-  /**
- * @brief Sync the cached brightness value without touching the panel
- *
- * For modules that write the panel directly (e.g. JS set_brightness),
- * so a display off/on cycle restores the latest value.
- *
- * @param v Brightness level (0-255)
- */
+  // Sync the cached brightness (0-255) without touching the panel, so display off/on restores it
 
   void webscreen_hardware_sync_brightness(uint8_t v);
 
@@ -134,15 +127,7 @@ extern "C" {
 
   void webscreen_hardware_set_button_callback(void (*callback)(bool pressed));
 
-  /**
- * @brief Enable/disable the default short-press display toggle
- *
- * When a JS app claims the button (on_button), the display toggle is
- * suppressed so presses reach the app instead. Long-press power-off is
- * never affected.
- *
- * @param enabled true = short press toggles the display (default)
- */
+  // Enable/disable the short-press display toggle (suppressed while a JS app claims the button)
 
   void webscreen_hardware_set_button_toggle(bool enabled);
 

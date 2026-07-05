@@ -1,10 +1,4 @@
-// ws_elk_basics.h — fragment of the WebScreen Elk/LVGL bridge.
-//
-// NOT a standalone header: it is included exactly once, in order, by
-// lvgl_elk.h (which is itself included only by webscreen_runtime.cpp).
-// Symbols here may depend on every fragment included before it.
-// Split from the former 3,700-line lvgl_elk.h monolith; see lvgl_elk.h
-// for the include order.
+// ws_elk_basics.h — fragment of the WebScreen Elk/LVGL bridge; included once, in order, by lvgl_elk.h (not standalone).
 
 /******************************************************************************
  * E) Elk-Facing Functions (print, Wi-Fi, SD ops, etc.)
@@ -18,7 +12,6 @@ static jsval_t js_print(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-// Memory stats - useful for debugging memory issues
 static jsval_t js_mem_stats(struct js *js, jsval_t *args, int nargs) {
   size_t freeHeap = ESP.getFreeHeap();
   size_t minFreeHeap = ESP.getMinFreeHeap();
@@ -35,12 +28,10 @@ static jsval_t js_mem_stats(struct js *js, jsval_t *args, int nargs) {
   }
   LOGF("====================\n");
 
-  // Return free heap as a number for JS to use
   return js_mknum(freeHeap);
 }
 
-// mem_info() => JSON string with all memory pools, for apps that want to
-// display or report their own footprint.
+// mem_info() => JSON string of heap/PSRAM/JS-arena stats
 static jsval_t js_mem_info(struct js *js, jsval_t *args, int nargs) {
   char buf[224];
   snprintf(buf, sizeof(buf),
@@ -53,24 +44,20 @@ static jsval_t js_mem_info(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, buf, strlen(buf));
 }
 
-// gc() => request a garbage collection. The collection itself must NOT run
-// here: a binding executes inside a function call (F_CALL), where Elk's GC
-// would dangle the saved code pointer in do_call_op(). The timer bridge and
-// the JS task loop run it at the next safe point instead.
+// gc() => request a collection; never collect here (bindings run under F_CALL,
+// where GC dangles do_call_op's saved code pointer) — safe points collect instead.
 static volatile bool g_js_gc_requested = false;
 static jsval_t js_request_gc(struct js *js, jsval_t *args, int nargs) {
   g_js_gc_requested = true;
   return js_mknum((double)(js_total(js) - js_usage(js)));  // free bytes (pre-GC)
 }
 
-// Wi-Fi connect
 static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 2) return js_mkfalse();
   String ssid = js_arg_str(js, args[0]);
   String pass = js_arg_str(js, args[1]);
   if (ssid.isEmpty()) return js_mkfalse();
-  // No isEmpty() bail for pass: an empty password is valid (open AP) and has
-  // always been forwarded to WiFi.begin() as-is.
+  // No isEmpty() bail for pass: an empty password is valid (open AP).
 
   LOGF("Connecting to Wi-Fi SSID: %s\n", ssid.c_str());
   WiFi.begin(ssid.c_str(), pass.c_str());
@@ -103,7 +90,6 @@ static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, ipStr.c_str(), ipStr.length());
 }
 
-// Delay in JS: "delay(ms)"
 static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
   double ms = js_getnum(args[0]);
@@ -127,45 +113,27 @@ static jsval_t js_str_length(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)str.length());
 }
 
-// LVGL Timer Bridging Functions
-
-// Implemented in webscreen_runtime.cpp — ask the JS task to tear down and
-// re-start the app in place. NEVER reboots the device. The _auto variant is
-// for error-streak escalation: unlike an explicit user request it does not
-// lift safe mode and it counts toward the give-up ladder. (extern "C" to
-// match the declarations in webscreen_runtime.h.)
+// In webscreen_runtime.cpp: restart the app in place, never a reboot; _auto keeps safe mode and counts toward the give-up ladder.
 extern "C" void webscreen_runtime_request_restart(const char *reason);
 extern "C" void webscreen_runtime_request_restart_auto(const char *reason);
 extern "C" void webscreen_runtime_note_js_error(const char *msg);
 
-// Per-timer state carried as lv_timer user_data. The streak lives per timer
-// so one healthy timer cannot mask a permanently broken one (a single global
-// counter would reset on every interleaved success and never escalate).
 struct ElkTimerCtx {
   uint32_t streak;  // Consecutive failed evals of THIS timer's function
   char name[56];    // JS function name to call
 };
 
-// Consecutive failed evals of one timer before we give up on the current app
-// state and request an in-place restart (engine re-created over the same
-// arena, script re-evaluated). An OOM'd or wedged script recovers in ~1s
-// instead of power-cycling the device.
+// Consecutive failed evals of one timer before requesting an in-place app restart.
 static const uint32_t JS_ERROR_STREAK_LIMIT = 10;
 
-// Retained for teardown bookkeeping (reset between app generations).
 static uint32_t g_js_error_streak = 0;
 
-// This C++ function will be the callback for LVGL. It will execute a JS function.
 static void elk_timer_cb(lv_timer_t *timer) {
   ElkTimerCtx *ctx = (ElkTimerCtx *)timer->user_data;
   if (ctx == NULL || js == NULL) return;
   const char *func_name = ctx->name;
 
-  // Internal-DRAM guard: TLS, lwip, MQTT and LVGL all allocate from internal
-  // heap; when it is genuinely low the only safe move is to shed load for a
-  // tick. js_gc() cannot help here — it compacts the PSRAM arena, a different
-  // memory — and rebooting (what this firmware used to do) just turns memory
-  // pressure into a crash loop.
+  // Low internal DRAM (shared with TLS/lwip/LVGL): shed this tick; js_gc() only compacts the PSRAM arena.
   size_t freeHeap = ESP.getFreeHeap();
   if (freeHeap < 20000) {
     static uint32_t lastWarning = 0;
@@ -178,17 +146,14 @@ static void elk_timer_cb(lv_timer_t *timer) {
   }
 
   // Between evals is a GC-safe point (no Elk C frames on the stack).
-  // Collect early when the arena is filling up, or when JS asked via gc().
   if (g_js_gc_requested || js_usage(js) > (js_total(js) / 4) * 3) {
     g_js_gc_requested = false;
     js_gc(js);
   }
 
-  // Construct a snippet of JavaScript to call the function, e.g., "my_func();"
   char snippet[64];
   snprintf(snippet, sizeof(snippet), "%s();", func_name);
 
-  // Use js_eval to execute the function call.
   jsval_t res = js_eval(js, snippet, strlen(snippet));
   if (js_type(res) == JS_ERR) {
     ctx->streak++;
@@ -201,9 +166,6 @@ static void elk_timer_cb(lv_timer_t *timer) {
       snprintf(rec, sizeof(rec), "timer %s: %s", ctx->name, errstr ? errstr : "?");
       webscreen_runtime_note_js_error(rec);
     }
-    // An error often leaves garbage at a high-water mark; collect on the
-    // FIRST error of a streak so a transient OOM can clear itself — but not
-    // on every tick (a full mark-compact per 100ms tick is pure churn).
     if (ctx->streak == 1) {
       js_gc(js);
     }
@@ -216,9 +178,7 @@ static void elk_timer_cb(lv_timer_t *timer) {
   }
 }
 
-// Delete every LVGL timer created through create_timer() and free the
-// malloc'd function-name strings they carry. Used by timer_delete() and by
-// the in-place app restart.
+// Delete every create_timer() timer and free its malloc'd context.
 static void delete_all_elk_timers() {
   lv_timer_t *t = lv_timer_get_next(NULL);
   while (t != NULL) {
@@ -231,8 +191,7 @@ static void delete_all_elk_timers() {
   }
 }
 
-// timer_delete("fname") => stop the timer created with create_timer("fname", ms).
-// Returns true if a timer was found and deleted.
+// timer_delete("fname") => delete the timer created with create_timer("fname", ms).
 static jsval_t js_timer_delete(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
   size_t len = 0;
@@ -254,8 +213,6 @@ static jsval_t js_timer_delete(struct js *js, jsval_t *args, int nargs) {
   return js_mkfalse();
 }
 
-// This is the function we will expose to JavaScript.
-// It creates an LVGL timer that will call our C++ callback.
 static jsval_t js_create_timer(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     LOG("create_timer expects: function_name, period_ms");
@@ -285,14 +242,12 @@ static jsval_t js_create_timer(struct js *js, jsval_t *args, int nargs) {
   memcpy(ctx->name, func_name_str, func_name_len);
   ctx->name[func_name_len] = '\0';
 
-  // Create the LVGL timer
   lv_timer_create(elk_timer_cb, (uint32_t)period, ctx);
 
   LOGF("Created LVGL timer to call JS function '%s' every %dms\n", ctx->name, (int)period);
   return js_mknull();
 }
 
-// sd_read_file(path)
 static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
   String path = js_arg_str(js, args[0]);
@@ -303,8 +258,7 @@ static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
     LOGF("Failed to open file: %s\n", path.c_str());
     return js_mknull();
   }
-  // The content briefly exists twice (heap String + Elk arena copy); a
-  // multi-MB file would exhaust both, so refuse anything over 256KB.
+  // Content briefly exists twice (heap String + arena copy); refuse files > 256KB.
   size_t fileSize = file.size();
   if (fileSize > 256 * 1024) {
     LOGF("sd_read_file: %s is %u bytes, refusing files > 256KB\n",
@@ -317,7 +271,6 @@ static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, content.c_str(), content.length());
 }
 
-// sd_write_file(path, data)
 static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 2) return js_mkfalse();
   const char *path = js_str(js, args[0]);
@@ -334,7 +287,6 @@ static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
   return js_mktrue();
 }
 
-// sd_list_dir(path)
 static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
   String path = js_arg_str(js, args[0]);
@@ -351,7 +303,6 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
     return js_mknull();
   }
 
-  // Collect listing
   char fileList[512];
   int fileListLen = 0;
 
@@ -369,29 +320,24 @@ static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, fileList, fileListLen);
 }
 
-// Helper function to convert a JS string to a JS number
 static jsval_t js_to_number(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) {
     return js_mknum(0);  // Return 0 if no argument
   }
 
-  // If it's already a number, just return it.
   if (js_type(args[0]) == JS_NUM) {
     return args[0];
   }
 
-  // Get the string value from the JS argument
   size_t len;
   const char *str = js_getstr(js, args[0], &len);
   if (!str) {
     return js_mknum(0);  // Return 0 if not a valid string
   }
 
-  // Convert the C-string to a double and return as a JS number
   return js_mknum(atof(str));
 }
 
-// Helper function to convert a JS number to a JS string
 static jsval_t js_number_to_string(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) {
     return js_mkstr(js, "", 0);
@@ -402,7 +348,6 @@ static jsval_t js_number_to_string(struct js *js, jsval_t *args, int nargs) {
   if (type == JS_NUM) {
     char buf[32];
     double num = js_getnum(args[0]);
-    // Using "%.17g" is how the Elk engine itself formats numbers
     snprintf(buf, sizeof(buf), "%.17g", num);
     return js_mkstr(js, buf, strlen(buf));
   } else if (type == JS_STR) {  // If it's already a string (like from parse_json_value), just return it
@@ -414,15 +359,9 @@ static jsval_t js_number_to_string(struct js *js, jsval_t *args, int nargs) {
 
 /******************************************************************************
  * E2) String / number / random helpers
- *
- * Elk has no Math.random, no String.split and no printf-style formatting;
- * every example app used to hand-roll these (LCGs that overflow doubles,
- * 25-line CSV parsers, duplicated padZero functions). One binding each.
  ******************************************************************************/
 
-// random()            => float in [0, 1)
-// random(max)         => integer in [0, max)
-// random(min, max)    => integer in [min, max)
+// random() => [0,1); random(max) => int in [0,max); random(min,max) => int in [min,max)
 static jsval_t js_random(struct js *js, jsval_t *args, int nargs) {
   double r = (double)esp_random() / 4294967296.0;  // hardware RNG, [0, 1)
   if (nargs == 0) return js_mknum(r);
@@ -432,8 +371,7 @@ static jsval_t js_random(struct js *js, jsval_t *args, int nargs) {
   return js_mknum(lo + floor(r * (hi - lo)));
 }
 
-// str_split(str, sep, idx) => idx-th field (0-based), or null past the end.
-// The separator may be multi-character. Empty fields are returned as "".
+// str_split(str, sep, idx) => idx-th field (0-based) or null; sep may be multi-char.
 static jsval_t js_str_split(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 3) return js_mknull();
   String s = js_arg_str(js, args[0]);
@@ -490,17 +428,7 @@ static jsval_t js_pad_number(struct js *js, jsval_t *args, int nargs) {
 }
 
 /******************************************************************************
- * E3) Button events
- *
- * The power button's short press is debounced on loopTask
- * (webscreen_hardware_handle_button); long press is power-off and never
- * reaches JS. Events cross to the JS task through two single-writer
- * counters (produced: loopTask, consumed: JS task) — lock-free by design.
- *
- * An app claims the button with on_button("fn"): the named function is
- * called with the event code at the JS task's next safe point, and the
- * default display-toggle is disabled while a handler is registered.
- * Poll-style apps use get_button_event() + button_set_toggle(false).
+ * E3) Button events — short presses cross loopTask -> JS task via two single-writer counters (lock-free); long press = power off, never reaches JS.
  ******************************************************************************/
 static volatile uint32_t g_button_evt_produced = 0;  // written by loopTask only
 static volatile uint32_t g_button_evt_consumed = 0;  // written by JS task only
@@ -508,8 +436,7 @@ static char g_button_cb_name[56] = "";
 
 extern "C" void webscreen_hardware_set_button_toggle(bool enabled);
 
-// on_button("fn") => deliver short presses to fn(1); on_button("") releases
-// the button (handler removed, display toggle restored).
+// on_button("fn") => short presses call fn(1); on_button("") restores the default toggle.
 static jsval_t js_on_button(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
   String name = js_arg_str(js, args[0]);
@@ -532,17 +459,14 @@ static jsval_t js_get_button_event(struct js *js, jsval_t *args, int nargs) {
   return js_mknum(0);
 }
 
-// button_set_toggle(bool) => keep/suppress the default display on/off toggle
-// (for poll-style apps that read get_button_event() without a handler).
+// button_set_toggle(bool) => keep/suppress the default display on/off toggle when polling.
 static jsval_t js_button_set_toggle(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
   webscreen_hardware_set_button_toggle(js_truthy(js, args[0]));
   return js_mktrue();
 }
 
-// Called by the JS task loop at its safe point: dispatch one pending button
-// event to the registered handler. Mirrors the timer bridge's eval-by-name
-// pattern (Elk cannot hold function values across C callbacks).
+// JS-task safe point: dispatch one pending press by name (Elk cannot hold function values across C callbacks).
 static void elk_dispatch_button_event(void) {
   if (js == NULL || g_button_cb_name[0] == '\0') return;
   if (g_button_evt_produced == g_button_evt_consumed) return;

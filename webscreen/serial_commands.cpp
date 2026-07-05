@@ -15,24 +15,22 @@
 // Abort blocking receive loops if the host stops sending (loopTask must never hang)
 static const unsigned long SERIAL_RX_TIMEOUT_MS = 30000;
 
-// How dispatch passes the raw argument string to a handler
 enum ArgStyle : uint8_t {
-  ARGS_IGNORED,       // handler takes no arguments
-  ARGS_RAW,           // pass through unmodified
-  ARGS_DEFAULT_ROOT,  // empty args defaults to "/" (for /ls)
+  ARGS_IGNORED,
+  ARGS_RAW,
+  ARGS_DEFAULT_ROOT,
 };
 
 struct SerialCommands::Command {
-  const char* name;                      // primary name, matched against lowercased input
-  const char* alias;                     // alternate spelling, or nullptr
-  void (*handler)(const String& args);   // nullptr = help-only continuation row
+  const char* name;
+  const char* alias;
+  void (*handler)(const String& args);
   ArgStyle argStyle;
-  const char* usage;                     // /help usage column
-  const char* desc;                      // /help description column
+  const char* usage;
+  const char* desc;
 };
 
-// One row per command; table order is the /help listing order. Exact-match
-// dispatch means row order never changes which command wins.
+// Row order = /help listing order; a nullptr handler marks a help-only row.
 const SerialCommands::Command SerialCommands::kCommands[] = {
   { "help",        "h",        [](const String&) { showHelp(); },   ARGS_IGNORED,      "/help",                    "Show this help" },
   { "stats",       nullptr,    [](const String&) { showStats(); },  ARGS_IGNORED,      "/stats",                   "Show system statistics" },
@@ -96,7 +94,7 @@ void SerialCommands::processCommand(const String& command) {
   const Command* match = nullptr;
   for (size_t i = 0; i < kCommandCount; i++) {
     const Command& c = kCommands[i];
-    if (c.handler == nullptr) continue;  // help-only continuation row
+    if (c.handler == nullptr) continue;
     if (baseCmd == c.name || (c.alias != nullptr && baseCmd == c.alias)) {
       match = &c;
       break;
@@ -114,7 +112,6 @@ void SerialCommands::processCommand(const String& command) {
   printPrompt();
 }
 
-// /config get|set subcommand parsing kept verbatim from the old dispatch chain
 void SerialCommands::configCommand(const String& args) {
   if (args.startsWith("get ")) {
     configGet(args.substring(4));
@@ -131,7 +128,7 @@ void SerialCommands::showHelp() {
     const Command& c = kCommands[i];
     char line[96];
     snprintf(line, sizeof(line), "%-25s- %s", c.usage, c.desc);
-    Serial.println(line);  // println keeps the original CRLF line endings
+    Serial.println(line);
   }
   Serial.println("\nExamples:");
   Serial.println("/write hello.js");
@@ -279,8 +276,7 @@ static const uint8_t base64_decode_table[128] = {
   41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 64, 64, 64, 64, 64
 };
 
-// Bounded decode: never writes more than outputSize bytes.
-// Returns the decoded byte count, or -1 if the decoded data would overflow output.
+// Returns the decoded byte count, or -1 if the decoded data would overflow outputSize.
 static int base64_decode(const char* input, size_t inputLen, uint8_t* output, size_t outputSize) {
   size_t outputLen = 0;
   uint32_t buffer = 0;
@@ -381,7 +377,7 @@ void SerialCommands::uploadFile(const String& args) {
     }
 
     if (isBase64) {
-      // Decode base64 and write binary data (bounded by decodeBuffer)
+      // Decode base64 and write binary data
       int decodedLen = base64_decode(line.c_str(), line.length(), decodeBuffer, sizeof(decodeBuffer));
       if (decodedLen < 0) {
         aborted = true;
@@ -533,8 +529,7 @@ void SerialCommands::listFiles(const String& path) {
     return;
   }
 
-  // Optional trailing "json" token switches to a single-line
-  // machine-readable listing (for host tools)
+  // Trailing "json" token switches to a one-line machine-readable listing
   String p = path;
   p.trim();
   bool json = false;
@@ -609,7 +604,6 @@ void SerialCommands::deleteFile(const String& path) {
   
   String fullPath = path.startsWith("/") ? path : ("/" + path);
 
-  // Directories are removed with rmdir (must be empty)
   File f = SD_MMC.open(fullPath);
   bool isDir = f && f.isDirectory();
   if (f) f.close();
@@ -771,8 +765,7 @@ void SerialCommands::loadApp(const String& scriptName) {
     return;
   }
 
-  // Optional trailing "save": also persist the script into webscreen.json
-  // so it survives the next boot (otherwise /load is session-only).
+  // Trailing "save" also persists the script to webscreen.json (otherwise /load is session-only)
   String name = scriptName;
   bool persist = false;
   int spaceIndex = name.indexOf(' ');
@@ -799,7 +792,6 @@ void SerialCommands::loadApp(const String& scriptName) {
   }
   file.close();
 
-  // In-place restart of the JS app with the new script (no device reboot)
   if (webscreen_runtime_load_new_script(fullPath.c_str())) {
     printSuccess("Loading script: " + fullPath);
     if (persist) {
@@ -810,9 +802,7 @@ void SerialCommands::loadApp(const String& scriptName) {
   }
 }
 
-// The card is mounted at boot; re-running SD_MMC.begin() on every command
-// re-takes the SDMMC lock and can re-probe the card. Only attempt a (re)mount
-// when the card is actually absent (e.g. inserted after boot).
+// Re-running SD_MMC.begin() per command re-probes the card; only remount when the card is absent.
 bool SerialCommands::sdReady() {
   if (SD_MMC.cardType() != CARD_NONE) {
     return true;
@@ -1422,8 +1412,7 @@ void SerialCommands::showErrors() {
 
 void SerialCommands::runGC() {
   if (webscreen_runtime_garbage_collect()) {
-    // The collection runs on the JS task at its next safe point, so the
-    // numbers reported here are pre-GC.
+    // GC runs on the JS task at its next safe point, so these numbers are pre-GC.
     uint32_t jsUsed = 0, jsTotal = 0;
     webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
     printSuccess("GC requested (runs at the JS task's next safe point). JS arena now: " + formatBytes(jsUsed) + " / " + formatBytes(jsTotal) + " used");

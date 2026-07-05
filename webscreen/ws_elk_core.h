@@ -1,10 +1,4 @@
-// ws_elk_core.h — fragment of the WebScreen Elk/LVGL bridge.
-//
-// NOT a standalone header: it is included exactly once, in order, by
-// lvgl_elk.h (which is itself included only by webscreen_runtime.cpp).
-// Symbols here may depend on every fragment included before it.
-// Split from the former 3,700-line lvgl_elk.h monolith; see lvgl_elk.h
-// for the include order.
+// ws_elk_core.h — fragment of the WebScreen Elk/LVGL bridge; included once, in order, by lvgl_elk.h (not standalone).
 
 #pragma once
 
@@ -12,7 +6,6 @@
 #include <HTTPClient.h>
 #include "tick.h"
 
-// For BLE
 #include <NimBLEDevice.h>
 
 #include <WiFi.h>  // WiFi library that also provides WiFiClient
@@ -31,15 +24,12 @@
 #include "webscreen_hardware.h"
 #include "webscreen_main.h"
 
-// Global WiFiClient + PubSubClient
 WiFiClient g_wifiClient;
 PubSubClient g_mqttClient(g_wifiClient);
 
-// HTTP client certificate.
 static char *g_httpCAcert = nullptr;  // Will hold entire PEM cert from SD
 static std::vector<std::pair<String, String>> g_http_headers;
 
-// NimBLE globals
 static NimBLEServer *g_bleServer = nullptr;
 static NimBLECharacteristic *g_bleChar = nullptr;
 static bool g_bleConnected = false;
@@ -50,7 +40,6 @@ extern "C" {
 #include "elk.h"
 }
 
-// For storing a JavaScript callback to handle incoming messages
 static char g_mqttCallbackName[32];  // Big enough for a function name
 static char g_mqttBrokerCopy[128];   // Persistent copy of broker hostname for PubSubClient
 
@@ -59,7 +48,6 @@ static bool g_mqttMsgPending = false;
 static char g_mqttMsgTopic[128];
 static char g_mqttMsgPayload[1024];
 
-// Flag for JS to poll — set after onMqttMessage stores payload
 static bool g_mqttMsgReady = false;
 static unsigned long lastMqttReconnectAttempt = 0;
 static unsigned long lastWiFiReconnectAttempt = 0;
@@ -67,9 +55,7 @@ static unsigned long lastWiFiReconnectAttempt = 0;
 /******************************************************************************
  * A) Elk Memory + Global Instances
  ******************************************************************************/
-// Default Elk arena size. Devices running bigger apps can override it with the
-// optional flat key "js_heap_kb" in /webscreen.json (clamped to 64..1024 KB);
-// the override must arrive before the first init_elk_memory() call.
+// Default arena size; override via "js_heap_kb" in /webscreen.json (64..1024 KB) before the first init_elk_memory().
 #define ELK_HEAP_BYTES_DEFAULT (256 * 1024)
 static size_t g_elk_heap_bytes = ELK_HEAP_BYTES_DEFAULT;
 static uint8_t *elk_memory = NULL;
@@ -89,7 +75,6 @@ static bool init_elk_memory() {
     return true;  // Already initialized
   }
 
-  // Try to allocate from PSRAM first
   elk_memory = (uint8_t*)ps_malloc(g_elk_heap_bytes);
   if (elk_memory != NULL) {
     elk_memory_size = g_elk_heap_bytes;
@@ -97,7 +82,6 @@ static bool init_elk_memory() {
     return true;
   }
 
-  // Fallback to regular heap with smaller size
   size_t fallback_size = 96 * 1024;
   elk_memory = (uint8_t*)malloc(fallback_size);
   if (elk_memory != NULL) {
@@ -109,7 +93,6 @@ static bool init_elk_memory() {
   LOG("ERROR: Failed to allocate Elk heap!");
   return false;
 }
-// Adjust as needed
 #define MAX_RAM_IMAGES 16
 
 struct RamImage {
@@ -125,7 +108,6 @@ void init_ram_images() {
     g_ram_images[i].used = false;
     g_ram_images[i].buffer = NULL;
     g_ram_images[i].size = 0;
-    // g_ram_images[i].dsc can remain zeroed
   }
 }
 

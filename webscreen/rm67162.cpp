@@ -35,16 +35,13 @@ const static lcd_cmd_t rm67162_qspi_init[] = {
 
 static spi_device_handle_t spi;
 
-// Serializes all panel access. lcd_PushColors holds CS low across chunked
-// QSPI transfers (spics_io_num = -1), so lcd_brightness/lcd_send_cmd from
-// another task mid-flush corrupts the stream. Recursive because lcd_PushColors
-// and lcd_brightness reach lcd_send_cmd while already holding the lock.
+// Serializes panel access: lcd_PushColors holds CS low across chunks, so concurrent
+// lcd_brightness/lcd_send_cmd corrupts the stream. Recursive: lcd_PushColors reaches lcd_send_cmd while holding it.
 static SemaphoreHandle_t s_panel_mutex = NULL;
 
 static void panel_lock(void) {
   if (s_panel_mutex == NULL) {
-    // Lazy fallback only; normally created in rm67162_init() before any
-    // second task exists.
+    // Lazy fallback; normally created in rm67162_init() before any second task exists.
     s_panel_mutex = xSemaphoreCreateRecursiveMutex();
   }
   if (s_panel_mutex != NULL) {
@@ -115,9 +112,7 @@ static void lcd_send_cmd(uint32_t cmd, uint8_t *dat, uint32_t len) {
   panel_unlock();
 }
 void rm67162_init(void) {
-  // Idempotent: a second spi_bus_initialize() fails and ESP_ERROR_CHECK
-  // turns that into abort() — e.g. when fallback starts after a partially
-  // initialized JS runtime already brought the panel up.
+  // Idempotent: a second spi_bus_initialize() would abort via ESP_ERROR_CHECK.
   static bool s_initialized = false;
   if (s_initialized) {
     return;

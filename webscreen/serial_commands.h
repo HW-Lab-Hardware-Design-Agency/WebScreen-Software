@@ -12,7 +12,7 @@ public:
   static void processCommand(const String& command);
   
 private:
-  // Single source of truth for command dispatch and /help (defined in serial_commands.cpp)
+  // Command table for dispatch and /help (defined in serial_commands.cpp)
   struct Command;
   static const Command kCommands[];
   static const size_t kCommandCount;

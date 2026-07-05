@@ -47,12 +47,7 @@ static void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, u
 
 void fallback_setup() {
   LOG("FALLBACK: Setting up scrolling label + GIF...");
-  // When fallback runs because the JS runtime FAILED TO START (rather than
-  // because there was no script), the display stack is already up from
-  // init_lvgl_display(): lv_init done, panel initialized, display driver
-  // registered. Re-running that here would double-init the SPI bus
-  // (ESP_ERROR_CHECK -> abort) and register a duplicate display. In that
-  // case just build the fallback UI on the existing display.
+  // If JS mode already brought the display up, re-initializing would double-init the SPI bus (abort).
   bool display_already_up = lv_is_initialized();
   SerialCommands::init();
   if (!display_already_up) {
@@ -66,8 +61,7 @@ void fallback_setup() {
     // Apply configured brightness
     if (g_webscreen_config.display.brightness > 0) {
       lcd_brightness(g_webscreen_config.display.brightness);
-      // Keep the cached value in sync so the button's display off/on toggle
-      // restores the configured brightness, not the default.
+      // Keep the cached value in sync so the button's display off/on toggle restores it
       webscreen_hardware_sync_brightness(g_webscreen_config.display.brightness);
     }
 

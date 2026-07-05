@@ -1,21 +1,9 @@
-// ws_elk_runtime.h — fragment of the WebScreen Elk/LVGL bridge.
-//
-// NOT a standalone header: it is included exactly once, in order, by
-// lvgl_elk.h (which is itself included only by webscreen_runtime.cpp).
-// Symbols here may depend on every fragment included before it.
-// Split from the former 3,700-line lvgl_elk.h monolith; see lvgl_elk.h
-// for the include order.
+// ws_elk_runtime.h — fragment of the WebScreen Elk/LVGL bridge; included once, in order, by lvgl_elk.h (not standalone).
 
 /******************************************************************************
- * I) In-place app teardown helpers
- *
- * Called by webscreen_runtime.cpp (the only TU that includes this header)
- * from the JS task's own loop — the task that owns LVGL — so no cross-task
- * locking is needed. Order matters: UI first (deletes lv_img widgets that
- * reference RAM-image descriptors), then media buffers, then comm state.
+ * I) In-place app teardown — JS task only (owns LVGL, no locking); order matters: UI, then media buffers, then comm state.
  ******************************************************************************/
 
-// 1) Timers, animations, widgets, object handles, styles
 static void elk_teardown_ui() {
   delete_all_elk_timers();
   lv_anim_del_all();
@@ -31,8 +19,7 @@ static void elk_teardown_ui() {
       g_style_map[i] = nullptr;
     }
   }
-  // Sub-object registries hold pointers into widgets lv_obj_clean just
-  // deleted; null them so slots become reusable and are never served stale.
+  // Sub-object registries point into widgets just deleted; null them so slots are never served stale.
   for (int i = 0; i < MAX_CHART_SERIES; i++) g_chart_series[i] = nullptr;
   for (int i = 0; i < MAX_METER_SCALES; i++) g_meter_scales[i] = nullptr;
   for (int i = 0; i < MAX_METER_INDICATORS; i++) g_meter_indicators[i] = nullptr;
@@ -40,7 +27,6 @@ static void elk_teardown_ui() {
   g_js_error_streak = 0;
 }
 
-// 2) PSRAM media buffers (widgets referencing them are already gone)
 static void elk_teardown_media() {
   for (int i = 0; i < MAX_RAM_IMAGES; i++) {
     if (g_ram_images[i].buffer != NULL) {
@@ -57,7 +43,6 @@ static void elk_teardown_media() {
   g_gifSize = 0;
 }
 
-// 3) Communication state owned by the old script
 static void elk_teardown_comm() {
   if (g_mqttClient.connected()) {
     g_mqttClient.disconnect();
@@ -65,15 +50,12 @@ static void elk_teardown_comm() {
   g_mqttCallbackName[0] = '\0';
   g_mqttMsgPending = false;
   g_mqttMsgReady = false;
-  // Disarm auto-reconnect: the stored credentials/subscription belong to the
-  // old script — without this, the maintain loop would resurrect the old
-  // broker session under the new app.
+  // Disarm auto-reconnect: the maintain loop must not resurrect the old script's broker session.
   g_mqttHaveCreds = false;
   g_mqttLastSubTopic[0] = '\0';
   g_http_headers.clear();
   g_js_gc_requested = false;
-  // Button state belongs to the old script: release the handler, restore the
-  // default display toggle, and drain any queued presses.
+  // Release the button handler, restore the default display toggle, drain queued presses.
   g_button_cb_name[0] = '\0';
   webscreen_hardware_set_button_toggle(true);
   g_button_evt_consumed = g_button_evt_produced;
@@ -86,7 +68,6 @@ static void elk_teardown_comm() {
 void register_js_functions() {
   jsval_t global = js_glob(js);
 
-  // Basic
   js_set(js, global, "print", js_mkfun(js_print));
   js_set(js, global, "mem_stats", js_mkfun(js_mem_stats));
   js_set(js, global, "mem_info", js_mkfun(js_mem_info));
@@ -101,7 +82,6 @@ void register_js_functions() {
   js_set(js, global, "set_brightness", js_mkfun(js_set_brightness));
   js_set(js, global, "get_brightness", js_mkfun(js_get_brightness));
 
-  // NTP Time functions
   js_set(js, global, "get_hours", js_mkfun(js_get_hours));
   js_set(js, global, "get_minutes", js_mkfun(js_get_minutes));
   js_set(js, global, "get_seconds", js_mkfun(js_get_seconds));
@@ -116,11 +96,9 @@ void register_js_functions() {
   js_set(js, global, "toNumber", js_mkfun(js_to_number));
   js_set(js, global, "numberToString", js_mkfun(js_number_to_string));
 
-  // bridging for indexOf / substring
   js_set(js, global, "str_index_of", js_mkfun(js_str_index_of));
   js_set(js, global, "str_substring", js_mkfun(js_str_substring));
 
-  // String/number/random helpers
   js_set(js, global, "random", js_mkfun(js_random));
   js_set(js, global, "str_split", js_mkfun(js_str_split));
   js_set(js, global, "str_split_count", js_mkfun(js_str_split_count));
@@ -128,7 +106,6 @@ void register_js_functions() {
   js_set(js, global, "pad_number", js_mkfun(js_pad_number));
   js_set(js, global, "format_time", js_mkfun(js_format_time));
 
-  // Button events (power button short press; long press = power off)
   js_set(js, global, "on_button", js_mkfun(js_on_button));
   js_set(js, global, "get_button_event", js_mkfun(js_get_button_event));
   js_set(js, global, "button_set_toggle", js_mkfun(js_button_set_toggle));
@@ -141,7 +118,6 @@ void register_js_functions() {
   js_set(js, global, "http_set_header", js_mkfun(js_http_set_header));
   js_set(js, global, "http_clear_headers", js_mkfun(js_http_clear_headers));
 
-  // SD functions
   js_set(js, global, "sd_read_file", js_mkfun(js_sd_read_file));
   js_set(js, global, "sd_write_file", js_mkfun(js_sd_write_file));
   js_set(js, global, "sd_list_dir", js_mkfun(js_sd_list_dir));
@@ -151,18 +127,15 @@ void register_js_functions() {
   js_set(js, global, "ble_is_connected", js_mkfun(js_ble_is_connected));
   js_set(js, global, "ble_write", js_mkfun(js_ble_write));
 
-  // GIF from memory
   js_set(js, global, "show_gif_from_sd", js_mkfun(js_show_gif_from_sd));
   js_set(js, global, "gif_free", js_mkfun(js_gif_free));
 
-  // Basic shapes and labels.
   js_set(js, global, "draw_label", js_mkfun(js_lvgl_draw_label));
   js_set(js, global, "draw_rect", js_mkfun(js_lvgl_draw_rect));
   js_set(js, global, "show_image", js_mkfun(js_lvgl_show_image));
   js_set(js, global, "create_label", js_mkfun(js_create_label));
   js_set(js, global, "label_set_text", js_mkfun(js_label_set_text));
 
-  // Handle-based image creation + transforms
   js_set(js, global, "create_image", js_mkfun(js_create_image));
   js_set(js, global, "create_image_from_ram", js_mkfun(js_create_image_from_ram));
   js_set(js, global, "ram_image_free", js_mkfun(js_ram_image_free));
@@ -171,7 +144,6 @@ void register_js_functions() {
   js_set(js, global, "animate_obj", js_mkfun(js_animate_obj));
   js_set(js, global, "obj_delete", js_mkfun(js_obj_delete));
 
-  // Style creation + property setters
   js_set(js, global, "create_style", js_mkfun(js_create_style));
   js_set(js, global, "obj_add_style", js_mkfun(js_obj_add_style));
 
@@ -213,11 +185,9 @@ void register_js_functions() {
   js_set(js, global, "style_set_x", js_mkfun(js_style_set_x));
   js_set(js, global, "style_set_y", js_mkfun(js_style_set_y));
 
-  // Object property setters
   js_set(js, global, "obj_set_size", js_mkfun(js_obj_set_size));
   js_set(js, global, "obj_align", js_mkfun(js_obj_align));
 
-  // Scroll, flex, flags
   js_set(js, global, "obj_set_scroll_snap_x", js_mkfun(js_obj_set_scroll_snap_x));
   js_set(js, global, "obj_set_scroll_snap_y", js_mkfun(js_obj_set_scroll_snap_y));
   js_set(js, global, "obj_add_flag", js_mkfun(js_obj_add_flag));
@@ -244,8 +214,7 @@ void register_js_functions() {
   js_set(js, global, "lv_meter_set_indicator_value", js_mkfun(js_lv_meter_set_indicator_value));
 
   //==================== CHART ===========================
-  // (js_lv_chart_get_y_array exists but is NOT registered: it returns a raw
-  // C pointer as a JS number, which Elk cannot dereference.)
+  // (js_lv_chart_get_y_array is not registered: it returns a raw C pointer Elk cannot use.)
   js_set(js, global, "lv_chart_create", js_mkfun(js_lv_chart_create));
   js_set(js, global, "lv_chart_set_type", js_mkfun(js_lv_chart_set_type));
   js_set(js, global, "lv_chart_set_div_line_count", js_mkfun(js_lv_chart_set_div_line_count));
@@ -271,7 +240,6 @@ void register_js_functions() {
   js_set(js, global, "lv_span_set_text_static", js_mkfun(js_lv_span_set_text_static));
   js_set(js, global, "lv_spangroup_refr_mode", js_mkfun(js_lv_spangroup_refr_mode));
 
-  // ---------- LINE bridging
   js_set(js, global, "lv_line_create", js_mkfun(js_lv_line_create));
   js_set(js, global, "lv_line_set_points", js_mkfun(js_lv_line_set_points));
 

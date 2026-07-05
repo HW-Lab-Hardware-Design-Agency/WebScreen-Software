@@ -60,11 +60,7 @@
     #endif
 
 #else       /*LV_MEM_CUSTOM*/
-    /*Plain malloc, matching upstream. A PSRAM-first allocator
-     *(heap_caps_malloc_prefer with MALLOC_CAP_SPIRAM) was tried here and
-     *reverted: it moved LVGL's hot small allocations onto the slow OPI PSRAM
-     *bus for no measured benefit. Internal DRAM is the right place for
-     *these allocations.*/
+    /*Plain malloc: LVGL's small hot allocations belong in internal DRAM, not PSRAM.*/
     #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>   /*Header for the dynamic memory function*/
     #define LV_MEM_CUSTOM_ALLOC   malloc
     #define LV_MEM_CUSTOM_FREE    free

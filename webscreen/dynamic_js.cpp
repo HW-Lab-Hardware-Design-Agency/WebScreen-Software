@@ -18,8 +18,7 @@ bool dynamic_js_setup() {
   WiFi.mode(WIFI_STA);
   SerialCommands::init();
 
-  // Forward power-button short presses to the JS runtime so apps can
-  // receive them via on_button() / get_button_event().
+  // Forward button presses to JS apps (on_button / get_button_event)
   webscreen_hardware_set_button_callback(webscreen_runtime_notify_button);
 
   if (!webscreen_runtime_start_javascript(g_script_filename.c_str())) {

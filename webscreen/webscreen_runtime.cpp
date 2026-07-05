@@ -163,7 +163,6 @@ bool webscreen_runtime_is_fallback_active(void) {
 void webscreen_runtime_get_memory_usage(uint32_t* js_heap_used,
                                         uint32_t* lvgl_memory_used,
                                         uint32_t* total_runtime_memory) {
-  // Real numbers now (this used to return hardcoded values).
   if (js_heap_used) *js_heap_used = js ? (uint32_t)js_usage(js) : 0;
   if (lvgl_memory_used) *lvgl_memory_used = (uint32_t)(ESP.getHeapSize() - ESP.getFreeHeap());
   if (total_runtime_memory) *total_runtime_memory = js ? (uint32_t)js_total(js) : 0;
@@ -175,8 +174,7 @@ void webscreen_runtime_get_js_arena(uint32_t* used, uint32_t* total) {
 }
 
 bool webscreen_runtime_garbage_collect(void) {
-  // Compacting the arena while the JS task is mid-eval corrupts it, so this
-  // only requests a GC; the JS task runs it at its next safe point.
+  // Only requests a GC; the JS task runs it at its next safe point (mid-eval compaction corrupts the arena).
   if (g_javascript_active && js != NULL) {
     g_js_gc_requested = true;
     WEBSCREEN_DEBUG_PRINTLN("JavaScript garbage collection requested");
@@ -242,15 +240,10 @@ bool webscreen_runtime_init_javascript_engine(void) {
     return false;
   }
 
-  // Auto-GC is safe again: js_stmt() now skips collection whenever F_CALL is
-  // set (see elk.c), so the heap is only ever compacted at top-level
-  // statement boundaries — the same points where the old manual-GC scheme
-  // already proved safe. Collect when the arena reaches 3/4.
+  // Auto-GC at 3/4 arena; elk.c skips collection while F_CALL is set, so compaction only happens at top-level statement boundaries.
   js_setgct(js, (elk_memory_size / 4) * 3);
 
-  // Convert runaway scripts into recoverable JS errors instead of crashes:
-  // - recursion blows the 24KB task stack without a C-stack ceiling
-  // - while(true){} starves LVGL and the watchdog without a statement budget
+  // C-stack ceiling + step budget turn runaway scripts (deep recursion, while(true){}) into recoverable JS errors.
   js_setmaxcss(js, 10 * 1024);
   js_setmaxsteps(js, 2 * 1000 * 1000);
 
@@ -273,11 +266,6 @@ bool webscreen_runtime_load_script(const char* script_file) {
     return false;
   }
 
-  // The script lives in PSRAM so Elk's function-body pointers survive any
-  // regular-heap corruption from MQTT / lwip / PubSubClient operations.
-  // One sized read straight into the buffer — readString() reads byte-at-a-
-  // time with per-char timeout handling and reallocs the heap String as it
-  // grows, which is needlessly slow over the 1-bit SD bus.
   size_t fsize = file.size();
   if (fsize == 0) {
     WEBSCREEN_DEBUG_PRINTLN("Script file is empty");
@@ -320,10 +308,7 @@ bool webscreen_runtime_start_javascript_task(void) {
 
   WEBSCREEN_DEBUG_PRINTLN("Starting JavaScript execution task...");
 
-  // Core 1: WiFi/lwip run high-priority on core 0 and used to starve the
-  // JS/LVGL task exactly when the network was busy. Core 1 only hosts
-  // loopTask (serial + power button polling); same priority 1 so FreeRTOS
-  // time-slices them — a long JS eval can never lock out the power button.
+  // Core 1, away from core-0 WiFi/lwip; priority 1 matches loopTask so a long JS eval can't lock out the power button.
   BaseType_t result = xTaskCreatePinnedToCore(
     webscreen_runtime_javascript_task,
     "WebScreenJS",
@@ -342,32 +327,18 @@ bool webscreen_runtime_start_javascript_task(void) {
   WEBSCREEN_DEBUG_PRINTLN("JavaScript task started successfully");
   return true;
 }
-// ---- In-place JS app restart -------------------------------------------
-//
-// The historical "recovery" for a misbehaving script was ESP.restart() — a
-// full device reboot that users experienced as a crash loop. Instead, the JS
-// task can now tear the app down and start it again in place: the display,
-// WiFi connection and Elk arena all survive; only the script state is rebuilt.
-// Restart is requested via flag (from the timer bridge on repeated JS errors,
-// or from serial /load + /restart_app) and performed by the JS task itself in
-// its own loop — it owns LVGL, so teardown needs no cross-task locking.
+// ---- In-place JS app restart (flag-requested; performed by the JS task itself — it owns LVGL, no cross-task locking) ----
 static volatile bool g_js_restart_requested = false;
 static char g_js_restart_reason[64] = "";
 static uint32_t g_js_restart_failures = 0;
 static const uint32_t JS_RESTART_FAILURE_LIMIT = 2;
 static volatile bool g_js_safe_mode = false;  // Restarts kept failing; wait for user
-// Script switch requested by /load. Requesters write this fixed buffer (a
-// String would be freed+reallocated under the JS task's feet); the JS task
-// alone assigns g_current_script_file, at restart time.
+// /load target. Fixed buffer (a String would be realloc'd under the JS task); only the JS task assigns g_current_script_file.
 static char g_js_pending_script[96] = "";
 // Guards reason/pending-script/safe-mode handoff between loopTask and JS task.
 static portMUX_TYPE g_js_restart_mux = portMUX_INITIALIZER_UNLOCKED;
 
-// Give-up ladder for AUTOMATIC restarts (timer error streaks): a script that
-// boots clean but whose timer callback always errors would otherwise restart
-// successfully forever (eval OK resets the failure counter), churning the
-// screen every ~1s. Three streak-triggered restarts without a healthy hour
-// of the app in between park the device in safe mode instead.
+// Give-up ladder for automatic restarts: 3 streak-triggered restarts without a healthy interval park the app in safe mode.
 static uint32_t g_js_auto_restart_cycles = 0;
 static uint32_t g_js_last_auto_restart_ms = 0;
 static const uint32_t JS_AUTO_RESTART_CYCLE_LIMIT = 3;
@@ -382,9 +353,7 @@ void webscreen_runtime_request_restart(const char *reason) {
   taskEXIT_CRITICAL(&g_js_restart_mux);
 }
 
-// Automatic escalation (elk_timer_cb error streak). Unlike an explicit
-// request this must not lift safe mode — leftover timers of a broken script
-// erroring against a parked engine would otherwise un-park it forever.
+// Automatic escalation (timer error streak). Must not lift safe mode — leftover timers of a broken script would un-park it forever.
 void webscreen_runtime_request_restart_auto(const char *reason) {
   taskENTER_CRITICAL(&g_js_restart_mux);
   if (g_js_safe_mode) {
@@ -406,8 +375,6 @@ bool webscreen_runtime_load_new_script(const char *script_file) {
   if (!script_file || !SD_MMC.exists(script_file)) {
     return false;
   }
-  // A truncated path would pass the exists() check above but fail to load
-  // after tearing down the running app — reject oversized paths instead.
   if (strlen(script_file) >= sizeof(g_js_pending_script)) {
     WEBSCREEN_DEBUG_PRINTF("load_new_script: path too long (%u chars, max %u)\n",
                            (unsigned)strlen(script_file),
@@ -423,10 +390,6 @@ bool webscreen_runtime_load_new_script(const char *script_file) {
 }
 
 // ---- /eval REPL ----------------------------------------------------------
-//
-// Same handoff discipline as g_js_pending_script: loopTask writes the fixed
-// buffer only while the pending flag is clear; the JS task evaluates at its
-// safe point (no Elk C frames on the stack) and clears the flag when done.
 static char g_js_eval_buf[256] = "";
 static volatile bool g_js_eval_pending = false;
 
@@ -439,12 +402,7 @@ bool webscreen_runtime_eval_snippet(const char *code) {
   return true;
 }
 
-// ---- Last-error record (/errors) -----------------------------------------
-//
-// g_last_error (String) only ever captures startup failures; JS eval errors
-// land here instead — a fixed buffer so any task can write it, guarded by
-// the restart mux (the copy is a few hundred ns, fine inside a critical
-// section).
+// ---- Last-error record (/errors) — fixed buffer, writable from any task under the restart mux ----
 static char g_js_last_error[160] = "";
 static uint32_t g_js_last_error_ms = 0;
 
@@ -486,24 +444,14 @@ void webscreen_runtime_print_error_report(void) {
   Serial.printf("Script: %s\n", g_current_script_file.length() > 0 ? g_current_script_file.c_str() : "(none)");
 }
 
-// ---- Button events --------------------------------------------------------
-//
-// Registered as the hardware button callback by dynamic_js_setup(); runs on
-// loopTask. The counters live in ws_elk_basics.h next to their JS bindings.
+// ---- Button events (hardware callback, runs on loopTask; counters live in ws_elk_basics.h) ----
 void webscreen_runtime_notify_button(bool pressed) {
   if (pressed) {
     g_button_evt_produced++;
   }
 }
 
-// ---- /screenshot ----------------------------------------------------------
-//
-// Same handoff discipline as /eval: loopTask sets the flag, the JS task
-// captures at its safe point (LVGL objects must not be touched from any
-// other task) and streams the snapshot over Serial. USB-CDC ignores the
-// virtual baud rate, so the ~340KB base64 dump takes low single-digit
-// seconds; LVGL is paused for the duration, which is fine — the screen
-// content is what's being captured.
+// ---- /screenshot (JS task captures at its safe point — LVGL must not be touched from other tasks) ----
 static volatile bool g_js_screenshot_pending = false;
 
 bool webscreen_runtime_request_screenshot(void) {
@@ -534,8 +482,7 @@ static void webscreen_runtime_stream_screenshot(void) {
     if (chunk > 57) chunk = 57;
     webscreen_base64_encode(data + off, chunk, b64);
     Serial.println(b64);
-    // Yield periodically so the USB-CDC TX buffer drains and the watchdog
-    // stays fed on slow hosts.
+    // Yield so the USB-CDC TX buffer drains and the watchdog stays fed.
     if ((++lines & 0xFF) == 0) vTaskDelay(1);
   }
   Serial.println("=== SCREENSHOT END ===");
@@ -543,8 +490,6 @@ static void webscreen_runtime_stream_screenshot(void) {
   lv_snapshot_free(snap);
 }
 
-// Full-width wrapped error label so a broken script is visible on the device
-// instead of a black screen.
 static void webscreen_runtime_show_error_screen(const char *msg) {
   lv_obj_t *label = lv_label_create(lv_scr_act());
   lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
@@ -553,9 +498,7 @@ static void webscreen_runtime_show_error_screen(const char *msg) {
   lv_label_set_text(label, msg);
 }
 
-// Evaluate the loaded script (PSRAM copy preferred). Returns true on success;
-// on failure copies the JS error into err_buf (js_str points into the arena,
-// which the next eval may clobber).
+// On failure copies the JS error into err_buf — js_str points into the arena, which the next eval may clobber.
 static bool webscreen_runtime_eval_script(char *err_buf, size_t err_len) {
   const char *script_src = g_js_script_psram ? g_js_script_psram : g_js_script_content.c_str();
   size_t      script_len = g_js_script_psram ? g_js_script_psram_len : g_js_script_content.length();
@@ -573,11 +516,8 @@ static bool webscreen_runtime_eval_script(char *err_buf, size_t err_len) {
   return true;
 }
 
-// Runs ON the JS task. Teardown order matters: UI first (deletes lv_img
-// widgets referencing RAM-image descriptors), then media buffers, then comm.
+// Runs on the JS task. Teardown order matters: UI, then media buffers, then comm.
 static void webscreen_runtime_perform_inplace_restart(void) {
-  // Consume the restart parameters under the lock (requests arrive from
-  // loopTask); no heap operations inside the critical section.
   char reason[sizeof(g_js_restart_reason)];
   char pending[sizeof(g_js_pending_script)];
   taskENTER_CRITICAL(&g_js_restart_mux);
@@ -610,10 +550,7 @@ static void webscreen_runtime_perform_inplace_restart(void) {
 
   if (ok) {
     if (g_js_auto_restart_cycles >= JS_AUTO_RESTART_CYCLE_LIMIT) {
-      // The script evals clean but its timer callbacks keep erroring badly
-      // enough to trigger restart after restart — restarting again would
-      // churn the screen forever. Park instead; the timers the fresh eval
-      // just created must go, or their error streaks would request again.
+      // Timer-error restart loop: park instead of churning. The fresh eval's timers must go, or their error streaks would re-request.
       delete_all_elk_timers();
       char msg[256];
       snprintf(msg, sizeof(msg),
@@ -621,9 +558,6 @@ static void webscreen_runtime_perform_inplace_restart(void) {
                "Fix the script, then run /load or /restart_app.",
                g_current_script_file.c_str());
       webscreen_runtime_show_error_screen(msg);
-      // Timers are gone, so no AUTO request can race this window — but an
-      // explicit /load or /restart_app from loopTask can; honor it instead
-      // of trapping it under safe mode (explicit requests reset the ladder).
       taskENTER_CRITICAL(&g_js_restart_mux);
       if (!g_js_restart_requested) {
         g_js_safe_mode = true;
@@ -642,11 +576,7 @@ static void webscreen_runtime_perform_inplace_restart(void) {
                          g_js_restart_failures, JS_RESTART_FAILURE_LIMIT, err);
   webscreen_runtime_note_js_error(err);
   if (g_js_restart_failures >= JS_RESTART_FAILURE_LIMIT) {
-    // Safe mode: stop retrying, show the error, keep the device alive —
-    // serial commands still work, so the user can fix the script and /load.
-    // A partially-evaluated script may have created timers before failing;
-    // left alive they would error every tick and their streak would request
-    // an auto restart, churning the error screen. Remove them first.
+    // Park but keep serial alive. Delete timers a partial eval created — their error streaks would auto-request restarts.
     delete_all_elk_timers();
     char msg[256];
     snprintf(msg, sizeof(msg),
@@ -654,8 +584,7 @@ static void webscreen_runtime_perform_inplace_restart(void) {
              "Fix the script, then run /load or /restart_app.",
              g_current_script_file.c_str(), err);
     webscreen_runtime_show_error_screen(msg);
-    // Don't trap a fresh request that raced this failing restart: a /load
-    // that landed after our last check deserves its try, not safe mode.
+    // A /load that raced this failing restart deserves its try, not safe mode.
     taskENTER_CRITICAL(&g_js_restart_mux);
     if (!g_js_restart_requested) {
       g_js_safe_mode = true;
@@ -675,7 +604,6 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
     WEBSCREEN_DEBUG_PRINT("JavaScript execution error: ");
     WEBSCREEN_DEBUG_PRINTLN(err);
     webscreen_runtime_note_js_error(err);
-    // Make the failure visible on the device instead of a black screen.
     char msg[256];
     snprintf(msg, sizeof(msg),
              "WebScreen: script '%s' failed:\n%s\n\n"
@@ -691,15 +619,11 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
       g_js_restart_requested = false;
       webscreen_runtime_perform_inplace_restart();
     }
-    // GC requested by JS gc() or serial — this point is outside any eval,
-    // so compacting the arena is safe.
     if (g_js_gc_requested && js != NULL) {
       g_js_gc_requested = false;
       js_gc(js);
     }
-    // /eval snippet queued by loopTask. The flag stays set until after the
-    // eval so loopTask never overwrites a buffer in use. A snippet that
-    // raced into a safe-mode transition is dropped, not left pending.
+    // /eval: the flag stays set through the eval so loopTask never overwrites a buffer in use.
     if (g_js_eval_pending && js != NULL) {
       if (g_js_safe_mode) {
         Serial.println("[EVAL] dropped: app is parked in safe mode");
@@ -715,16 +639,12 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
       }
       g_js_eval_pending = false;
     }
-    // /screenshot queued by loopTask — capture at this safe point (no eval
-    // in progress, LVGL idle between timer runs).
     if (g_js_screenshot_pending) {
       webscreen_runtime_stream_screenshot();
       g_js_screenshot_pending = false;
     }
-    // Pending power-button short press -> registered JS handler
     elk_dispatch_button_event();
-    // Unconditional: the maintain loop also handles WiFi reconnection,
-    // which non-MQTT apps need too (it gates the MQTT work internally).
+    // Unconditional: also handles WiFi reconnect for non-MQTT apps (MQTT work is gated internally).
     webscreen_runtime_wifi_mqtt_maintain_loop();
     lv_timer_handler();
     vTaskDelay(pdMS_TO_TICKS(5));
@@ -749,14 +669,12 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     g_was_wifi_connected = false;
     unsigned long now = WEBSCREEN_MILLIS();
 
-    // Only reconnect when credentials were ever configured: offline devices
-    // (no SSID in webscreen.json) are a supported mode, and reconnect-spam
-    // against an empty STA config is just radio churn and log noise.
+    // Skip reconnect when no SSID was ever configured — offline devices are a supported mode.
     if (WiFi.SSID().length() > 0 &&
         now - g_last_wifi_reconnect_attempt > 10000) {
       g_last_wifi_reconnect_attempt = now;
       WEBSCREEN_DEBUG_PRINTLN("Wi-Fi disconnected, attempting reconnection...");
-      WiFi.reconnect();  // Previously this only logged — never reconnected
+      WiFi.reconnect();
     }
     return;
   }
@@ -774,10 +692,7 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     if (g_mqttClient.connected()) {
       g_mqttClient.loop();
     } else {
-      // Broker dropped — retry with the credentials from the last successful
-      // mqtt_connect() (elk_mqtt_try_reconnect in lvgl_elk.h). Each attempt
-      // can block this task (the LVGL owner) up to the ~5s socket timeout,
-      // so back off exponentially while the broker stays down.
+      // Each reconnect attempt can block this LVGL-owning task up to the ~5s socket timeout — back off exponentially.
       static unsigned long s_mqtt_backoff_ms = 5000;
       unsigned long now = WEBSCREEN_MILLIS();
       if (now - g_last_mqtt_reconnect_attempt > s_mqtt_backoff_ms) {

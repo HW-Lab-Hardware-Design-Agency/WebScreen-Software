@@ -1,10 +1,4 @@
-// ws_elk_time.h — fragment of the WebScreen Elk/LVGL bridge.
-//
-// NOT a standalone header: it is included exactly once, in order, by
-// lvgl_elk.h (which is itself included only by webscreen_runtime.cpp).
-// Symbols here may depend on every fragment included before it.
-// Split from the former 3,700-line lvgl_elk.h monolith; see lvgl_elk.h
-// for the include order.
+// ws_elk_time.h — fragment of the WebScreen Elk/LVGL bridge; included once, in order, by lvgl_elk.h (not standalone).
 
 /******************************************************************************
  * H2) Display Brightness API
@@ -85,9 +79,7 @@ static jsval_t js_ntp_synced(struct js *js, jsval_t *args, int nargs) {
   return js_mkfalse();
 }
 
-// format_time(fmt)        => strftime of the current local time
-// format_time(fmt, epoch) => strftime of the given epoch (local timezone)
-// e.g. format_time("%H:%M:%S") => "14:05:09", format_time("%a %d %b") => "Fri 13 Jun"
+// format_time(fmt[, epoch]) => strftime of local time, e.g. ("%H:%M:%S") => "14:05:09"
 static jsval_t js_format_time(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "", 0);
   String fmt = js_arg_str(js, args[0]);

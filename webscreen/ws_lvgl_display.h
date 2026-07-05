@@ -1,10 +1,5 @@
-// ws_lvgl_display.h — fragment of the WebScreen Elk/LVGL bridge.
-//
-// NOT a standalone header: it is included exactly once, in order, by
-// lvgl_elk.h (which is itself included only by webscreen_runtime.cpp).
-// Symbols here may depend on every fragment included before it.
-// Split from the former 3,700-line lvgl_elk.h monolith; see lvgl_elk.h
-// for the include order.
+// ws_lvgl_display.h — fragment of the WebScreen Elk/LVGL bridge. Not a standalone
+// header: included exactly once, in order, by lvgl_elk.h.
 
 /******************************************************************************
  * B) LVGL + Display
@@ -21,10 +16,7 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
   lv_disp_flush_ready(disp);
 }
 void init_lvgl_display() {
-  // Once per boot. A second call used to re-run lv_init(), leak the previous
-  // PSRAM flush buffer and register a duplicate display — which is exactly
-  // what happened when the runtime was started twice. The in-place JS app
-  // restart relies on this guard to reuse the live display.
+  // Once per boot: the in-place JS app restart relies on this guard to reuse the live display.
   static bool s_display_initialized = false;
   if (s_display_initialized) {
     LOG("Display already initialized — skipping re-init");
@@ -52,11 +44,7 @@ void init_lvgl_display() {
   lv_init();
   start_lvgl_tick();
 
-  // Single DRAM draw buffer. With two buffers LVGL 8 ALTERNATES render
-  // targets, and the old second buffer lived in PSRAM — so half of all
-  // rendering (read-modify-write blends and fills) ran against slow OPI
-  // PSRAM for zero benefit: the flush below is synchronous, so double
-  // buffering never overlapped render with transfer anyway.
+  // Single DRAM draw buffer: the flush is synchronous, so a second (PSRAM) buffer buys nothing.
   static const uint32_t DRAW_BUF_LINES = 40;  // tweak later
   static lv_color_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES];
 

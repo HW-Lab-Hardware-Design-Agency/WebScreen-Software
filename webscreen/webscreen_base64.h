@@ -3,7 +3,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Shared base64 encoder for serial streaming (/download, /screenshot).
 // Encodes `len` bytes into `out`, which must hold 4*ceil(len/3)+1 chars.
 // Returns the number of chars written (excluding the NUL terminator).
 static inline size_t webscreen_base64_encode(const uint8_t *in, size_t len, char *out) {

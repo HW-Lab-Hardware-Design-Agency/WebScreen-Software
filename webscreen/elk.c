@@ -246,10 +246,7 @@ jsval_t js_mkerr(struct js *js, const char *xx, ...) {
   va_end(ap);
   if (k > 0) n += (size_t) k;
   if (n > sizeof(js->errmsg) - 1) n = sizeof(js->errmsg) - 1;
-  // Append the 1-based source line of the failing token. js->toff must be
-  // read before the jump-to-end below clobbers parser state. Inside a
-  // function call js->code is the function body, so the line is relative
-  // to that function's first line, not the file.
+  // Append 1-based line of the failing token (inside a call, js->code is the function body, so it is body-relative).
   if (js->code != NULL && js->clen > 0 && js->toff <= js->clen) {
     jsoff_t line = 1, i;
     for (i = 0; i < js->toff; i++) {
@@ -335,9 +332,7 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   memcpy(buf + sizeof(koff), &v, sizeof(v));  // Copy value
   jsoff_t brk = js->brk | T_OBJ;              // New prop offset
   // printf("PROP: %u -> %u\n", b, brk);
-  // Upstream fix (cesanta/elk a128ee2): create the prop FIRST, repoint the
-  // object's head only on success. Repointing before an OOM left the head
-  // dangling at old brk, aliasing whatever entity got allocated there next.
+  // Upstream fix (cesanta/elk a128ee2): create the prop first, repoint the head only on success.
   jsval_t res = mkentity(js, (b & ~3U) | T_PROP, buf, sizeof(buf));
   if (!is_err(res))
     memcpy(&js->mem[head], &brk, sizeof(brk));  // Repoint head to the new prop
@@ -575,9 +570,7 @@ static bool mkscope(struct js *js) {
   assert((js->flags & F_NOEXEC) == 0);
   jsoff_t prev = (jsoff_t)vdata(js->scope);
   jsval_t scope = mkobj(js, prev);
-  // On OOM mkobj returns an error value; storing it as the scope would make
-  // every subsequent property lookup walk garbage. Keep the old scope and
-  // report failure so callers can propagate the OOM error.
+  // On OOM keep the old scope and report failure so callers propagate the error.
   if (is_err(scope)) return false;
   js->scope = scope;
   // printf("ENTER SCOPE %u, prev %u\n", (jsoff_t) vdata(js->scope), prev);
@@ -818,8 +811,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_TYPEOF:  return js_mkstr(js, typestr(vtype(r)), strlen(typestr(vtype(r))));
     case TOK_CALL:    return do_call_op(js, l, r);
     case TOK_ASSIGN:  return assign(js, lhs, r);
-    // Upstream fix (cesanta/elk a07410e): ++/-- on a non-lvalue used to call
-    // assign() on arbitrary data — a wild arena write. Reject bad lhs instead.
+    // Upstream fix (cesanta/elk a07410e): reject ++/-- on a non-lvalue.
     case TOK_POSTINC: {
       if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for ++");
       do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l;
@@ -1277,9 +1269,7 @@ static jsval_t js_for(struct js *js) {
   if (is_err2(&v, &res)) goto done;
   pos4 = js->pos;  // end of body
   while (!(flags & F_NOEXEC)) {
-    // Count loop ITERATIONS against the statement budget too: an empty body
-    // (for(;;){}) executes zero statements per spin, so counting only in
-    // js_stmt would let it run forever.
+    // Count iterations against the step budget too: an empty body executes zero statements.
     if (js->maxsteps != 0 && ++js->steps > js->maxsteps) {
       res = js_mkerr(js, "step limit");
       goto done;
@@ -1343,18 +1333,10 @@ static jsval_t js_return(struct js *js) {
 static jsval_t js_stmt(struct js *js) {
   jsval_t res;
   // jsoff_t pos = js->pos - js->tlen;
-  // GC only OUTSIDE function calls: do_call_op() holds raw `code`/`nogc`
-  // copies in C locals that js_fixup_offsets() cannot adjust, so compacting
-  // mid-call dangles them ("; expected" corruption). F_CALL covers the whole
-  // function-body execution window, making top-level statement boundaries the
-  // only — and safe — auto-GC points.
-  // F_NOEXEC must also block GC: js_func_literal parses function bodies via
-  // js_block -> js_stmt MID-EXPRESSION (F_CALL clear at top level), while
-  // C frames hold unrooted arena temporaries (partially built object
-  // literals, binop operands) that compaction would delete or move.
+  // GC only outside F_CALL (do_call_op holds raw code pointers GC cannot fix up)
+  // and outside F_NOEXEC (C frames hold unrooted arena temporaries mid-expression).
   if (js->brk > js->gct && !(js->flags & (F_CALL | F_NOEXEC))) js_gc(js);
-  // Statement budget: turns a runaway script (while(true){}) into a JS error
-  // the host can handle, instead of a task starved forever inside js_eval().
+  // Statement budget: turn while(true){} into a JS error instead of starving the task.
   if (js->maxsteps != 0 && ++js->steps > js->maxsteps)
     return js_mkerr(js, "step limit");
   switch (next(js)) {  // clang-format off
@@ -1469,12 +1451,8 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   js->code = buf;
   js->clen = (jsoff_t)len;
   js->pos = 0;
-  // Function bodies execute through a NESTED js_eval (call_js sets F_CALL
-  // before recursing here). The C-stack baseline, its high-water mark and
-  // the statement budget must only reset for TOP-LEVEL evals — resetting
-  // them per nested eval would re-baseline recursion depth at every call
-  // (making the maxcss guard blind) and refill the step budget inside
-  // while(true){fn();} loops (making the step limit unreachable).
+  // Function bodies run through a nested js_eval (call_js sets F_CALL first);
+  // the C-stack baseline/high-water mark and step budget reset only at top level.
   if (!(js->flags & F_CALL)) {
     js->cstk = &res;
     js->css = 0;

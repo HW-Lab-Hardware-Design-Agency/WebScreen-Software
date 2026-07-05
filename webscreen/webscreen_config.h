@@ -13,10 +13,11 @@
 // ============================================================================
 // FIRMWARE VERSION
 // ============================================================================
+// Keep major >= 2: WebScreen-Admin parses this from /info to enable /upload.
 #define WEBSCREEN_VERSION_MAJOR 2
-#define WEBSCREEN_VERSION_MINOR 0
+#define WEBSCREEN_VERSION_MINOR 2
 #define WEBSCREEN_VERSION_PATCH 0
-#define WEBSCREEN_VERSION_STRING "0.2.3-dev"
+#define WEBSCREEN_VERSION_STRING "2.2.0-dev"
 
 // ============================================================================
 // HARDWARE CONFIGURATION
@@ -29,7 +30,8 @@
 
 // Pin Definitions (ESP32-S3 WebScreen Hardware)
 #define WEBSCREEN_PIN_LED 38
-#define WEBSCREEN_PIN_BUTTON 33
+// GPIO 21 = user button. Never use GPIO 33-37: octal-PSRAM bus, pinMode() on them kills PSRAM.
+#define WEBSCREEN_PIN_BUTTON 21
 #define WEBSCREEN_PIN_OUTPUT 1
 
 // Display Pins (RM67162 AMOLED)

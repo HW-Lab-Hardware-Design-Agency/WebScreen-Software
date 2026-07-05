@@ -74,6 +74,10 @@ extern "C" {
 
   uint8_t webscreen_display_get_brightness(void);
 
+  // Sync the cached brightness (0-255) without touching the panel, so display off/on restores it
+
+  void webscreen_hardware_sync_brightness(uint8_t v);
+
   /**
  * @brief Set display rotation
  * @param rotation Rotation value (0-3)
@@ -122,6 +126,10 @@ extern "C" {
  */
 
   void webscreen_hardware_set_button_callback(void (*callback)(bool pressed));
+
+  // Enable/disable the short-press display toggle (suppressed while a JS app claims the button)
+
+  void webscreen_hardware_set_button_toggle(bool enabled);
 
   // ============================================================================
   // POWER MANAGEMENT

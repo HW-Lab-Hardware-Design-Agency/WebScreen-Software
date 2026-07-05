@@ -1,2 +1,6 @@
 node_modules
 dist
+
+
+# ken — local index, daemon socket, logs
+.ken/

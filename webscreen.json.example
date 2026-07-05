@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "wifi": {
+      "ssid": "YourWiFiSSID",
+      "pass": "YourWiFiPassword"
+    },
+    "mqtt": {
+      "enabled": false
+    }
+  },
+  "screen": {
+    "background": "#2980b9",
+    "foreground": "#00fff1"
+  },
+  "script": "app.js",
+  "bin": "",
+  "js_heap_kb": 256
+}

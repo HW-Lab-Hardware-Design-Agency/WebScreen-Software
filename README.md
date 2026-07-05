@@ -29,6 +29,7 @@ WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Ge
 ### Development Features
 - **Modular Architecture**: Separated concerns across hardware, network, and runtime modules
 - **Serial Commands**: Interactive development console with comprehensive command system
+- **Screen Capture**: `/screenshot` streams the live display as base64 RGB565 over serial — no camera needed
 - **Configuration System**: JSON-based configuration with comprehensive validation
 - **Error Handling**: Robust error reporting and recovery mechanisms
 - **Debug Support**: Serial logging and development utilities
@@ -339,7 +340,7 @@ WebScreen includes a custom `lv_conf.h` file optimized for ESP32-S3 with AMOLED 
 - PNG ✅, GIF ✅, SJPG ✅, BMP ❌
 
 **Performance Optimizations:**
-- Image caching disabled to save RAM
+- Image caching enabled (decoded PNG/SJPG/GIF images from SD are not re-decoded on every redraw)
 - Gradient caching disabled to reduce memory usage
 - Shadow caching disabled for predictable memory consumption
 - Memory management uses ESP32 heap allocator
@@ -381,14 +382,18 @@ WebScreen includes a comprehensive serial command system for interactive develop
 /stats                   - Display system statistics (memory, storage, WiFi)
 /info                    - Show device information and version
 /write <filename>        - Interactive JavaScript editor
-/load <script.js>        - Switch to different JS application
+/load <script.js> [save] - Switch to different JS application (save = persist to config)
+/eval <js-code>          - Evaluate JS in the running app (REPL)
+/errors                  - Show last JS error and restart-ladder state
+/screenshot              - Capture the screen as base64 RGB565 (alias /ss)
 /brightness <0-255>      - Set display brightness (no args to query current)
+/factory_reset confirm   - Delete webscreen.json and reboot to fallback
 /reboot                  - Restart the device
 ```
 
 **Network & Monitoring:**
 ```
-/wget <url> [file]       - Download file from URL to SD card
+/wget <url> [file]       - Download file from URL to SD card (alias /fetch)
 /ping <host>             - Test network connectivity
 /monitor [cpu|mem|net]   - Live system monitoring (press any key to stop)
 ```
@@ -402,9 +407,11 @@ WebScreen includes a comprehensive serial command system for interactive develop
 
 **File Operations:**
 ```
-/ls [path]               - List files/directories
+/ls [path] [json]        - List files/directories (json = machine-readable)
 /cat <file>              - Display file contents
-/rm <file>               - Delete file
+/rm <file|empty-dir>     - Delete file or empty directory
+/mkdir <path>            - Create directory
+/download <file>         - Dump file as base64 for host-side download (alias /dl)
 ```
 
 **Example Development Workflow:**
@@ -417,9 +424,10 @@ Enter JavaScript code. End with a line containing only 'END':
 [OK] Script saved: /hello.js (45 bytes)
 
 WebScreen> /load hello.js
-[OK] Script queued for loading: /hello.js
-[OK] Restarting to load new script...
+[OK] Loading script: /hello.js
 ```
+
+JavaScript errors are reported with a 1-based source line number, e.g. `ERROR: 'foo' not found (line 12)` (inside a function body the line is relative to that function's first line). Use `/errors` to review the most recent error, and `/eval <js-code>` to poke at the running app interactively.
 
 For detailed command reference, see [docs/SerialCommands.md](docs/SerialCommands.md).
 
@@ -452,18 +460,19 @@ Serial.printf("FPS: %d, Memory: %d KB\n", stats.last_fps, stats.memory_used/1024
 ## JavaScript API
 
 The firmware exposes numerous functions to your JavaScript applications. Some highlights include:
-- **Basic:** `print()`, `delay()`, `get_millis()`, `toNumber()`, `numberToString()`
-- **Strings:** `str_length()`, `str_substring()`, `str_index_of()`
+- **Basic:** `print()`, `delay()`, `get_millis()`, `toNumber()`, `numberToString()`, `random()`
+- **Strings:** `str_length()`, `str_substring()`, `str_index_of()`, `str_split()`, `str_split_count()`, `format_number()`, `pad_number()`
 - **Wi-Fi:** `wifi_connect()`, `wifi_status()`, `wifi_get_ip()`
 - **HTTP:** `http_get()`, `http_post()`, `http_delete()` (all support custom ports like `http://host:port/path`), `http_set_ca_cert_from_sd()`, `http_set_header()`, `http_clear_headers()`, `parse_json_value()`
 - **SD Card:** `sd_read_file()`, `sd_write_file()`, `sd_list_dir()`, `sd_delete_file()`
 - **BLE:** `ble_init()`, `ble_is_connected()`, `ble_write()`
 - **Display:** `set_brightness()`, `get_brightness()`
-- **Time:** `get_hours()`, `get_minutes()`, `get_seconds()`, `get_year()`, `get_month()`, `get_day()`, `get_weekday()`, `get_epoch()`, `ntp_synced()`
+- **Button:** `on_button()`, `get_button_event()`, `button_set_toggle()` (power button short press)
+- **Time:** `get_hours()`, `get_minutes()`, `get_seconds()`, `get_year()`, `get_month()`, `get_day()`, `get_weekday()`, `get_epoch()`, `ntp_synced()`, `format_time()`
 - **UI Drawing:** `draw_label()`, `draw_rect()`, `show_image()`, `create_label()`, `label_set_text()`
 - **Image Handling:** `create_image()`, `create_image_from_ram()`, `rotate_obj()`, `move_obj()`, `animate_obj()`
 - **Styles & Layout:** `create_style()`, `obj_add_style()`, `style_set_*()`, `obj_align()`
-- **Advanced Widgets:** Meter, Message Box, Span, Window, TileView, Line
+- **Advanced Widgets:** Meter, Chart, Span (rich text), Line
 - **MQTT:** `mqtt_init()`, `mqtt_connect()`, `mqtt_publish()`, `mqtt_subscribe()`, `mqtt_loop()`, `mqtt_on_message()`, `mqtt_has_message()`, `mqtt_get_payload()`, `mqtt_msg_clear()`
 
 For a full list and examples of usage, see the [JavaScript API Reference](docs/API.md).

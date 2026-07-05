@@ -2,6 +2,8 @@
 #include "SPI.h"
 #include "Arduino.h"
 #include "driver/spi_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 const static lcd_cmd_t rm67162_spi_init[] = {
   { 0xFE, { 0x00 }, 0x01 },  // PAGE
@@ -33,6 +35,26 @@ const static lcd_cmd_t rm67162_qspi_init[] = {
 
 static spi_device_handle_t spi;
 
+// Serializes panel access: lcd_PushColors holds CS low across chunks, so concurrent
+// lcd_brightness/lcd_send_cmd corrupts the stream. Recursive: lcd_PushColors reaches lcd_send_cmd while holding it.
+static SemaphoreHandle_t s_panel_mutex = NULL;
+
+static void panel_lock(void) {
+  if (s_panel_mutex == NULL) {
+    // Lazy fallback; normally created in rm67162_init() before any second task exists.
+    s_panel_mutex = xSemaphoreCreateRecursiveMutex();
+  }
+  if (s_panel_mutex != NULL) {
+    xSemaphoreTakeRecursive(s_panel_mutex, portMAX_DELAY);
+  }
+}
+
+static void panel_unlock(void) {
+  if (s_panel_mutex != NULL) {
+    xSemaphoreGiveRecursive(s_panel_mutex);
+  }
+}
+
 static void WriteComm(uint8_t data) {
   TFT_CS_L;
   SPI.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, TFT_SPI_MODE));
@@ -62,6 +84,7 @@ static void WriteData16(uint16_t data) {
 }
 
 static void lcd_send_cmd(uint32_t cmd, uint8_t *dat, uint32_t len) {
+  panel_lock();
 #if LCD_USB_QSPI_DREVER == 1
   TFT_CS_L;
   spi_transaction_t t;
@@ -86,8 +109,19 @@ static void lcd_send_cmd(uint32_t cmd, uint8_t *dat, uint32_t len) {
       WriteData(dat[i]);
   }
 #endif
+  panel_unlock();
 }
 void rm67162_init(void) {
+  // Idempotent: a second spi_bus_initialize() would abort via ESP_ERROR_CHECK.
+  static bool s_initialized = false;
+  if (s_initialized) {
+    return;
+  }
+  s_initialized = true;
+
+  if (s_panel_mutex == NULL) {
+    s_panel_mutex = xSemaphoreCreateRecursiveMutex();
+  }
   pinMode(TFT_CS, OUTPUT);
   pinMode(TFT_RES, OUTPUT);
 
@@ -180,22 +214,6 @@ void lcd_address_set(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2) {
     lcd_send_cmd(t[i].cmd, t[i].data, t[i].len);
   }
 }
-void lcd_fill(uint16_t xsta,
-              uint16_t ysta,
-              uint16_t xend,
-              uint16_t yend,
-              uint16_t color) {
-
-  uint16_t w = xend - xsta;
-  uint16_t h = yend - ysta;
-  uint16_t *color_p = (uint16_t *)ps_malloc(w * h * 2);
-  if (!color_p) {
-    return;
-  }
-  memset(color_p, color, w * h * 2);
-  lcd_PushColors(xsta, ysta, w, h, color_p);
-  free(color_p);
-}
 void lcd_DrawPoint(uint16_t x, uint16_t y, uint16_t color) {
   lcd_address_set(x, y, x + 1, y + 1);
   lcd_PushColors(&color, 1);
@@ -205,6 +223,8 @@ void lcd_PushColors(uint16_t x,
                     uint16_t width,
                     uint16_t high,
                     uint16_t *data) {
+  // Held across address-set + every chunk: CS stays low for the whole burst.
+  panel_lock();
 #if LCD_USB_QSPI_DREVER == 1
   bool first_send = 1;
   size_t len = width * high;
@@ -250,8 +270,10 @@ void lcd_PushColors(uint16_t x,
   SPI.endTransaction();
   TFT_CS_H;
 #endif
+  panel_unlock();
 }
 void lcd_PushColors(uint16_t *data, uint32_t len) {
+  panel_lock();
 #if LCD_USB_QSPI_DREVER == 1
   bool first_send = 1;
   uint16_t *p = (uint16_t *)data;
@@ -293,9 +315,12 @@ void lcd_PushColors(uint16_t *data, uint32_t len) {
   SPI.endTransaction();
   TFT_CS_H;
 #endif
+  panel_unlock();
 }
 void lcd_brightness(uint8_t brightness) {
+  panel_lock();
   lcd_send_cmd(0x51, &brightness, 1);
+  panel_unlock();
 }
 
 void lcd_sleep() {

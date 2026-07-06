@@ -151,11 +151,12 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   // Basic mandatory fields:
   d->data_size = fileSize;
   d->data = buf;
-  d->header.always_zero = 0;
+  d->header.magic = LV_IMAGE_HEADER_MAGIC;
   d->header.w = 200;
   d->header.h = 200;
-  d->header.cf = LV_IMG_CF_TRUE_COLOR;
-  // or LV_IMG_CF_RAW if using a custom decoder
+  // Raw file bytes (PNG/JPG/GIF): the matching LVGL decoder parses the real
+  // header, so w/h above are placeholders.
+  d->header.cf = LV_COLOR_FORMAT_RAW;
 
   // If you can't know width/height from file alone, you may just guess or parse
   // For a PNG/JPG you'd typically use an external decoder to fill w,h

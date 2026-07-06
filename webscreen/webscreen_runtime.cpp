@@ -462,15 +462,16 @@ bool webscreen_runtime_request_screenshot(void) {
 }
 
 static void webscreen_runtime_stream_screenshot(void) {
-  lv_img_dsc_t *snap = lv_snapshot_take(lv_scr_act(), LV_IMG_CF_TRUE_COLOR);
+  // Plain RGB565 (not the panel's swapped order): the host decoders accept
+  // both markers, and snapshot re-renders rather than reading the panel.
+  lv_draw_buf_t *snap = lv_snapshot_take(lv_scr_act(), LV_COLOR_FORMAT_RGB565);
   if (snap == NULL) {
     Serial.println("[ERROR] Screenshot failed (snapshot allocation)");
     return;
   }
 
-  Serial.printf("=== SCREENSHOT %ux%u RGB565%s ===\n",
-                (unsigned)snap->header.w, (unsigned)snap->header.h,
-                LV_COLOR_16_SWAP ? "_SWAP" : "");
+  Serial.printf("=== SCREENSHOT %ux%u RGB565 ===\n",
+                (unsigned)snap->header.w, (unsigned)snap->header.h);
 
   // 57 raw bytes -> 76 base64 chars per line (classic MIME width)
   const uint8_t *data = snap->data;
@@ -487,7 +488,7 @@ static void webscreen_runtime_stream_screenshot(void) {
   }
   Serial.println("=== SCREENSHOT END ===");
 
-  lv_snapshot_free(snap);
+  lv_draw_buf_destroy(snap);
 }
 
 static void webscreen_runtime_show_error_screen(const char *msg) {

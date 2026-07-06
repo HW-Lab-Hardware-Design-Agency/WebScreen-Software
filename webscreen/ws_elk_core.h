@@ -3,6 +3,7 @@
 #pragma once
 
 #include <lvgl.h>
+#include <lvgl_private.h>  // lv_timer_t internals (timer bridge walks timer_cb/user_data)
 #include <HTTPClient.h>
 #include "tick.h"
 

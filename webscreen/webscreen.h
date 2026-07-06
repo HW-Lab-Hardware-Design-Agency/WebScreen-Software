@@ -3,6 +3,6 @@
 
 #include "lvgl.h"
 
-extern const lv_img_dsc_t webscreen;
+extern const lv_image_dsc_t webscreen;
 
 #endif  // WEBSCREEN_H

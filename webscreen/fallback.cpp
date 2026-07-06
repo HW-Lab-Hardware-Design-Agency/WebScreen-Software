@@ -14,14 +14,13 @@ static lv_obj_t *fb_label = nullptr;
 static lv_obj_t *fb_gif = nullptr;
 static lv_obj_t *fb_container = nullptr;
 static lv_obj_t *fb_image = nullptr;
-static lv_disp_draw_buf_t fbDrawBuf;
 static lv_color_t *fbBuf = nullptr;
 
-static void fallback_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+static void fallback_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
-  lcd_PushColors(area->x1, area->y1, w, h, (uint16_t *)&color_p->full);
-  lv_disp_flush_ready(disp);
+  lcd_PushColors(area->x1, area->y1, w, h, (uint16_t *)px_map);
+  lv_display_flush_ready(disp);
 }
 static void scroll_anim_cb(void *var, int32_t v) {
   lv_obj_set_y((lv_obj_t *)var, v);
@@ -71,14 +70,13 @@ void fallback_setup() {
       return;
     }
 
-    lv_disp_draw_buf_init(&fbDrawBuf, fbBuf, nullptr, LVGL_LCD_BUF_SIZE);
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = 536;
-    disp_drv.ver_res = 240;
-    disp_drv.flush_cb = fallback_disp_flush;
-    disp_drv.draw_buf = &fbDrawBuf;
-    lv_disp_drv_register(&disp_drv);
+    lv_display_t *disp = lv_display_create(536, 240);
+    // Panel expects byte-swapped RGB565 (was LV_COLOR_16_SWAP in LVGL 8)
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
+    lv_display_set_flush_cb(disp, fallback_disp_flush);
+    lv_display_set_buffers(disp, fbBuf, nullptr,
+                           sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE,
+                           LV_DISPLAY_RENDER_MODE_PARTIAL);
   }
 
   // Create a container for the image and label

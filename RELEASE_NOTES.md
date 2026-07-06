@@ -2,13 +2,26 @@
 
 ## Unreleased - LVGL 9.5 Migration
 
-- **LVGL 8.3.11 → 9.5.0** (`feature/lvgl-9.5-migration`). New v9-format `lv_conf.h` (copy to `~/Arduino/libraries/lv_conf.h`; the Arduino `lvgl` library folder must contain LVGL 9.5.0).
-- Display driver ported to `lv_display_create`/`lv_display_set_buffers`; the panel's byte-swapped RGB565 is now expressed as the display color format `LV_COLOR_FORMAT_RGB565_SWAPPED` (LVGL 8's `LV_COLOR_16_SWAP` is gone).
-- **JS `lv_meter_*` API reimplemented on `lv_scale`** (lv_meter was removed upstream): needles (line/image), arcs and scale-line sections keep their JS signatures; tick-gradient colors and `label_gap` have no v9 equivalent and are ignored.
-- `lv_chart_set_zoom_x/y` and `lv_chart_set_axis_tick` JS bindings are kept as no-ops (APIs removed upstream).
-- `/screenshot` now streams plain RGB565 (`=== SCREENSHOT WxH RGB565 ===`); host tools already accept both markers.
-- Image assets converted to v9 formats: the boot logo is planar `RGB565A8`, the fallback GIF descriptor is `LV_COLOR_FORMAT_RAW`.
-- Flash: 3,032,515 bytes (96%) — +82KB vs LVGL 8; static DRAM 124KB (37%).
+The firmware now builds against LVGL 9.5.0 instead of 8.3.11. If you build
+locally, replace the LVGL library in your Arduino libraries folder and copy
+the new `lv_conf.h` next to it — the old v8 config no longer applies.
+
+What changed under the hood:
+
+- New display driver API. The panel's byte-swapped RGB565 is handled by the
+  display color format now (`LV_COLOR_FORMAT_RGB565_SWAPPED`), since the old
+  `LV_COLOR_16_SWAP` option is gone.
+- LVGL dropped the meter widget, so the `lv_meter_*` JS functions are now
+  implemented with `lv_scale` under the hood. Scripts don't need changes.
+  Two parameters are accepted but ignored (no v9 equivalent): the gradient
+  color of `lv_meter_add_scale_lines` and the major-tick `label_gap`.
+- `lv_chart_set_zoom_x/y` and `lv_chart_set_axis_tick` became no-ops; LVGL
+  removed those chart features.
+- `/screenshot` streams plain RGB565 now (header says `RGB565` instead of
+  `RGB565_SWAP`). The admin tool and IDE handle both.
+- The boot logo and fallback GIF were converted to the v9 image format.
+
+Flash use went up about 80KB to 96% of the 3MB app slot.
 
 ## Unreleased (2.2.0-dev) - JS APIs, Live REPL, Serial Tooling & Rendering Performance
 

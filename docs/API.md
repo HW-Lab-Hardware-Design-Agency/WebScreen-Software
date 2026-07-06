@@ -578,6 +578,12 @@ if (wifi_status() && ntp_synced()) {
 
 #### Meter Widget
 
+Since the LVGL 9.5 migration the meter functions are implemented on top of the
+`lv_scale` widget (LVGL removed `lv_meter` in v9). The JavaScript API below is
+unchanged; two cosmetic parameters are accepted but ignored because v9 has no
+equivalent: the gradient color of `lv_meter_add_scale_lines` and the
+`label_gap` of `lv_meter_set_scale_major_ticks`.
+
 Scales and indicators are returned to JavaScript as small slot-index handles (not pointers): `lv_meter_add_scale()` returns a scale handle and the `lv_meter_add_*` indicator functions return indicator handles, with **-1 on failure**. Pass the returned handle back into the corresponding `lv_meter_set_*` functions; an invalid handle produces an error instead of crashing the device.
 
 - **lv_meter_create(parent)**  
@@ -645,13 +651,13 @@ Charts plot one or more data series. `lv_chart_create()` returns an object handl
   Append the next X/Y pair to a series (for scatter charts).
 
 - **lv_chart_set_axis_tick(chart, axis, major_len, minor_len, major_count, minor_count, label_enable, draw_size)**  
-  Configure tick marks and labels on an axis.
+  No-op since LVGL 9.5 (the underlying API was removed upstream). Kept so older scripts keep running.
 
 - **lv_chart_set_zoom_x(chart, zoom)**  
-  Set the horizontal zoom (256 = no zoom).
+  No-op since LVGL 9.5, same reason as above.
 
 - **lv_chart_set_zoom_y(chart, zoom)**  
-  Set the vertical zoom (256 = no zoom).
+  No-op since LVGL 9.5, same reason as above.
 
 #### Spangroup Widget (Rich Text)
 
@@ -816,7 +822,7 @@ Errors raised in a timer callback are printed to the serial console together wit
 
 ## LVGL Configuration
 
-WebScreen uses LVGL v8.3 with the following configuration:
+WebScreen uses LVGL 9.5 with the following configuration:
 
 ### Display Settings
 - **Color Depth**: 16-bit (RGB565)
@@ -856,19 +862,19 @@ style_set_text_font(style, 14);  // Use smallest/default font
 | Image | ✅ Enabled | Display images |
 | Label | ✅ Enabled | Text display |
 | Line | ✅ Enabled | Line drawing |
+| Bar | ✅ Enabled | Progress bars |
 | Chart | ✅ Enabled | Data visualization |
-| Meter | ✅ Enabled | Gauge/speedometer |
-| Message Box | ✅ Enabled | Popup dialogs |
+| Scale | ✅ Enabled | Gauge/speedometer (backs the meter API) |
 | Span | ✅ Enabled | Rich text |
 
 ### Disabled Widgets
 
 The following widgets are **not available** to save memory:
-- Bar, Slider, Switch
+- Slider, Switch
 - Checkbox, Dropdown, Roller
 - Textarea, Table
-- Calendar, Colorwheel
-- Keyboard, List, Menu
+- Calendar, Keyboard
+- List, Menu, Message Box
 - Spinbox, Spinner
 - Tabview, Tileview, Window
 
@@ -877,7 +883,7 @@ The following widgets are **not available** to save memory:
 | Format | Status | Notes |
 |--------|--------|-------|
 | PNG | ✅ Enabled | Recommended for icons |
-| SJPG | ✅ Enabled | Split JPG for large images |
+| JPG / SJPG | ✅ Enabled | Via the TJpgDec decoder |
 | GIF | ✅ Enabled | Animated images |
 | BMP | ❌ Disabled | Not supported |
 

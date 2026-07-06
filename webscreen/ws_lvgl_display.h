@@ -45,8 +45,9 @@ void init_lvgl_display() {
   start_lvgl_tick();
 
   // Single DRAM draw buffer: the flush is synchronous, so a second (PSRAM) buffer buys nothing.
+  // Sized in bytes: v9's lv_color_t is 3 bytes, but the RGB565 display renders 2 bytes/px.
   static const uint32_t DRAW_BUF_LINES = 40;  // tweak later
-  static lv_color_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES];
+  static uint8_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES * 2] __attribute__((aligned(4)));
 
   lv_display_t *disp = lv_display_create(EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES);
   // Panel expects byte-swapped RGB565 (was LV_COLOR_16_SWAP in LVGL 8)

@@ -341,10 +341,10 @@ WebScreen includes a custom `lv_conf.h` file (LVGL 9.5 format) optimized for ESP
 - **Layouts**: Flexbox and Grid
 
 **Supported Image Formats:**
-- PNG ✅, GIF ✅, SJPG ✅, BMP ❌
+- PNG ✅, GIF ✅, JPG ✅ (SJPG not supported since LVGL 9), BMP ❌
 
 **Performance Optimizations:**
-- Image caching enabled (decoded PNG/SJPG/GIF images from SD are not re-decoded on every redraw)
+- Image caching enabled (decoded PNG/JPG/GIF images from SD are not re-decoded on every redraw)
 - Gradient caching disabled to reduce memory usage
 - Shadow caching disabled for predictable memory consumption
 - Memory management uses ESP32 heap allocator

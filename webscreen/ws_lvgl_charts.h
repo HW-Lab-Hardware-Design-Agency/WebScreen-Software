@@ -102,14 +102,26 @@ static int32_t ws_meter_value_to_angle(const ws_meter_scale *sc, int32_t v) {
 static void ws_meter_indicator_apply(ws_meter_indicator *rec) {
   switch (rec->type) {
     case WS_MIND_NEEDLE_LINE: {
+      // Resolve layout first: lv_obj_get_width() is 0 for widgets created
+      // this frame, which would clamp the needle to a 1px stub.
+      lv_obj_update_layout(rec->sc->scale);
       int32_t len = lv_obj_get_width(rec->sc->scale) / 2 + rec->r_mod;
       if (len < 1) len = 1;
       lv_scale_set_line_needle_value(rec->sc->scale, rec->obj, len, rec->end);
       break;
     }
-    case WS_MIND_NEEDLE_IMG:
+    case WS_MIND_NEEDLE_IMG: {
+      // lv_scale only rotates the image; placing the pivot on the scale
+      // center is up to us (lv_meter did it internally in LVGL 8).
+      lv_obj_update_layout(rec->obj);
+      lv_point_t piv;
+      lv_image_get_pivot(rec->obj, &piv);
+      lv_obj_align(rec->obj, LV_ALIGN_CENTER,
+                   lv_obj_get_width(rec->obj) / 2 - piv.x,
+                   lv_obj_get_height(rec->obj) / 2 - piv.y);
       lv_scale_set_image_needle_value(rec->sc->scale, rec->obj, rec->end);
       break;
+    }
     case WS_MIND_ARC:
       lv_arc_set_start_angle(rec->obj, ws_meter_value_to_angle(rec->sc, rec->start));
       lv_arc_set_end_angle(rec->obj, ws_meter_value_to_angle(rec->sc, rec->end));
@@ -142,9 +154,12 @@ static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs) { 
   lv_obj_t *scale_widget = mt;
   for (int i = 0; i < MAX_METER_SCALES; i++) {
     if (g_meter_scales[i] && g_meter_scales[i]->scale == mt) {
+      // Explicit pixel size: lv_scale computes needle geometry from the raw
+      // style width, so a percentage size would break it.
+      lv_obj_update_layout(mt);
       scale_widget = lv_scale_create(mt);
       lv_scale_set_mode(scale_widget, LV_SCALE_MODE_ROUND_INNER);
-      lv_obj_set_size(scale_widget, lv_pct(100), lv_pct(100));
+      lv_obj_set_size(scale_widget, lv_obj_get_width(mt), lv_obj_get_height(mt));
       lv_obj_center(scale_widget);
       lv_scale_set_angle_range(scale_widget, 270);
       lv_scale_set_rotation(scale_widget, 135);
@@ -221,6 +236,12 @@ static jsval_t js_lv_meter_set_scale_range(struct js *js, jsval_t *args, int nar
   lv_scale_set_rotation(sc->scale, rotation);
   sc->min = minV; sc->max = maxV;
   sc->angle_range = angleRange; sc->rotation = rotation;
+  // Re-aim existing indicators: their angles were computed under the old range.
+  for (int i = 0; i < MAX_METER_INDICATORS; i++) {
+    if (g_meter_indicators[i] && g_meter_indicators[i]->sc == sc) {
+      ws_meter_indicator_apply(g_meter_indicators[i]);
+    }
+  }
   return js_mknull();
 }
 
@@ -252,11 +273,11 @@ static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {  /
   lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);           // hide track
   lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
   lv_obj_set_style_arc_color(arc, lv_color_hex((uint32_t)col), LV_PART_INDICATOR);
-  int32_t grow = 2 * rMod;   // v8 r_mod grows/shrinks the indicator radius
-  lv_obj_set_size(arc, lv_pct(100), lv_pct(100));
-  if (grow != 0) {
-    lv_obj_set_style_pad_all(arc, grow < 0 ? -grow : 0, LV_PART_MAIN);
-  }
+  // v8 r_mod moves the indicator radius by that many pixels (either sign)
+  lv_obj_update_layout(sc->scale);
+  int32_t aw = lv_obj_get_width(sc->scale) + 2 * rMod;
+  int32_t ah = lv_obj_get_height(sc->scale) + 2 * rMod;
+  lv_obj_set_size(arc, aw < 1 ? 1 : aw, ah < 1 ? 1 : ah);
   lv_obj_center(arc);
   rec->obj = arc;
   rec->r_mod = rMod;

@@ -862,7 +862,6 @@ style_set_text_font(style, 14);  // Use smallest/default font
 | Image | ✅ Enabled | Display images |
 | Label | ✅ Enabled | Text display |
 | Line | ✅ Enabled | Line drawing |
-| Bar | ✅ Enabled | Progress bars |
 | Chart | ✅ Enabled | Data visualization |
 | Scale | ✅ Enabled | Gauge/speedometer (backs the meter API) |
 | Span | ✅ Enabled | Rich text |
@@ -870,7 +869,7 @@ style_set_text_font(style, 14);  // Use smallest/default font
 ### Disabled Widgets
 
 The following widgets are **not available** to save memory:
-- Slider, Switch
+- Bar, Slider, Switch
 - Checkbox, Dropdown, Roller
 - Textarea, Table
 - Calendar, Keyboard
@@ -883,7 +882,7 @@ The following widgets are **not available** to save memory:
 | Format | Status | Notes |
 |--------|--------|-------|
 | PNG | ✅ Enabled | Recommended for icons |
-| JPG / SJPG | ✅ Enabled | Via the TJpgDec decoder |
+| JPG | ✅ Enabled | Baseline JPG via TJpgDec. SJPG (split JPG) is not supported by LVGL 9 |
 | GIF | ✅ Enabled | Animated images |
 | BMP | ❌ Disabled | Not supported |
 

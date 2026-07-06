@@ -14,7 +14,7 @@ static lv_obj_t *fb_label = nullptr;
 static lv_obj_t *fb_gif = nullptr;
 static lv_obj_t *fb_container = nullptr;
 static lv_obj_t *fb_image = nullptr;
-static lv_color_t *fbBuf = nullptr;
+static uint8_t *fbBuf = nullptr;
 
 static void fallback_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   uint32_t w = (area->x2 - area->x1 + 1);
@@ -64,7 +64,8 @@ void fallback_setup() {
       webscreen_hardware_sync_brightness(g_webscreen_config.display.brightness);
     }
 
-    fbBuf = (lv_color_t *)ps_malloc(sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE);
+    // 2 bytes/px: the display renders RGB565 (v9's lv_color_t would be 3)
+  fbBuf = (uint8_t *)ps_malloc(LVGL_LCD_BUF_SIZE * 2);
     if (!fbBuf) {
       LOG("FALLBACK: Failed to allocate buffer");
       return;
@@ -75,7 +76,7 @@ void fallback_setup() {
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
     lv_display_set_flush_cb(disp, fallback_disp_flush);
     lv_display_set_buffers(disp, fbBuf, nullptr,
-                           sizeof(lv_color_t) * LVGL_LCD_BUF_SIZE,
+                           LVGL_LCD_BUF_SIZE * 2,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
   }
 

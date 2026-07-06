@@ -20,6 +20,8 @@ What changed under the hood:
 - `/screenshot` streams plain RGB565 now (header says `RGB565` instead of
   `RGB565_SWAP`). The admin tool and IDE handle both.
 - The boot logo and fallback GIF were converted to the v9 image format.
+- SJPG (split JPG) support is gone — LVGL 9 dropped the decoder. Plain JPG
+  and PNG still work; convert any .sjpg assets on your SD card.
 
 Flash use went up about 80KB to 96% of the 3MB app slot.
 

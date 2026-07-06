@@ -77,7 +77,7 @@ Table-driven dispatch (`kCommands[]`, one row per command; table order = `/help`
 - Other sizes (8, 10, 12, 16, 18, 22, 24, etc.) are NOT enabled
 
 **Enabled Widgets**:
-- Core: Label, Image, Arc, Line, Button, Bar, Canvas
+- Core: Label, Image, Arc, Line, Button, Canvas
 - Extra: Chart, Scale (backs the JS meter API), Span (rich text)
 
 **Disabled Widgets** (to save memory):
@@ -88,7 +88,7 @@ Table-driven dispatch (`kCommands[]`, one row per command; table order = `/help`
 **Image Formats**:
 - PNG: ✅ Enabled
 - GIF: ✅ Enabled
-- SJPG: ✅ Enabled (split JPG)
+- JPG: ✅ Enabled (baseline; SJPG split-JPG is NOT supported by LVGL 9 — convert old .sjpg assets)
 - BMP: ❌ Disabled
 
 **Layouts**: Flexbox and Grid enabled

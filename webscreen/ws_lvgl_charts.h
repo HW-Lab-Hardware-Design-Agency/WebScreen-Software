@@ -7,58 +7,138 @@
 // for the include order.
 
 /********************************************************************************
- * METER
+ * METER (LVGL 9: implemented on lv_scale — lv_meter was removed upstream)
  ********************************************************************************/
-// Example calls:
-//   lv_meter_create, lv_meter_add_scale, lv_meter_set_scale_ticks,
-//   lv_meter_set_scale_major_ticks, lv_meter_set_scale_range
-//   lv_meter_add_arc, lv_meter_add_scale_lines, lv_meter_add_needle_line,
-//   lv_meter_add_needle_img
-//   lv_meter_set_indicator_start_value, lv_meter_set_indicator_end_value, lv_meter_set_indicator_value
+// The JS API keeps the LVGL 8 lv_meter_* names and signatures. A "meter" is a
+// round lv_scale; indicators are children (needle line/image, arc) or scale
+// sections. Records live in static pools so the registry sweep can null slots
+// without leaking heap.
 
-// Slot registries for meter scales and indicators (see g_chart_series note:
-// these were raw pointers packed into doubles before — wild-pointer resets).
+struct ws_meter_scale {
+  lv_obj_t *scale;               // lv_scale widget (meter obj or extra child)
+  int32_t min, max;
+  int32_t angle_range, rotation;
+};
+
+enum : uint8_t { WS_MIND_NEEDLE_LINE, WS_MIND_NEEDLE_IMG, WS_MIND_ARC, WS_MIND_LINES };
+
+struct ws_meter_indicator {
+  uint8_t type;
+  ws_meter_scale *sc;            // swept together with the scale slot (same owner)
+  lv_obj_t *obj;                 // needle line/img or arc child (owned by the widget tree)
+  lv_scale_section_t *section;   // WS_MIND_LINES only
+  lv_style_t style_items;        // section styles; static storage, reset on slot reuse
+  lv_style_t style_ind;
+  bool styles_inited;
+  int32_t r_mod;
+  int32_t start, end;
+};
+
 static const int MAX_METER_SCALES = 8;
-static lv_meter_scale_t *g_meter_scales[MAX_METER_SCALES] = { nullptr };
-static const int MAX_METER_INDICATORS = 16;
-static lv_meter_indicator_t *g_meter_indicators[MAX_METER_INDICATORS] = { nullptr };
-// Owning meter per slot (see g_chart_series_owner): lets js_obj_delete null
-// the slots whose scales/indicators die with a deleted widget subtree. Only
-// meaningful while the matching registry entry is non-null.
+static ws_meter_scale g_meter_scale_pool[MAX_METER_SCALES];
+static ws_meter_scale *g_meter_scales[MAX_METER_SCALES] = { nullptr };
 static lv_obj_t *g_meter_scales_owner[MAX_METER_SCALES] = { nullptr };
+
+static const int MAX_METER_INDICATORS = 16;
+static ws_meter_indicator g_meter_indicator_pool[MAX_METER_INDICATORS];
+static ws_meter_indicator *g_meter_indicators[MAX_METER_INDICATORS] = { nullptr };
 static lv_obj_t *g_meter_indicators_owner[MAX_METER_INDICATORS] = { nullptr };
 
-static int store_meter_scale(lv_meter_scale_t *sc, lv_obj_t *owner) {
+static int store_meter_scale(lv_obj_t *scale_widget, lv_obj_t *owner) {
   for (int i = 0; i < MAX_METER_SCALES; i++) {
     if (!g_meter_scales[i]) {
-      g_meter_scales[i] = sc;
+      ws_meter_scale *rec = &g_meter_scale_pool[i];
+      rec->scale = scale_widget;
+      rec->min = 0; rec->max = 100;
+      rec->angle_range = 270; rec->rotation = 135;
+      g_meter_scales[i] = rec;
       g_meter_scales_owner[i] = owner;
       return i;
     }
   }
   return -1;
 }
-static lv_meter_scale_t *get_meter_scale(int handle) {
+static ws_meter_scale *get_meter_scale(int handle) {
   if (handle < 0 || handle >= MAX_METER_SCALES) return nullptr;
   return g_meter_scales[handle];
 }
-static int store_meter_indicator(lv_meter_indicator_t *ind, lv_obj_t *owner) {
+static int store_meter_indicator(uint8_t type, ws_meter_scale *sc, lv_obj_t *owner) {
   for (int i = 0; i < MAX_METER_INDICATORS; i++) {
     if (!g_meter_indicators[i]) {
-      g_meter_indicators[i] = ind;
+      ws_meter_indicator *rec = &g_meter_indicator_pool[i];
+      if (rec->styles_inited) {
+        lv_style_reset(&rec->style_items);
+        lv_style_reset(&rec->style_ind);
+        rec->styles_inited = false;
+      }
+      rec->type = type;
+      rec->sc = sc;
+      rec->obj = nullptr;
+      rec->section = nullptr;
+      rec->r_mod = 0;
+      rec->start = sc->min;
+      rec->end = sc->min;
+      g_meter_indicators[i] = rec;
       g_meter_indicators_owner[i] = owner;
       return i;
     }
   }
   return -1;
 }
-static lv_meter_indicator_t *get_meter_indicator(int handle) {
+static ws_meter_indicator *get_meter_indicator(int handle) {
   if (handle < 0 || handle >= MAX_METER_INDICATORS) return nullptr;
   return g_meter_indicators[handle];
 }
 
+// Map a scale value to an absolute arc angle (degrees).
+static int32_t ws_meter_value_to_angle(const ws_meter_scale *sc, int32_t v) {
+  int32_t span = sc->max - sc->min;
+  if (span == 0) span = 1;
+  if (v < sc->min) v = sc->min;
+  if (v > sc->max) v = sc->max;
+  return sc->rotation + (int32_t)((int64_t)(v - sc->min) * sc->angle_range / span);
+}
+
+static void ws_meter_indicator_apply(ws_meter_indicator *rec) {
+  switch (rec->type) {
+    case WS_MIND_NEEDLE_LINE: {
+      // Resolve layout first: lv_obj_get_width() is 0 for widgets created
+      // this frame, which would clamp the needle to a 1px stub.
+      lv_obj_update_layout(rec->sc->scale);
+      int32_t len = lv_obj_get_width(rec->sc->scale) / 2 + rec->r_mod;
+      if (len < 1) len = 1;
+      lv_scale_set_line_needle_value(rec->sc->scale, rec->obj, len, rec->end);
+      break;
+    }
+    case WS_MIND_NEEDLE_IMG: {
+      // lv_scale only rotates the image; placing the pivot on the scale
+      // center is up to us (lv_meter did it internally in LVGL 8).
+      lv_obj_update_layout(rec->obj);
+      lv_point_t piv;
+      lv_image_get_pivot(rec->obj, &piv);
+      lv_obj_align(rec->obj, LV_ALIGN_CENTER,
+                   lv_obj_get_width(rec->obj) / 2 - piv.x,
+                   lv_obj_get_height(rec->obj) / 2 - piv.y);
+      lv_scale_set_image_needle_value(rec->sc->scale, rec->obj, rec->end);
+      break;
+    }
+    case WS_MIND_ARC:
+      lv_arc_set_start_angle(rec->obj, ws_meter_value_to_angle(rec->sc, rec->start));
+      lv_arc_set_end_angle(rec->obj, ws_meter_value_to_angle(rec->sc, rec->end));
+      break;
+    case WS_MIND_LINES:
+      lv_scale_section_set_range(rec->section, rec->start, rec->end);
+      lv_obj_invalidate(rec->sc->scale);
+      break;
+  }
+}
+
 static jsval_t js_lv_meter_create(struct js *js, jsval_t *args, int nargs) {  // no params
-  lv_obj_t *m = lv_meter_create(lv_scr_act());
+  lv_obj_t *m = lv_scale_create(lv_scr_act());
+  lv_scale_set_mode(m, LV_SCALE_MODE_ROUND_INNER);
+  lv_obj_set_size(m, 200, 200);              // lv_meter's old default face size
+  lv_scale_set_angle_range(m, 270);          // lv_meter defaults
+  lv_scale_set_rotation(m, 135);
   int handle = store_lv_obj(m);
   return js_mknum(handle);
 }
@@ -69,13 +149,27 @@ static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs) { 
   lv_obj_t *mt = get_lv_obj(mh);
   if (!mt) return js_mknull();
 
-  lv_meter_scale_t *sc = lv_meter_add_scale(mt);
-  if (!sc) return js_mknum(-1);
-  int sh = store_meter_scale(sc, mt);
+  // First scale binds the meter widget itself; extra scales become
+  // full-size child lv_scales stacked on top (multi-scale meters).
+  lv_obj_t *scale_widget = mt;
+  for (int i = 0; i < MAX_METER_SCALES; i++) {
+    if (g_meter_scales[i] && g_meter_scales[i]->scale == mt) {
+      // Explicit pixel size: lv_scale computes needle geometry from the raw
+      // style width, so a percentage size would break it.
+      lv_obj_update_layout(mt);
+      scale_widget = lv_scale_create(mt);
+      lv_scale_set_mode(scale_widget, LV_SCALE_MODE_ROUND_INNER);
+      lv_obj_set_size(scale_widget, lv_obj_get_width(mt), lv_obj_get_height(mt));
+      lv_obj_center(scale_widget);
+      lv_scale_set_angle_range(scale_widget, 270);
+      lv_scale_set_rotation(scale_widget, 135);
+      break;
+    }
+  }
+  int sh = store_meter_scale(scale_widget, mt);
   if (sh < 0) {
-    // LVGL has no API to remove a scale; it stays in the meter (freed with it)
-    // but is unreachable from JS.
     LOG("lv_meter_add_scale: no free scale slots");
+    if (scale_widget != mt) lv_obj_del(scale_widget);
     return js_mknum(-1);
   }
   return js_mknum(sh);
@@ -83,63 +177,71 @@ static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs) { 
 
 static jsval_t js_lv_meter_set_scale_ticks(struct js *js, jsval_t *args, int nargs) {  // (meterH, scaleHandle, cnt, width, length, color)
   if (nargs < 6) return js_mknull();
-  int mH = (int)js_getnum(args[0]);
   int scH = (int)js_getnum(args[1]);
   int cnt = (int)js_getnum(args[2]);
   int width = (int)js_getnum(args[3]);
   int length = (int)js_getnum(args[4]);
   double col = js_getnum(args[5]);
 
-  lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  lv_meter_scale_t *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH);
   if (!sc) {
     LOGF("lv_meter_set_scale_ticks: invalid scale handle %d\n", scH);
     return js_mknull();
   }
-  lv_meter_set_scale_ticks(mt, sc, cnt, width, length, lv_color_hex((uint32_t)col));
+  lv_scale_set_total_tick_count(sc->scale, cnt);
+  lv_obj_set_style_line_width(sc->scale, width, LV_PART_ITEMS);
+  lv_obj_set_style_length(sc->scale, length, LV_PART_ITEMS);
+  lv_obj_set_style_line_color(sc->scale, lv_color_hex((uint32_t)col), LV_PART_ITEMS);
   return js_mknull();
 }
 
 static jsval_t js_lv_meter_set_scale_major_ticks(struct js *js, jsval_t *args, int nargs) {  // (meterH, scaleHandle, freq, width, length, color, label_gap)
   if (nargs < 7) return js_mknull();
-  int mH = (int)js_getnum(args[0]);
   int scH = (int)js_getnum(args[1]);
   int freq = (int)js_getnum(args[2]);
   int width = (int)js_getnum(args[3]);
   int length = (int)js_getnum(args[4]);
   double col = js_getnum(args[5]);
   int label_gap = (int)js_getnum(args[6]);
+  (void)label_gap;  // no direct LVGL 9 equivalent; labels follow the major ticks
 
-  lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-
-  lv_meter_scale_t *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH);
   if (!sc) {
     LOGF("lv_meter_set_scale_major_ticks: invalid scale handle %d\n", scH);
     return js_mknull();
   }
-  lv_meter_set_scale_major_ticks(mt, sc, freq, width, length, lv_color_hex((uint32_t)col), label_gap);
+  lv_scale_set_major_tick_every(sc->scale, freq);
+  lv_scale_set_label_show(sc->scale, true);
+  lv_obj_set_style_line_width(sc->scale, width, LV_PART_INDICATOR);
+  lv_obj_set_style_length(sc->scale, length, LV_PART_INDICATOR);
+  lv_obj_set_style_line_color(sc->scale, lv_color_hex((uint32_t)col), LV_PART_INDICATOR);
   return js_mknull();
 }
 
 static jsval_t js_lv_meter_set_scale_range(struct js *js, jsval_t *args, int nargs) {  // (meterH, scaleHandle, min, max, angle_range, rotation)
   if (nargs < 6) return js_mknull();
-  int mH = (int)js_getnum(args[0]);
   int scH = (int)js_getnum(args[1]);
   int minV = (int)js_getnum(args[2]);
   int maxV = (int)js_getnum(args[3]);
   int angleRange = (int)js_getnum(args[4]);
   int rotation = (int)js_getnum(args[5]);
 
-  lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  lv_meter_scale_t *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH);
   if (!sc) {
     LOGF("lv_meter_set_scale_range: invalid scale handle %d\n", scH);
     return js_mknull();
   }
-  lv_meter_set_scale_range(mt, sc, minV, maxV, angleRange, rotation);
+  lv_scale_set_range(sc->scale, minV, maxV);
+  lv_scale_set_angle_range(sc->scale, angleRange);
+  lv_scale_set_rotation(sc->scale, rotation);
+  sc->min = minV; sc->max = maxV;
+  sc->angle_range = angleRange; sc->rotation = rotation;
+  // Re-aim existing indicators: their angles were computed under the old range.
+  for (int i = 0; i < MAX_METER_INDICATORS; i++) {
+    if (g_meter_indicators[i] && g_meter_indicators[i]->sc == sc) {
+      ws_meter_indicator_apply(g_meter_indicators[i]);
+    }
+  }
   return js_mknull();
 }
 
@@ -155,16 +257,31 @@ static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {  /
 
   lv_obj_t *mt = get_lv_obj(mH);
   if (!mt) return js_mknull();
-  lv_meter_scale_t *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH);
   if (!sc) {
     LOGF("lv_meter_add_arc: invalid scale handle %d\n", scH);
     return js_mknull();
   }
 
-  lv_meter_indicator_t *ind = lv_meter_add_arc(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
-  if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind, mt);
-  if (ih < 0) LOG("lv_meter_add_arc: no free indicator slots");
+  int ih = store_meter_indicator(WS_MIND_ARC, sc, mt);
+  if (ih < 0) { LOG("lv_meter_add_arc: no free indicator slots"); return js_mknum(-1); }
+  ws_meter_indicator *rec = g_meter_indicators[ih];
+
+  lv_obj_t *arc = lv_arc_create(sc->scale);
+  lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+  lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);           // hide track
+  lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(arc, lv_color_hex((uint32_t)col), LV_PART_INDICATOR);
+  // v8 r_mod moves the indicator radius by that many pixels (either sign)
+  lv_obj_update_layout(sc->scale);
+  int32_t aw = lv_obj_get_width(sc->scale) + 2 * rMod;
+  int32_t ah = lv_obj_get_height(sc->scale) + 2 * rMod;
+  lv_obj_set_size(arc, aw < 1 ? 1 : aw, ah < 1 ? 1 : ah);
+  lv_obj_center(arc);
+  rec->obj = arc;
+  rec->r_mod = rMod;
+  ws_meter_indicator_apply(rec);
   return js_mknum(ih);
 }
 
@@ -175,24 +292,35 @@ static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nar
   int scH = (int)js_getnum(args[1]);
   double colorM = js_getnum(args[2]);
   double colorG = js_getnum(args[3]);
+  (void)colorG;  // tick-gradient has no LVGL 9 section equivalent
   bool local = (bool)js_getnum(args[4]);
+  (void)local;
   int widthMod = (int)js_getnum(args[5]);
+  (void)widthMod;
 
   lv_obj_t *mt = get_lv_obj(mH);
   if (!mt) return js_mknull();
-  lv_meter_scale_t *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH);
   if (!sc) {
     LOGF("lv_meter_add_scale_lines: invalid scale handle %d\n", scH);
     return js_mknull();
   }
 
-  lv_meter_indicator_t *ind = lv_meter_add_scale_lines(mt, sc,
-                                                       lv_color_hex((uint32_t)colorM),
-                                                       lv_color_hex((uint32_t)colorG),
-                                                       local, widthMod);
-  if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind, mt);
-  if (ih < 0) LOG("lv_meter_add_scale_lines: no free indicator slots");
+  int ih = store_meter_indicator(WS_MIND_LINES, sc, mt);
+  if (ih < 0) { LOG("lv_meter_add_scale_lines: no free indicator slots"); return js_mknum(-1); }
+  ws_meter_indicator *rec = g_meter_indicators[ih];
+
+  lv_style_init(&rec->style_items);
+  lv_style_init(&rec->style_ind);
+  rec->styles_inited = true;
+  lv_style_set_line_color(&rec->style_items, lv_color_hex((uint32_t)colorM));
+  lv_style_set_line_color(&rec->style_ind, lv_color_hex((uint32_t)colorM));
+
+  rec->section = lv_scale_add_section(sc->scale);
+  if (!rec->section) { g_meter_indicators[ih] = nullptr; return js_mknum(-1); }
+  lv_scale_section_set_style(rec->section, LV_PART_ITEMS, &rec->style_items);
+  lv_scale_section_set_style(rec->section, LV_PART_INDICATOR, &rec->style_ind);
+  ws_meter_indicator_apply(rec);
   return js_mknum(ih);
 }
 
@@ -206,16 +334,23 @@ static jsval_t js_lv_meter_add_needle_line(struct js *js, jsval_t *args, int nar
 
   lv_obj_t *mt = get_lv_obj(mH);
   if (!mt) return js_mknull();
-  lv_meter_scale_t *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH);
   if (!sc) {
     LOGF("lv_meter_add_needle_line: invalid scale handle %d\n", scH);
     return js_mknull();
   }
 
-  lv_meter_indicator_t *ind = lv_meter_add_needle_line(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
-  if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind, mt);
-  if (ih < 0) LOG("lv_meter_add_needle_line: no free indicator slots");
+  int ih = store_meter_indicator(WS_MIND_NEEDLE_LINE, sc, mt);
+  if (ih < 0) { LOG("lv_meter_add_needle_line: no free indicator slots"); return js_mknum(-1); }
+  ws_meter_indicator *rec = g_meter_indicators[ih];
+
+  lv_obj_t *needle = lv_line_create(sc->scale);
+  lv_obj_set_style_line_width(needle, width, 0);
+  lv_obj_set_style_line_color(needle, lv_color_hex((uint32_t)col), 0);
+  lv_obj_set_style_line_rounded(needle, true, 0);
+  rec->obj = needle;
+  rec->r_mod = rMod;
+  ws_meter_indicator_apply(rec);
   return js_mknum(ih);
 }
 
@@ -224,11 +359,7 @@ static jsval_t js_lv_meter_add_needle_img(struct js *js, jsval_t *args, int narg
   if (nargs < 5) return js_mknull();
   int mH = (int)js_getnum(args[0]);
   int scH = (int)js_getnum(args[1]);
-  // Historically this arg was a raw lv_img_dsc_t* cast from a double, but no
-  // binding ever exposed such a pointer to JS, so every call dereferenced a
-  // fabricated address. It is now a g_ram_images slot index (the descriptor
-  // filled by load_image_file_into_ram).
-  int imgSlot = (int)js_getnum(args[2]);
+  int imgSlot = (int)js_getnum(args[2]);   // g_ram_images slot (see load_image_file_into_ram)
   int pivotX = (int)js_getnum(args[3]);
   int pivotY = (int)js_getnum(args[4]);
 
@@ -240,71 +371,68 @@ static jsval_t js_lv_meter_add_needle_img(struct js *js, jsval_t *args, int narg
 
   lv_obj_t *mt = get_lv_obj(mH);
   if (!mt) return js_mknull();
-  lv_meter_scale_t *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH);
   if (!sc) {
     LOGF("lv_meter_add_needle_img: invalid scale handle %d\n", scH);
     return js_mknull();
   }
 
-  lv_meter_indicator_t *ind = lv_meter_add_needle_img(mt, sc, src_dsc, pivotX, pivotY);
-  if (!ind) return js_mknum(-1);
-  int ih = store_meter_indicator(ind, mt);
-  if (ih < 0) LOG("lv_meter_add_needle_img: no free indicator slots");
+  int ih = store_meter_indicator(WS_MIND_NEEDLE_IMG, sc, mt);
+  if (ih < 0) { LOG("lv_meter_add_needle_img: no free indicator slots"); return js_mknum(-1); }
+  ws_meter_indicator *rec = g_meter_indicators[ih];
+
+  lv_obj_t *img = lv_img_create(sc->scale);
+  lv_img_set_src(img, src_dsc);
+  lv_image_set_pivot(img, pivotX, pivotY);
+  rec->obj = img;
+  ws_meter_indicator_apply(rec);
   return js_mknum(ih);
 }
 
 // meter set indicator
 static jsval_t js_lv_meter_set_indicator_start_value(struct js *js, jsval_t *args, int nargs) {  // (meterH, indicatorHandle, startVal)
   if (nargs < 3) return js_mknull();
-  int mH = (int)js_getnum(args[0]);
   int indH = (int)js_getnum(args[1]);
   int stVal = (int)js_getnum(args[2]);
 
-  lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  lv_meter_indicator_t *ind = get_meter_indicator(indH);
+  ws_meter_indicator *ind = get_meter_indicator(indH);
   if (!ind) {
     LOGF("lv_meter_set_indicator_start_value: invalid indicator handle %d\n", indH);
     return js_mknull();
   }
-
-  lv_meter_set_indicator_start_value(mt, ind, stVal);
+  ind->start = stVal;
+  ws_meter_indicator_apply(ind);
   return js_mknull();
 }
 
 static jsval_t js_lv_meter_set_indicator_end_value(struct js *js, jsval_t *args, int nargs) {  // (meterH, indicatorHandle, endVal)
   if (nargs < 3) return js_mknull();
-  int mH = (int)js_getnum(args[0]);
   int indH = (int)js_getnum(args[1]);
   int endVal = (int)js_getnum(args[2]);
 
-  lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  lv_meter_indicator_t *ind = get_meter_indicator(indH);
+  ws_meter_indicator *ind = get_meter_indicator(indH);
   if (!ind) {
     LOGF("lv_meter_set_indicator_end_value: invalid indicator handle %d\n", indH);
     return js_mknull();
   }
-
-  lv_meter_set_indicator_end_value(mt, ind, endVal);
+  ind->end = endVal;
+  ws_meter_indicator_apply(ind);
   return js_mknull();
 }
 
 static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int nargs) {  // (meterH, indicatorHandle, val)
   if (nargs < 3) return js_mknull();
-  int mH = (int)js_getnum(args[0]);
   int indH = (int)js_getnum(args[1]);
   int val = (int)js_getnum(args[2]);
 
-  lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  lv_meter_indicator_t *ind = get_meter_indicator(indH);
+  ws_meter_indicator *ind = get_meter_indicator(indH);
   if (!ind) {
     LOGF("lv_meter_set_indicator_value: invalid indicator handle %d\n", indH);
     return js_mknull();
   }
-
-  lv_meter_set_indicator_value(mt, ind, val);
+  ind->start = val;   // lv_meter semantics: plain value sets both ends
+  ind->end = val;
+  ws_meter_indicator_apply(ind);
   return js_mknull();
 }
 
@@ -420,7 +548,7 @@ static jsval_t js_lv_spangroup_new_span(struct js *js, jsval_t *args, int nargs)
   if (sh < 0) {
     // No free slot: delete the span again so it cannot leak unreferenced.
     LOG("lv_spangroup_new_span: no free span slots");
-    lv_spangroup_del_span(spg, sp);
+    lv_spangroup_delete_span(spg, sp);
     return js_mknum(-1);
   }
   return js_mknum(sh);
@@ -494,7 +622,7 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) { 
   lv_obj_t *line = get_lv_obj(h);
   if (!line) return js_mknull();
 
-  static lv_point_t points[32];        // up to 16 points
+  static lv_point_precise_t points[32];  // up to 16 points
   if (pairCount > 16) pairCount = 16;  // clamp
 
   int idx = 1;  // start reading from arg[1]

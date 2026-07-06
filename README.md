@@ -80,7 +80,7 @@ This is the easiest way to get started with WebScreen without any development se
    ```
    Library Manager → Install:
    - ArduinoJson (by Benoit Blanchon) - v6.x or later
-   - LVGL (by kisvegabor) - v8.3.X
+   - LVGL (by kisvegabor) - v9.5.x
    - PubSubClient (by Nick O'Leary) - v2.8 or later
    ```
 
@@ -91,13 +91,17 @@ This is the easiest way to get started with WebScreen without any development se
    ```
 
    Key LVGL settings configured for WebScreen:
-   - Color depth: 16-bit (RGB565) with byte swap enabled
-   - Custom memory management using stdlib malloc/free
+   - Color depth: 16-bit (RGB565), display runs in byte-swapped mode for the QSPI panel
+   - stdlib malloc/free for LVGL allocations
    - Display refresh: 30ms for stability
    - **Enabled fonts**: Montserrat 14, 20, 28, 34, 40, 44, 48
-   - **Image formats**: PNG, GIF, SJPG (BMP disabled)
-   - **Widgets**: Label, Image, Arc, Line, Button, Chart, Meter, Span
+   - **Image formats**: PNG, GIF, JPG (BMP disabled)
+   - **Widgets**: Label, Image, Arc, Line, Button, Bar, Chart, Scale, Span
    - **Layouts**: Flexbox and Grid enabled
+
+   Note: this branch requires LVGL 9.5. The `lv_conf.h` in the repo is in the
+   v9 format and will not work with LVGL 8. If you were building an older
+   branch before, replace the LVGL library and copy the new `lv_conf.h` again.
    - Complex drawing features enabled (shadows, gradients, etc.)
 
 5. **Open WebScreen Sketch**
@@ -310,10 +314,10 @@ WebScreen features a modular architecture with clear separation of concerns:
 ```
 
 #### LVGL Configuration
-WebScreen includes a custom `lv_conf.h` file optimized for ESP32-S3 with AMOLED display:
+WebScreen includes a custom `lv_conf.h` file (LVGL 9.5 format) optimized for ESP32-S3 with AMOLED display:
 
 **Display Settings:**
-- **Color Format**: 16-bit RGB565 with byte swapping for SPI compatibility
+- **Color Format**: 16-bit RGB565, byte-swapped at the display level (`LV_COLOR_FORMAT_RGB565_SWAPPED`)
 - **Resolution**: 536x240 pixels
 - **DPI**: 130 for optimal widget sizing
 - **Refresh Rate**: 30ms for stable display output
@@ -337,10 +341,10 @@ WebScreen includes a custom `lv_conf.h` file optimized for ESP32-S3 with AMOLED 
 - **Layouts**: Flexbox and Grid
 
 **Supported Image Formats:**
-- PNG ✅, GIF ✅, SJPG ✅, BMP ❌
+- PNG ✅, GIF ✅, JPG ✅ (SJPG not supported since LVGL 9), BMP ❌
 
 **Performance Optimizations:**
-- Image caching enabled (decoded PNG/SJPG/GIF images from SD are not re-decoded on every redraw)
+- Image caching enabled (decoded PNG/JPG/GIF images from SD are not re-decoded on every redraw)
 - Gradient caching disabled to reduce memory usage
 - Shadow caching disabled for predictable memory consumption
 - Memory management uses ESP32 heap allocator

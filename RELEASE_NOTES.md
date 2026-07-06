@@ -1,5 +1,30 @@
 # Release Notes
 
+## Unreleased - LVGL 9.5 Migration
+
+The firmware now builds against LVGL 9.5.0 instead of 8.3.11. If you build
+locally, replace the LVGL library in your Arduino libraries folder and copy
+the new `lv_conf.h` next to it — the old v8 config no longer applies.
+
+What changed under the hood:
+
+- New display driver API. The panel's byte-swapped RGB565 is handled by the
+  display color format now (`LV_COLOR_FORMAT_RGB565_SWAPPED`), since the old
+  `LV_COLOR_16_SWAP` option is gone.
+- LVGL dropped the meter widget, so the `lv_meter_*` JS functions are now
+  implemented with `lv_scale` under the hood. Scripts don't need changes.
+  Two parameters are accepted but ignored (no v9 equivalent): the gradient
+  color of `lv_meter_add_scale_lines` and the major-tick `label_gap`.
+- `lv_chart_set_zoom_x/y` and `lv_chart_set_axis_tick` became no-ops; LVGL
+  removed those chart features.
+- `/screenshot` streams plain RGB565 now (header says `RGB565` instead of
+  `RGB565_SWAP`). The admin tool and IDE handle both.
+- The boot logo and fallback GIF were converted to the v9 image format.
+- SJPG (split JPG) support is gone — LVGL 9 dropped the decoder. Plain JPG
+  and PNG still work; convert any .sjpg assets on your SD card.
+
+Flash use went up about 80KB to 96% of the 3MB app slot.
+
 ## Unreleased (2.2.0-dev) - JS APIs, Live REPL, Serial Tooling & Rendering Performance
 
 ### New JS APIs

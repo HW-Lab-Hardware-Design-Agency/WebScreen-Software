@@ -395,16 +395,16 @@ Captures the current screen contents and streams them over serial as base64-enco
 WebScreen> /screenshot
 Queued. Data follows as an '=== SCREENSHOT ... ===' block
 
-=== SCREENSHOT 536x240 RGB565_SWAP ===
+=== SCREENSHOT 536x240 RGB565 ===
 [... base64 lines, 76 chars each ...]
 === SCREENSHOT END ===
 ```
 
 **Stream Format:**
-- Header line: `=== SCREENSHOT <w>x<h> RGB565_SWAP ===` (width and height in pixels)
+- Header line: `=== SCREENSHOT <w>x<h> RGB565 ===` (width and height in pixels)
 - Body: base64-encoded raw RGB565 pixel data, 76 characters per line (57 raw bytes per line, classic MIME width)
 - Footer line: `=== SCREENSHOT END ===`
-- `RGB565_SWAP` means the two bytes of each 16-bit pixel are swapped (`LV_COLOR_16_SWAP` is enabled in `lv_conf.h`) — swap them back on the host before interpreting the pixels as little-endian RGB565
+- Pixels are little-endian RGB565. Older firmware (LVGL 8 builds) reports `RGB565_SWAP` in the header instead, meaning the two bytes of each pixel are swapped — check the marker before decoding
 
 **Refused when:**
 - The JS runtime is not running (fallback mode)
@@ -431,9 +431,9 @@ while True:
     elif w and line and not line.startswith(('WebScreen>', 'Queued')):
         data += base64.b64decode(line)
 
-swapped = bytearray(len(data))     # undo LV_COLOR_16_SWAP
-swapped[0::2], swapped[1::2] = data[1::2], data[0::2]
-Image.frombytes('RGB', (w, h), bytes(swapped), 'raw', 'BGR;16').save('shot.png')
+Image.frombytes('RGB', (w, h), bytes(data), 'raw', 'BGR;16').save('shot.png')
+# For RGB565_SWAP (older firmware), swap byte pairs first:
+#   data[0::2], data[1::2] = data[1::2], data[0::2]
 ```
 
 **Use Cases:**

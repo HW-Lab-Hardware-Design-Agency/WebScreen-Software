@@ -152,13 +152,13 @@ static void release_lv_obj(int h) {
 // Helper functions to extract RGB components from lv_color_t
 
 uint8_t get_red(lv_color_t color) {
-  return (color.full >> 11) & 0x1F;  // 5 bits
+  return (lv_color_to_u16(color) >> 11) & 0x1F;  // 5 bits
 }
 uint8_t get_green(lv_color_t color) {
-  return (color.full >> 5) & 0x3F;  // 6 bits
+  return (lv_color_to_u16(color) >> 5) & 0x3F;  // 6 bits
 }
 uint8_t get_blue(lv_color_t color) {
-  return color.full & 0x1F;  // 5 bits
+  return lv_color_to_u16(color) & 0x1F;  // 5 bits
 }
 
 // create_image("/messi.png", x,y) => returns handle

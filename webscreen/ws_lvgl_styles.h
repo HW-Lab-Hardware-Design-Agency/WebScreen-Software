@@ -176,7 +176,7 @@ WS_STYLE_SETTER_COLOR(js_style_set_bg_color, lv_style_set_bg_color)
 WS_STYLE_SETTER_COLOR(js_style_set_border_color, lv_style_set_border_color)
 WS_STYLE_SETTER_NUM(js_style_set_border_width, lv_style_set_border_width, int, int)
 WS_STYLE_SETTER_NUM(js_style_set_border_opa, lv_style_set_border_opa, int, lv_opa_t)
-WS_STYLE_SETTER_NUM(js_style_set_border_side, lv_style_set_border_side, int, int)  // e.g. LV_BORDER_SIDE_BOTTOM|LV_BORDER_SIDE_RIGHT
+WS_STYLE_SETTER_NUM(js_style_set_border_side, lv_style_set_border_side, int, lv_border_side_t)  // e.g. LV_BORDER_SIDE_BOTTOM|LV_BORDER_SIDE_RIGHT
 
 // Outline
 WS_STYLE_SETTER_NUM(js_style_set_outline_width, lv_style_set_outline_width, int, int)
@@ -199,7 +199,7 @@ WS_STYLE_SETTER_NUM(js_style_set_text_align, lv_style_set_text_align, int, lv_te
 WS_STYLE_SETTER_COLOR(js_style_set_text_color, lv_style_set_text_color)
 WS_STYLE_SETTER_NUM(js_style_set_text_letter_space, lv_style_set_text_letter_space, int, int)
 WS_STYLE_SETTER_NUM(js_style_set_text_line_space, lv_style_set_text_line_space, int, int)
-WS_STYLE_SETTER_NUM(js_style_set_text_decor, lv_style_set_text_decor, int, int)  // e.g. LV_TEXT_DECOR_UNDERLINE
+WS_STYLE_SETTER_NUM(js_style_set_text_decor, lv_style_set_text_decor, int, lv_text_decor_t)  // e.g. LV_TEXT_DECOR_UNDERLINE
 
 // Line
 WS_STYLE_SETTER_COLOR(js_style_set_line_color, lv_style_set_line_color)
@@ -561,8 +561,9 @@ static jsval_t js_lv_chart_set_axis_tick(struct js *js, jsval_t *args, int nargs
   lv_obj_t *chart = get_lv_obj(h);
   if (!chart) return js_mknull();
 
-  lv_chart_set_axis_tick(chart, (lv_chart_axis_t)axis, majorLen, minorLen,
-                         majorCnt, minorCnt, label, drawSiz);
+  // LVGL 9 removed chart axis ticks (use an lv_scale next to the chart);
+  // kept as a no-op so LVGL 8 era scripts keep running.
+  (void)chart; (void)axis; (void)majorLen; (void)minorLen;
   return js_mknull();
 }
 
@@ -573,7 +574,8 @@ static jsval_t js_lv_chart_set_zoom_x(struct js *js, jsval_t *args, int nargs) {
   lv_obj_t *chart = get_lv_obj(h);
   if (!chart) return js_mknull();
 
-  lv_chart_set_zoom_x(chart, zm);
+  // LVGL 9 removed chart zoom; no-op for script compatibility.
+  (void)chart; (void)zm;
   return js_mknull();
 }
 
@@ -584,7 +586,8 @@ static jsval_t js_lv_chart_set_zoom_y(struct js *js, jsval_t *args, int nargs) {
   lv_obj_t *chart = get_lv_obj(h);
   if (!chart) return js_mknull();
 
-  lv_chart_set_zoom_y(chart, zm);
+  // LVGL 9 removed chart zoom; no-op for script compatibility.
+  (void)chart; (void)zm;
   return js_mknull();
 }
 

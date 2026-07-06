@@ -17,7 +17,7 @@ WebScreen is an ESP32-based platform that runs dynamic JavaScript applications u
 ### Build Process
 The project is compiled using Arduino IDE:
 1. Install ESP32 boards package via Board Manager (v2.0.3 or higher)
-2. Install required libraries: ArduinoJson, LVGL v8.3.0-dev, PubSubClient
+2. Install required libraries: ArduinoJson, LVGL 9.5.0, PubSubClient
 3. Copy the provided `lv_conf.h` configuration file to Arduino libraries folder
 4. Select ESP32-S3 board with specific settings (refer to docs/arduino_tools_settings.png)
 5. Compile and upload via USB (CDC_ON_BOOT must be enabled)
@@ -68,7 +68,7 @@ JS errors carry a 1-based `(line N)` suffix (relative to a function body's first
 Table-driven dispatch (`kCommands[]`, one row per command; table order = `/help` order). Commands: `/help`, `/stats`, `/info`, `/write`, `/upload <file> [base64]`, `/config get|set`, `/ls [path] [json]` (json = single-line machine-readable listing; plain listing ends with a `Total: N files, M directories` marker), `/cat`, `/rm <file|empty-dir>` (empty directories removed via `rmdir`), `/mkdir <path>`, `/download <file>` (alias `/dl`; base64 dump between `=== DOWNLOAD <path> SIZE <n> ===` / `=== DOWNLOAD END ===` markers), `/load [save]`, `/restart_app`, `/eval`, `/errors`, `/gc`, `/screenshot` (alias `/ss`), `/wget` (alias `/fetch` — the old `download` alias now belongs to the base64 dump), `/ping`, `/backup`, `/monitor`, `/brightness`, `/time`, `/settime`, `/factory_reset confirm` (requires the literal `confirm`; deletes `/webscreen.json` and reboots to fallback), `/reboot`.
 
 - **`webscreen_base64.h`**: shared header-only base64 encoder used by `/download` and `/screenshot` (57 raw bytes → one 76-char MIME-width line).
-- **Screenshot handoff pattern**: same discipline as `/eval` — the serial handler on loopTask only sets `g_js_screenshot_pending` (via `webscreen_runtime_request_screenshot()`); the JS task notices the flag at its next safe point, takes an `lv_snapshot` (LVGL objects must never be touched from another task), and streams the base64 RGB565 dump between `=== SCREENSHOT <w>x<h> RGB565_SWAP ===` / `=== SCREENSHOT END ===` markers. Requires the JS runtime to be active; refuses while a capture is in flight.
+- **Screenshot handoff pattern**: same discipline as `/eval` — the serial handler on loopTask only sets `g_js_screenshot_pending` (via `webscreen_runtime_request_screenshot()`); the JS task notices the flag at its next safe point, takes an `lv_snapshot` (LVGL objects must never be touched from another task), and streams the base64 dump between `=== SCREENSHOT <w>x<h> RGB565 ===` / `=== SCREENSHOT END ===` markers (plain little-endian RGB565 since LVGL 9). Requires the JS runtime to be active; refuses while a capture is in flight.
 
 ### LVGL Configuration (lv_conf.h)
 
@@ -77,8 +77,8 @@ Table-driven dispatch (`kCommands[]`, one row per command; table order = `/help`
 - Other sizes (8, 10, 12, 16, 18, 22, 24, etc.) are NOT enabled
 
 **Enabled Widgets**:
-- Core: Label, Image, Arc, Line, Button, Button Matrix, Canvas
-- Extra: Chart, Meter, Message Box, Span (rich text)
+- Core: Label, Image, Arc, Line, Button, Canvas
+- Extra: Chart, Scale (backs the JS meter API), Span (rich text)
 
 **Disabled Widgets** (to save memory):
 - Bar, Slider, Switch, Checkbox, Dropdown, Roller
@@ -88,14 +88,14 @@ Table-driven dispatch (`kCommands[]`, one row per command; table order = `/help`
 **Image Formats**:
 - PNG: ✅ Enabled
 - GIF: ✅ Enabled
-- SJPG: ✅ Enabled (split JPG)
+- JPG: ✅ Enabled (baseline; SJPG split-JPG is NOT supported by LVGL 9 — convert old .sjpg assets)
 - BMP: ❌ Disabled
 
 **Layouts**: Flexbox and Grid enabled
 
 **Display**: 16-bit color (RGB565), 130 DPI, 30ms refresh
 
-**Rendering**: a single internal-DRAM draw buffer (the second PSRAM buffer was removed — LVGL 8 alternates buffers, so under a synchronous flush half of all rendering hit slow OPI PSRAM for no benefit). Image cache enabled (`LV_IMG_CACHE_DEF_SIZE 2`) so PNG/SJPG/GIF images from SD are not re-decoded on every redraw. Snapshot support enabled (`LV_USE_SNAPSHOT 1`) for the `/screenshot` serial command. `lv_conf.h` was changed for these — copy the updated file to the Arduino libraries folder (`~/Arduino/libraries/lv_conf.h`).
+**Rendering**: LVGL **9.5** (branch `feature/lvgl-9.5-migration`; the Arduino library at `~/Arduino/libraries/lvgl` must be 9.5.0 — an 8.3.11 backup lives at `~/Arduino/lvgl-8.3.11.bak` for older branches). Single internal-DRAM draw buffer, display color format `LV_COLOR_FORMAT_RGB565_SWAPPED` (replaces LVGL 8's `LV_COLOR_16_SWAP`). Snapshot enabled (`LV_USE_SNAPSHOT 1`) for `/screenshot`, which now streams plain (non-swapped) RGB565. `lv_conf.h` is the v9 format — always copy the repo copy to `~/Arduino/libraries/lv_conf.h` after changing it. JS API compat notes: `lv_meter_*` bindings are reimplemented on `lv_scale` (v9 removed lv_meter); `lv_chart_set_zoom_x/y` and `lv_chart_set_axis_tick` are no-ops (removed upstream).
 
 ### Configuration System
 Uses `/webscreen.json` on SD card:

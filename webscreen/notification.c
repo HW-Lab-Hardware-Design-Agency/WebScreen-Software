@@ -67151,12 +67151,14 @@ const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_NOTIFICAT
     0x00, 0x3b
 };
 
-const lv_img_dsc_t notification = {
-  .header.cf = LV_IMG_CF_RAW_CHROMA_KEYED,
-  .header.always_zero = 0,
-  .header.reserved = 0,
-  .header.w = 536,
-  .header.h = 240,
+const lv_image_dsc_t notification = {
+  .header = {
+    .magic = LV_IMAGE_HEADER_MAGIC,
+    .cf = LV_COLOR_FORMAT_RAW,   /* raw GIF file bytes, decoded by lv_gif */
+    .w = 536,
+    .h = 240,
+    .stride = 0,
+  },
   .data_size = 1709545,
   .data = notification_map,
 };

@@ -4,16 +4,16 @@
 /******************************************************************************
  * B) LVGL + Display
  ******************************************************************************/
-static lv_disp_draw_buf_t draw_buf;
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {  // Calculate width/height from the area
+void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
 
-  // Push the rendered data to the display
-  lcd_PushColors(area->x1, area->y1, w, h, (uint16_t *)&color_p->full);
+  // Push the rendered data to the display (panel wants RGB565 byte-swapped;
+  // the display color format is RGB565_SWAPPED so LVGL renders it that way)
+  lcd_PushColors(area->x1, area->y1, w, h, (uint16_t *)px_map);
 
   // Tell LVGL flush is done
-  lv_disp_flush_ready(disp);
+  lv_display_flush_ready(disp);
 }
 void init_lvgl_display() {
   // Once per boot: the in-place JS app restart relies on this guard to reuse the live display.
@@ -45,20 +45,16 @@ void init_lvgl_display() {
   start_lvgl_tick();
 
   // Single DRAM draw buffer: the flush is synchronous, so a second (PSRAM) buffer buys nothing.
+  // Sized in bytes: v9's lv_color_t is 3 bytes, but the RGB565 display renders 2 bytes/px.
   static const uint32_t DRAW_BUF_LINES = 40;  // tweak later
-  static lv_color_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES];
+  static uint8_t draw_buf_int[EXAMPLE_LCD_H_RES * DRAW_BUF_LINES * 2] __attribute__((aligned(4)));
 
-  // Initialize LVGL draw buffer
-  lv_disp_draw_buf_init(&draw_buf, draw_buf_int, NULL, EXAMPLE_LCD_H_RES * DRAW_BUF_LINES);
-
-  // Register the display driver
-  static lv_disp_drv_t disp_drv;
-  lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = EXAMPLE_LCD_H_RES;
-  disp_drv.ver_res = EXAMPLE_LCD_V_RES;
-  disp_drv.flush_cb = my_disp_flush;
-  disp_drv.draw_buf = &draw_buf;
-  lv_disp_drv_register(&disp_drv);
+  lv_display_t *disp = lv_display_create(EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES);
+  // Panel expects byte-swapped RGB565 (was LV_COLOR_16_SWAP in LVGL 8)
+  lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
+  lv_display_set_flush_cb(disp, my_disp_flush);
+  lv_display_set_buffers(disp, draw_buf_int, NULL, sizeof(draw_buf_int),
+                         LV_DISPLAY_RENDER_MODE_PARTIAL);
 
   lv_obj_t *scr = lv_scr_act();
 

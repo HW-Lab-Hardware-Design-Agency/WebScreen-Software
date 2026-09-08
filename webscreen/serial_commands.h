@@ -9,6 +9,7 @@
 class SerialCommands {
 public:
   static void init();
+  static bool readLine(String& line);
   static void processCommand(const String& command);
   
 private:

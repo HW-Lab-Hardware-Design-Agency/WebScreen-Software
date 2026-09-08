@@ -58,7 +58,7 @@ The following functions are available in your JavaScript applications:
   Pause execution for the specified number of milliseconds.
 
 - **create_timer(function_name, period_ms)**
-  Create an LVGL timer that calls the named global function every `period_ms` milliseconds.
+  Create an LVGL timer that calls the named global function every `period_ms` milliseconds (1–2147483647; invalid periods are ignored). A callback may safely delete its own timer.
   ```javascript
   let update = function() { print("tick"); };
   create_timer("update", 1000);
@@ -593,18 +593,18 @@ Scales and indicators are returned to JavaScript as small slot-index handles (no
   Add a scale to the meter. Returns a scale handle, or -1 on failure.
 
 - **lv_meter_set_scale_ticks(meter, scale, count, width, length, color)**  
-  Configure scale tick marks.
+  Configure scale tick marks; `count` must be 2–1000.
 
 - **lv_meter_set_scale_major_ticks(meter, scale, nth, width, length, color, label_gap)**  
-  Configure major tick marks with labels.
+  Configure major tick marks with labels; `nth` must be at least 1.
 
 - **lv_meter_set_scale_range(meter, scale, min, max, angle_range, rotation)**  
-  Set the scale's value range and angular range.
+  Set the scale's value range and angular range. Require `max > min`, an angle range of 1–360 degrees, and `(max - min) * angle_range <= 2147483647`; invalid ranges are ignored.
 
-- **lv_meter_add_arc(meter, scale, width, color)**  
+- **lv_meter_add_arc(meter, scale, width, color, r_mod)**
   Add an arc indicator to the meter. Returns an indicator handle, or -1 on failure.
 
-- **lv_meter_add_scale_lines(meter, scale, color, width, length, r_mod)**  
+- **lv_meter_add_scale_lines(meter, scale, color_main, color_grad, local, width_mod)**
   Add scale lines to the meter. Returns an indicator handle, or -1 on failure.
 
 - **lv_meter_add_needle_line(meter, scale, width, color, r_mod)**  
@@ -616,15 +616,17 @@ Scales and indicators are returned to JavaScript as small slot-index handles (no
 - **lv_meter_set_indicator_value(meter, indicator, value)**  
   Set the value of an indicator.
 
+Scale and indicator handles must belong to the supplied meter. Calls with mismatched handles are ignored.
+
 #### Chart Widget
 
-Charts plot one or more data series. `lv_chart_create()` returns an object handle; `lv_chart_add_series()` returns a small slot-index series handle (not a pointer), with **-1 on failure**. Pass both handles back into the `lv_chart_set_next_value*` functions. The various axis/range constants (`LV_CHART_TYPE_*`, `LV_CHART_AXIS_*`, `LV_CHART_UPDATE_MODE_*`) are passed as integers.
+Charts plot one or more data series. `lv_chart_create()` returns an object handle; `lv_chart_add_series()` returns a small slot-index series handle (not a pointer), with **-1 on failure**. Pass both handles back into the `lv_chart_set_next_value*` functions. Series must belong to that chart; `lv_chart_set_next_value2` requires a scatter chart. The various axis/range constants (`LV_CHART_TYPE_*`, `LV_CHART_AXIS_*`, `LV_CHART_UPDATE_MODE_*`) are passed as integers.
 
 - **lv_chart_create(parent)**  
   Create a chart widget. Returns an object handle.
 
 - **lv_chart_set_type(chart, type)**  
-  Set the chart type (e.g. `LV_CHART_TYPE_LINE`, `LV_CHART_TYPE_BAR`).
+  Use the preserved LVGL 8 numeric API: **0 = none, 1 = line, 2 = bar, 3 = scatter**. These values differ from the LVGL 9.5 C enum; invalid types are ignored.
 
 - **lv_chart_set_div_line_count(chart, y_div, x_div)**  
   Set the number of horizontal and vertical division lines.
@@ -636,7 +638,7 @@ Charts plot one or more data series. `lv_chart_create()` returns an object handl
   Set the value range for an axis (e.g. `LV_CHART_AXIS_PRIMARY_Y`).
 
 - **lv_chart_set_point_count(chart, count)**  
-  Set the number of points shown per series.
+  Set the number of points shown per series (1–4096; invalid counts are ignored).
 
 - **lv_chart_refresh(chart)**  
   Redraw the chart after changing its data.

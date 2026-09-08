@@ -60,17 +60,19 @@ bool webscreen_hardware_init_sd_card(void) {
   for (int i = 0; i < 3; i++) {
 
     WEBSCREEN_DEBUG_PRINTF("Attempt %d: Mounting SD card at a safe, low frequency...\n", i + 1);
-    if (SD_MMC.begin("/sdcard", true, false, 400000)) {
+    // Arduino's frequency argument is in kHz, matching host.max_freq_khz.
+    if (SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_PROBING)) {
       WEBSCREEN_DEBUG_PRINTLN("SD Card mounted successfully at low frequency.");
       SD_MMC.end();
       WEBSCREEN_DEBUG_PRINTLN("Re-mounting SD card at high frequency...");
-      if (SD_MMC.begin("/sdcard", true, false, 10000000)) {
+      if (SD_MMC.begin("/sdcard", true, false, 10000)) {
         WEBSCREEN_DEBUG_PRINTLN("SD Card re-mounted successfully at high frequency.");
         return true;
       } else {
         WEBSCREEN_DEBUG_PRINTLN("Failed to re-mount at high frequency. Falling back to low speed mount.");
 
-        if (SD_MMC.begin("/sdcard", true, false, 400000)) {
+        SD_MMC.end();
+        if (SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_PROBING)) {
           WEBSCREEN_DEBUG_PRINTLN("Continuing at safe, low frequency.");
           return true;
         }
@@ -202,7 +204,7 @@ void webscreen_hardware_set_power_saving(bool enable) {
 }
 void webscreen_hardware_deep_sleep(uint32_t duration_ms) {
   WEBSCREEN_DEBUG_PRINTF("Entering deep sleep for %lu ms\n", duration_ms);
-  esp_sleep_enable_timer_wakeup(duration_ms * 1000);
+  esp_sleep_enable_timer_wakeup((uint64_t)duration_ms * 1000);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)WEBSCREEN_PIN_BUTTON, 0);
   esp_deep_sleep_start();
 }

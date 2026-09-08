@@ -2,8 +2,8 @@
 #include "webscreen_main.h"
 #include "webscreen_network.h"
 #include "webscreen_base64.h"
+#include "webscreen_snapshot.h"
 #include <lvgl.h>
-#include "tick.h"
 #include "pins_config.h"
 #include "rm67162.h"
 #include "globals.h"
@@ -29,11 +29,7 @@ static TaskHandle_t g_js_task_handle = NULL;
 static bool g_js_engine_initialized = false;
 static String g_js_script_content = "";
 
-// Script source in PSRAM — Elk stores function bodies as pointers into the
-// original source string.  If that buffer lives on the regular heap, any heap
-// corruption (e.g. from lwip/PubSubClient) silently damages function bodies
-// and causes "; expected" parse errors.  PSRAM is a separate address space,
-// immune to regular-heap overflow/corruption.
+// Prefer PSRAM for large script text; Elk copies function bodies into its arena.
 static char  *g_js_script_psram     = nullptr;
 static size_t g_js_script_psram_len = 0;
 
@@ -62,7 +58,10 @@ bool webscreen_runtime_start_javascript(const char* script_file) {
 
   webscreen_runtime_shutdown();
 
-  init_lvgl_display();
+  if (!init_lvgl_display()) {
+    g_last_error = "Failed to initialize display";
+    return false;
+  }
 
   if (!webscreen_runtime_init_sd_filesystem()) {
     g_last_error = "Failed to initialize SD filesystem";
@@ -100,7 +99,7 @@ bool webscreen_runtime_start_javascript(const char* script_file) {
   g_runtime_start_time = WEBSCREEN_MILLIS();
   g_last_error = "";
 
-  WEBSCREEN_DEBUG_PRINTLN("JavaScript runtime started (simulated)");
+  WEBSCREEN_DEBUG_PRINTLN("JavaScript runtime started");
   return true;
 }
 void webscreen_runtime_loop_javascript(void) {
@@ -108,7 +107,7 @@ void webscreen_runtime_loop_javascript(void) {
     return;
   }
 
-  vTaskDelay(pdMS_TO_TICKS(50));
+  vTaskDelay(pdMS_TO_TICKS(5));
 }
 void webscreen_runtime_shutdown(void) {
   if (g_javascript_active || g_fallback_active) {
@@ -267,8 +266,8 @@ bool webscreen_runtime_load_script(const char* script_file) {
   }
 
   size_t fsize = file.size();
-  if (fsize == 0) {
-    WEBSCREEN_DEBUG_PRINTLN("Script file is empty");
+  if (fsize == 0 || fsize > 1024 * 1024 || file.isDirectory()) {
+    WEBSCREEN_DEBUG_PRINTLN("Script must be a nonempty file of at most 1 MiB");
     file.close();
     return false;
   }
@@ -282,7 +281,7 @@ bool webscreen_runtime_load_script(const char* script_file) {
     size_t got = file.read((uint8_t *)buf, fsize);
     file.close();
     buf[got] = '\0';
-    if (got == 0) {
+    if (got != fsize) {
       free(buf);
       WEBSCREEN_DEBUG_PRINTLN("Script read failed");
       return false;
@@ -291,10 +290,11 @@ bool webscreen_runtime_load_script(const char* script_file) {
     g_js_script_psram_len = got;
     WEBSCREEN_DEBUG_PRINTF("Script loaded to PSRAM (%u bytes)\n", (unsigned)got);
   } else {
-    WEBSCREEN_DEBUG_PRINTLN("WARNING: ps_malloc failed for script, using heap copy (vulnerable to corruption)");
+    WEBSCREEN_DEBUG_PRINTLN("WARNING: ps_malloc failed for script, using heap copy");
     g_js_script_content = file.readString();
     file.close();
-    if (g_js_script_content.length() == 0) {
+    if (g_js_script_content.length() != fsize) {
+      g_js_script_content = "";
       return false;
     }
   }
@@ -384,8 +384,11 @@ bool webscreen_runtime_load_new_script(const char *script_file) {
   taskENTER_CRITICAL(&g_js_restart_mux);
   strlcpy(g_js_pending_script, script_file, sizeof(g_js_pending_script));
   g_js_restart_failures = 0;
+  strlcpy(g_js_restart_reason, "script change", sizeof(g_js_restart_reason));
+  g_js_safe_mode = false;
+  g_js_auto_restart_cycles = 0;
+  g_js_restart_requested = true;
   taskEXIT_CRITICAL(&g_js_restart_mux);
-  webscreen_runtime_request_restart("script change");
   return true;
 }
 
@@ -464,34 +467,48 @@ bool webscreen_runtime_request_screenshot(void) {
 static void webscreen_runtime_stream_screenshot(void) {
   // Plain RGB565 (not the panel's swapped order): the host decoders accept
   // both markers, and snapshot re-renders rather than reading the panel.
-  lv_draw_buf_t *snap = lv_snapshot_take(lv_scr_act(), LV_COLOR_FORMAT_RGB565);
-  if (snap == NULL) {
-    Serial.println("[ERROR] Screenshot failed (snapshot allocation)");
+  lv_obj_t *screen = lv_scr_act();
+  lv_obj_update_layout(screen);
+  const uint32_t extra = lv_obj_get_ext_draw_size(screen) * 2;
+  const uint32_t width = lv_obj_get_width(screen) + extra;
+  const uint32_t height = lv_obj_get_height(screen) + extra;
+  const size_t size = LV_DRAW_BUF_SIZE(width, height, LV_COLOR_FORMAT_RGB565);
+  uint8_t *pixels = (uint8_t *)ps_malloc(size);
+  lv_draw_buf_t snapshot;
+  if (!pixels || lv_draw_buf_init(&snapshot, width, height, LV_COLOR_FORMAT_RGB565,
+                                  LV_STRIDE_AUTO, pixels, size) != LV_RESULT_OK ||
+      lv_snapshot_take_to_draw_buf(screen, LV_COLOR_FORMAT_RGB565, &snapshot) != LV_RESULT_OK) {
+    free(pixels);
+    Serial.println("[ERROR] Screenshot failed (PSRAM allocation or rendering)");
     return;
   }
+  const lv_draw_buf_t *snap = &snapshot;
 
   Serial.printf("=== SCREENSHOT %ux%u RGB565 ===\n",
                 (unsigned)snap->header.w, (unsigned)snap->header.h);
 
   // 57 raw bytes -> 76 base64 chars per line (classic MIME width)
-  const uint8_t *data = snap->data;
-  size_t len = snap->data_size;
+  size_t len = (size_t)snap->header.w * snap->header.h * 2;
+  uint8_t data[57];
   char b64[80];
   size_t lines = 0;
   for (size_t off = 0; off < len; off += 57) {
-    size_t chunk = len - off;
-    if (chunk > 57) chunk = 57;
-    webscreen_base64_encode(data + off, chunk, b64);
+    size_t chunk = webscreen_snapshot_read(snap, off, data, sizeof(data));
+    webscreen_base64_encode(data, chunk, b64);
     Serial.println(b64);
     // Yield so the USB-CDC TX buffer drains and the watchdog stays fed.
     if ((++lines & 0xFF) == 0) vTaskDelay(1);
   }
   Serial.println("=== SCREENSHOT END ===");
 
-  lv_draw_buf_destroy(snap);
+  free(pixels);
 }
 
 static void webscreen_runtime_show_error_screen(const char *msg) {
+  // Failed evaluations may have created widgets, timers, or network sessions.
+  elk_teardown_ui();
+  elk_teardown_media();
+  elk_teardown_comm();
   lv_obj_t *label = lv_label_create(lv_scr_act());
   lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(label, 500);
@@ -522,6 +539,7 @@ static void webscreen_runtime_perform_inplace_restart(void) {
   char reason[sizeof(g_js_restart_reason)];
   char pending[sizeof(g_js_pending_script)];
   taskENTER_CRITICAL(&g_js_restart_mux);
+  g_js_restart_requested = false;
   strlcpy(reason, g_js_restart_reason, sizeof(reason));
   strlcpy(pending, g_js_pending_script, sizeof(pending));
   g_js_pending_script[0] = '\0';
@@ -611,13 +629,16 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
              "Fix the script, then run /load or /restart_app.",
              g_current_script_file.c_str(), err);
     webscreen_runtime_show_error_screen(msg);
+    taskENTER_CRITICAL(&g_js_restart_mux);
+    if (!g_js_restart_requested) g_js_safe_mode = true;
+    taskEXIT_CRITICAL(&g_js_restart_mux);
   } else {
     WEBSCREEN_DEBUG_PRINTLN("JavaScript script executed successfully");
   }
 
   for (;;) {
+    uint32_t loop_start_us = micros();
     if (g_js_restart_requested && !g_js_safe_mode) {
-      g_js_restart_requested = false;
       webscreen_runtime_perform_inplace_restart();
     }
     if (g_js_gc_requested && js != NULL) {
@@ -647,8 +668,16 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
     elk_dispatch_button_event();
     // Unconditional: also handles WiFi reconnect for non-MQTT apps (MQTT work is gated internally).
     webscreen_runtime_wifi_mqtt_maintain_loop();
-    lv_timer_handler();
-    vTaskDelay(pdMS_TO_TICKS(5));
+    uint32_t next_timer_ms = lv_timer_handler();
+    uint32_t elapsed_us = micros() - loop_start_us;
+    g_loop_count++;
+    g_avg_loop_time_us = g_loop_count == 1 ? elapsed_us :
+                        (uint32_t)(((uint64_t)g_avg_loop_time_us * 7 + elapsed_us) / 8);
+    if (elapsed_us > g_max_loop_time_us) g_max_loop_time_us = elapsed_us;
+    // Honor imminent animation/timer deadlines while polling serial requests at least every 5 ms.
+    uint32_t sleep_ms = next_timer_ms < 5 ? next_timer_ms : 5;
+    TickType_t sleep_ticks = pdMS_TO_TICKS(sleep_ms);
+    vTaskDelay(sleep_ticks ? sleep_ticks : 1);
   }
 }
 extern void register_js_functions();
@@ -701,7 +730,7 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
         if (elk_mqtt_try_reconnect()) {
           s_mqtt_backoff_ms = 5000;
         } else if (s_mqtt_backoff_ms < 60000) {
-          s_mqtt_backoff_ms *= 2;
+          s_mqtt_backoff_ms = s_mqtt_backoff_ms > 30000 ? 60000 : s_mqtt_backoff_ms * 2;
         }
       }
     }
@@ -711,7 +740,7 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     processPendingMqttMessage();
   }
 }
-extern void init_lvgl_display();
+extern bool init_lvgl_display();
 extern void init_lv_fs();
 extern void init_mem_fs();
 extern void init_ram_images();

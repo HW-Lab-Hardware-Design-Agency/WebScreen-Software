@@ -9,6 +9,7 @@
 
 #include "webscreen_main.h"
 #include "webscreen_runtime.h"
+#include "webscreen_config_parse.h"
 #include <SD_MMC.h>
 #include <ArduinoJson.h>
 webscreen_config_t g_webscreen_config = { .wifi = {
@@ -37,11 +38,9 @@ bool webscreen_load_config(const char *path,
     WEBSCREEN_DEBUG_PRINTLN("No JSON config file found");
     return false;
   }
-  String jsonStr = f.readString();
-  f.close();
-
   StaticJsonDocument<1024> doc;
-  DeserializationError error = deserializeJson(doc, jsonStr);
+  DeserializationError error = deserializeJson(doc, f);
+  f.close();
   if (error) {
     WEBSCREEN_DEBUG_PRINTF("Failed to parse JSON: %s\n", error.c_str());
     return false;
@@ -55,11 +54,12 @@ bool webscreen_load_config(const char *path,
   const char *bgColorStr = doc["screen"]["background"] | "#000000";
   const char *fgColorStr = doc["screen"]["foreground"] | "#FFFFFF";
 
-  outBgColor = strtol(bgColorStr + 1, NULL, 16);
-  outFgColor = strtol(fgColorStr + 1, NULL, 16);
+  outBgColor = webscreen_parse_color(bgColorStr, 0x000000);
+  outFgColor = webscreen_parse_color(fgColorStr, 0xFFFFFF);
 
   // Load display brightness into global config so init_lvgl_display() can apply it
-  g_webscreen_config.display.brightness = doc["display"]["brightness"] | g_webscreen_config.display.brightness;
+  int brightness = doc["display"]["brightness"] | (int)g_webscreen_config.display.brightness;
+  g_webscreen_config.display.brightness = brightness < 0 ? 0 : brightness > 255 ? 255 : brightness;
 
   // Load timezone (check top-level first, then system.timezone)
   const char* tz = doc["timezone"] | (const char*)nullptr;

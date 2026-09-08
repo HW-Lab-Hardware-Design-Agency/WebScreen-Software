@@ -28,7 +28,7 @@ The serial command system allows developers to interact with WebScreen through a
 
 ### Basic Usage
 - Type commands starting with `/`
-- Press Enter to execute
+- Press Enter to execute (LF or CRLF). Normal console lines are limited to 1023 bytes; an oversized line is discarded through its newline. Partial lines do not block button handling.
 - Use `/help` to see all available commands
 - Commands are case-insensitive
 
@@ -388,6 +388,8 @@ WebScreen> /gc
 - Diagnose memory leaks: a steadily growing post-GC usage means the script is retaining objects
 
 #### `/screenshot` or `/ss`
+The temporary frame buffer is allocated explicitly in PSRAM and freed after streaming.
+
 Captures the current screen contents and streams them over serial as base64-encoded raw RGB565 pixel data. The capture is queued and executed by the JS task at its next safe point (LVGL objects must not be touched from any other task), so it requires the JavaScript runtime to be active.
 
 **Usage:**
@@ -402,7 +404,7 @@ Queued. Data follows as an '=== SCREENSHOT ... ===' block
 
 **Stream Format:**
 - Header line: `=== SCREENSHOT <w>x<h> RGB565 ===` (width and height in pixels)
-- Body: base64-encoded raw RGB565 pixel data, 76 characters per line (57 raw bytes per line, classic MIME width)
+- Body: exactly `width * height * 2` decoded bytes, without row padding or allocation slack; base64-encoded raw RGB565 pixel data, 76 characters per line (57 raw bytes per line, classic MIME width)
 - Footer line: `=== SCREENSHOT END ===`
 - Pixels are little-endian RGB565. Older firmware (LVGL 8 builds) reports `RGB565_SWAP` in the header instead, meaning the two bytes of each pixel are swapped — check the marker before decoding
 

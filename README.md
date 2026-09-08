@@ -17,7 +17,7 @@ WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Ge
 ### Hardware Integration
 - **ESP32-S3 Platform**: Full PSRAM support and optimized memory allocation
 - **RM67162 Display**: 536x240 AMOLED with QSPI interface and brightness control
-- **Power Management**: Smart power button handling on GPIO 33
+- **Power Management**: Smart power button handling on GPIO 21
 - **Storage Interface**: SD_MMC card support with robust initialization
 
 ### Networking & Connectivity  
@@ -82,6 +82,7 @@ This is the easiest way to get started with WebScreen without any development se
    - ArduinoJson (by Benoit Blanchon) - v6.x or later
    - LVGL (by kisvegabor) - v9.5.x
    - PubSubClient (by Nick O'Leary) - v2.8 or later
+   - NimBLE-Arduino - v2.3.1 tested
    ```
 
 4. **Configure LVGL**
@@ -113,6 +114,7 @@ This is the easiest way to get started with WebScreen without any development se
    - **Board**: ESP32S3 Dev Module  
    - **CPU Frequency**: 240MHz
    - **Flash Size**: 16MB (or your board's flash size)
+   - **Partition Scheme**: 16M Flash (3MB APP/9.9MB FATFS) for a 16MB board
    - **PSRAM**: OPI PSRAM  
    - **USB CDC On Boot**: Enabled
    - **Upload Speed**: 921600
@@ -122,6 +124,8 @@ This is the easiest way to get started with WebScreen without any development se
 #### Option 3: Direct Compilation
 
 For advanced users who want to modify the source code, you can compile directly from the Arduino IDE following the steps above.
+
+Build commands, native regression tests, and the device smoke test are documented in [Firmware Validation](docs/FIRMWARE_VALIDATION.md).
 
 ### Hardware Setup
 
@@ -133,10 +137,10 @@ For advanced users who want to modify the source code, you can compile directly 
 5. Upload firmware
 6. Press **RESET** to run
 
-#### Power Button (GPIO 33)
+#### Power Button (GPIO 21)
 - **Short Press** (< 3s): Toggle display on/off (device keeps running)
 - **Long Press** (>= 3s): Power off via latch circuit (drives OUTPUT_PIN 1 LOW to cut power, falls back to deep sleep if latch is not present)
-- **Pin**: GPIO 33 (INPUT_PULLUP, active LOW)
+- **Pin**: GPIO 21 (INPUT_PULLUP, active LOW)
 - **Debounce**: 50ms
 - **Power-on**: Press the button to supply momentary power; firmware latches power by driving OUTPUT_PIN HIGH in `setup()`
 

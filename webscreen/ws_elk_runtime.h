@@ -28,6 +28,9 @@ static void elk_teardown_ui() {
 }
 
 static void elk_teardown_media() {
+  // An app reload must also see files replaced under the same SD-card path.
+  lv_image_cache_drop(NULL);
+  lv_image_header_cache_drop(NULL);
   for (int i = 0; i < MAX_RAM_IMAGES; i++) {
     if (g_ram_images[i].buffer != NULL) {
       free(g_ram_images[i].buffer);

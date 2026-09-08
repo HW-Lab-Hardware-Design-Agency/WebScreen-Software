@@ -11,7 +11,6 @@
 #include "webscreen_main.h"
 #include <time.h>
 #include <sys/time.h>
-static bool g_ntp_initialized = false;
 bool webscreen_network_connect_wifi(const char* ssid, const char* password, uint32_t timeout_ms) {
   if (!ssid || strlen(ssid) == 0) {
     WEBSCREEN_DEBUG_PRINTLN("No WiFi SSID provided");
@@ -57,26 +56,8 @@ bool webscreen_ntp_init(const char* ntp_server, long utc_offset_sec, int dayligh
   WEBSCREEN_DEBUG_PRINTF("NTP: Configuring with server=%s, offset=%ld sec\n", server, utc_offset_sec);
   configTime(utc_offset_sec, daylight_offset_sec, server);
 
-  // Wait for initial sync with timeout
-  struct tm timeinfo;
-  uint32_t start = WEBSCREEN_MILLIS();
-  while (!getLocalTime(&timeinfo, 1000) && (WEBSCREEN_MILLIS() - start) < WEBSCREEN_NTP_SYNC_TIMEOUT_MS) {
-    WEBSCREEN_DEBUG_PRINT(".");
-    WEBSCREEN_DELAY(500);
-  }
-  WEBSCREEN_DEBUG_PRINTLN();
-
-  if (getLocalTime(&timeinfo, 100)) {
-    g_ntp_initialized = true;
-    WEBSCREEN_DEBUG_PRINTF("NTP: Time synchronized: %04d-%02d-%02d %02d:%02d:%02d\n",
-                           timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                           timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    return true;
-  }
-
-  WEBSCREEN_DEBUG_PRINTLN("NTP: Initial sync timeout, will retry in background");
-  g_ntp_initialized = true;  // SNTP daemon is running, will sync eventually
-  return false;
+  // SNTP synchronizes in the background; never stall the LVGL task on reconnect.
+  return true;
 }
 
 bool webscreen_ntp_init_tz(const char* ntp_server, const char* posix_tz) {
@@ -90,35 +71,19 @@ bool webscreen_ntp_init_tz(const char* ntp_server, const char* posix_tz) {
   WEBSCREEN_DEBUG_PRINTF("NTP: Configuring with server=%s, tz=%s\n", server, posix_tz);
   configTzTime(posix_tz, server);
 
-  // Wait for initial sync with timeout
-  struct tm timeinfo;
-  uint32_t start = WEBSCREEN_MILLIS();
-  while (!getLocalTime(&timeinfo, 1000) && (WEBSCREEN_MILLIS() - start) < WEBSCREEN_NTP_SYNC_TIMEOUT_MS) {
-    WEBSCREEN_DEBUG_PRINT(".");
-    WEBSCREEN_DELAY(500);
-  }
-  WEBSCREEN_DEBUG_PRINTLN();
-
-  if (getLocalTime(&timeinfo, 100)) {
-    g_ntp_initialized = true;
-    WEBSCREEN_DEBUG_PRINTF("NTP: Time synchronized: %04d-%02d-%02d %02d:%02d:%02d\n",
-                           timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                           timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    return true;
-  }
-
-  g_ntp_initialized = true;
-  return false;
+  return true;
 }
 
 bool webscreen_ntp_is_synced(void) {
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 10)) {
-    if (timeinfo.tm_year > (2020 - 1900)) {  // Sanity check: year > 2020
-      return true;
-    }
+  return time(nullptr) >= 1609459200;  // Same readiness threshold as get_epoch().
+}
+
+bool webscreen_ntp_wait_for_sync(uint32_t timeout_ms) {
+  uint32_t start = WEBSCREEN_MILLIS();
+  while (!webscreen_ntp_is_synced() && WEBSCREEN_MILLIS() - start < timeout_ms) {
+    WEBSCREEN_DELAY(50);
   }
-  return false;
+  return webscreen_ntp_is_synced();
 }
 
 void webscreen_ntp_setup_from_config(void) {

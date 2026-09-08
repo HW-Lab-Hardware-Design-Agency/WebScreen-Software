@@ -5,6 +5,7 @@
 // Symbols here may depend on every fragment included before it.
 // Split from the former 3,700-line lvgl_elk.h monolith; see lvgl_elk.h
 // for the include order.
+#include "webscreen_line.h"
 
 /********************************************************************************
  * METER (LVGL 9: implemented on lv_scale — lv_meter was removed upstream)
@@ -58,9 +59,9 @@ static int store_meter_scale(lv_obj_t *scale_widget, lv_obj_t *owner) {
   }
   return -1;
 }
-static ws_meter_scale *get_meter_scale(int handle) {
+static ws_meter_scale *get_meter_scale(int handle, lv_obj_t *owner) {
   if (handle < 0 || handle >= MAX_METER_SCALES) return nullptr;
-  return g_meter_scales[handle];
+  return owner && g_meter_scales_owner[handle] == owner ? g_meter_scales[handle] : nullptr;
 }
 static int store_meter_indicator(uint8_t type, ws_meter_scale *sc, lv_obj_t *owner) {
   for (int i = 0; i < MAX_METER_INDICATORS; i++) {
@@ -85,9 +86,9 @@ static int store_meter_indicator(uint8_t type, ws_meter_scale *sc, lv_obj_t *own
   }
   return -1;
 }
-static ws_meter_indicator *get_meter_indicator(int handle) {
+static ws_meter_indicator *get_meter_indicator(int handle, lv_obj_t *owner) {
   if (handle < 0 || handle >= MAX_METER_INDICATORS) return nullptr;
-  return g_meter_indicators[handle];
+  return owner && g_meter_indicators_owner[handle] == owner ? g_meter_indicators[handle] : nullptr;
 }
 
 // Map a scale value to an absolute arc angle (degrees).
@@ -147,7 +148,7 @@ static jsval_t js_lv_meter_add_scale(struct js *js, jsval_t *args, int nargs) { 
   if (nargs < 1) return js_mknull();
   int mh = (int)js_getnum(args[0]);
   lv_obj_t *mt = get_lv_obj(mh);
-  if (!mt) return js_mknull();
+  if (!mt || !lv_obj_check_type(mt, &lv_scale_class)) return js_mknull();
 
   // First scale binds the meter widget itself; extra scales become
   // full-size child lv_scales stacked on top (multi-scale meters).
@@ -183,11 +184,12 @@ static jsval_t js_lv_meter_set_scale_ticks(struct js *js, jsval_t *args, int nar
   int length = (int)js_getnum(args[4]);
   double col = js_getnum(args[5]);
 
-  ws_meter_scale *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH, get_lv_obj((int)js_getnum(args[0])));
   if (!sc) {
     LOGF("lv_meter_set_scale_ticks: invalid scale handle %d\n", scH);
     return js_mknull();
   }
+  if (cnt < 2 || cnt > 1000) return js_mknull();
   lv_scale_set_total_tick_count(sc->scale, cnt);
   lv_obj_set_style_line_width(sc->scale, width, LV_PART_ITEMS);
   lv_obj_set_style_length(sc->scale, length, LV_PART_ITEMS);
@@ -205,11 +207,12 @@ static jsval_t js_lv_meter_set_scale_major_ticks(struct js *js, jsval_t *args, i
   int label_gap = (int)js_getnum(args[6]);
   (void)label_gap;  // no direct LVGL 9 equivalent; labels follow the major ticks
 
-  ws_meter_scale *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH, get_lv_obj((int)js_getnum(args[0])));
   if (!sc) {
     LOGF("lv_meter_set_scale_major_ticks: invalid scale handle %d\n", scH);
     return js_mknull();
   }
+  if (freq < 1) return js_mknull();
   lv_scale_set_major_tick_every(sc->scale, freq);
   lv_scale_set_label_show(sc->scale, true);
   lv_obj_set_style_line_width(sc->scale, width, LV_PART_INDICATOR);
@@ -226,11 +229,13 @@ static jsval_t js_lv_meter_set_scale_range(struct js *js, jsval_t *args, int nar
   int angleRange = (int)js_getnum(args[4]);
   int rotation = (int)js_getnum(args[5]);
 
-  ws_meter_scale *sc = get_meter_scale(scH);
+  ws_meter_scale *sc = get_meter_scale(scH, get_lv_obj((int)js_getnum(args[0])));
   if (!sc) {
     LOGF("lv_meter_set_scale_range: invalid scale handle %d\n", scH);
     return js_mknull();
   }
+  if (maxV <= minV || angleRange < 1 || angleRange > 360 ||
+      (int64_t)maxV - minV > INT32_MAX / angleRange) return js_mknull();
   lv_scale_set_range(sc->scale, minV, maxV);
   lv_scale_set_angle_range(sc->scale, angleRange);
   lv_scale_set_rotation(sc->scale, rotation);
@@ -256,8 +261,8 @@ static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {  /
   int rMod = (int)js_getnum(args[4]);
 
   lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  ws_meter_scale *sc = get_meter_scale(scH);
+  if (!mt || !lv_obj_check_type(mt, &lv_scale_class)) return js_mknull();
+  ws_meter_scale *sc = get_meter_scale(scH, get_lv_obj((int)js_getnum(args[0])));
   if (!sc) {
     LOGF("lv_meter_add_arc: invalid scale handle %d\n", scH);
     return js_mknull();
@@ -299,8 +304,8 @@ static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nar
   (void)widthMod;
 
   lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  ws_meter_scale *sc = get_meter_scale(scH);
+  if (!mt || !lv_obj_check_type(mt, &lv_scale_class)) return js_mknull();
+  ws_meter_scale *sc = get_meter_scale(scH, get_lv_obj((int)js_getnum(args[0])));
   if (!sc) {
     LOGF("lv_meter_add_scale_lines: invalid scale handle %d\n", scH);
     return js_mknull();
@@ -333,8 +338,8 @@ static jsval_t js_lv_meter_add_needle_line(struct js *js, jsval_t *args, int nar
   int rMod = (int)js_getnum(args[4]);
 
   lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  ws_meter_scale *sc = get_meter_scale(scH);
+  if (!mt || !lv_obj_check_type(mt, &lv_scale_class)) return js_mknull();
+  ws_meter_scale *sc = get_meter_scale(scH, get_lv_obj((int)js_getnum(args[0])));
   if (!sc) {
     LOGF("lv_meter_add_needle_line: invalid scale handle %d\n", scH);
     return js_mknull();
@@ -370,8 +375,8 @@ static jsval_t js_lv_meter_add_needle_img(struct js *js, jsval_t *args, int narg
   const lv_img_dsc_t *src_dsc = &g_ram_images[imgSlot].dsc;
 
   lv_obj_t *mt = get_lv_obj(mH);
-  if (!mt) return js_mknull();
-  ws_meter_scale *sc = get_meter_scale(scH);
+  if (!mt || !lv_obj_check_type(mt, &lv_scale_class)) return js_mknull();
+  ws_meter_scale *sc = get_meter_scale(scH, get_lv_obj((int)js_getnum(args[0])));
   if (!sc) {
     LOGF("lv_meter_add_needle_img: invalid scale handle %d\n", scH);
     return js_mknull();
@@ -395,7 +400,7 @@ static jsval_t js_lv_meter_set_indicator_start_value(struct js *js, jsval_t *arg
   int indH = (int)js_getnum(args[1]);
   int stVal = (int)js_getnum(args[2]);
 
-  ws_meter_indicator *ind = get_meter_indicator(indH);
+  ws_meter_indicator *ind = get_meter_indicator(indH, get_lv_obj((int)js_getnum(args[0])));
   if (!ind) {
     LOGF("lv_meter_set_indicator_start_value: invalid indicator handle %d\n", indH);
     return js_mknull();
@@ -410,7 +415,7 @@ static jsval_t js_lv_meter_set_indicator_end_value(struct js *js, jsval_t *args,
   int indH = (int)js_getnum(args[1]);
   int endVal = (int)js_getnum(args[2]);
 
-  ws_meter_indicator *ind = get_meter_indicator(indH);
+  ws_meter_indicator *ind = get_meter_indicator(indH, get_lv_obj((int)js_getnum(args[0])));
   if (!ind) {
     LOGF("lv_meter_set_indicator_end_value: invalid indicator handle %d\n", indH);
     return js_mknull();
@@ -425,7 +430,7 @@ static jsval_t js_lv_meter_set_indicator_value(struct js *js, jsval_t *args, int
   int indH = (int)js_getnum(args[1]);
   int val = (int)js_getnum(args[2]);
 
-  ws_meter_indicator *ind = get_meter_indicator(indH);
+  ws_meter_indicator *ind = get_meter_indicator(indH, get_lv_obj((int)js_getnum(args[0])));
   if (!ind) {
     LOGF("lv_meter_set_indicator_value: invalid indicator handle %d\n", indH);
     return js_mknull();
@@ -497,7 +502,7 @@ static jsval_t js_lv_spangroup_set_align(struct js *js, jsval_t *args, int nargs
   int h = (int)js_getnum(args[0]);
   int alg = (int)js_getnum(args[1]);
   lv_obj_t *spg = get_lv_obj(h);
-  if (!spg) return js_mknull();
+  if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
   lv_spangroup_set_align(spg, (lv_text_align_t)alg);
   return js_mknull();
@@ -508,7 +513,7 @@ static jsval_t js_lv_spangroup_set_overflow(struct js *js, jsval_t *args, int na
   int h = (int)js_getnum(args[0]);
   int ovf = (int)js_getnum(args[1]);
   lv_obj_t *spg = get_lv_obj(h);
-  if (!spg) return js_mknull();
+  if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
   lv_spangroup_set_overflow(spg, (lv_span_overflow_t)ovf);
   return js_mknull();
@@ -519,7 +524,7 @@ static jsval_t js_lv_spangroup_set_indent(struct js *js, jsval_t *args, int narg
   int h = (int)js_getnum(args[0]);
   int indent = (int)js_getnum(args[1]);
   lv_obj_t *spg = get_lv_obj(h);
-  if (!spg) return js_mknull();
+  if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
   lv_spangroup_set_indent(spg, indent);
   return js_mknull();
@@ -530,7 +535,7 @@ static jsval_t js_lv_spangroup_set_mode(struct js *js, jsval_t *args, int nargs)
   int h = (int)js_getnum(args[0]);
   int md = (int)js_getnum(args[1]);
   lv_obj_t *spg = get_lv_obj(h);
-  if (!spg) return js_mknull();
+  if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
   lv_spangroup_set_mode(spg, (lv_span_mode_t)md);
   return js_mknull();
@@ -540,7 +545,7 @@ static jsval_t js_lv_spangroup_new_span(struct js *js, jsval_t *args, int nargs)
   if (nargs < 1) return js_mknull();
   int h = (int)js_getnum(args[0]);
   lv_obj_t *spg = get_lv_obj(h);
-  if (!spg) return js_mknull();
+  if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
   lv_span_t *sp = lv_spangroup_new_span(spg);
   if (!sp) return js_mknum(-1);
@@ -592,7 +597,7 @@ static jsval_t js_lv_spangroup_refr_mode(struct js *js, jsval_t *args, int nargs
   if (nargs < 1) return js_mknull();
   int h = (int)js_getnum(args[0]);
   lv_obj_t *spg = get_lv_obj(h);
-  if (!spg) return js_mknull();
+  if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
   lv_spangroup_refr_mode(spg);
   return js_mknull();
@@ -622,7 +627,7 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) { 
   lv_obj_t *line = get_lv_obj(h);
   if (!line) return js_mknull();
 
-  static lv_point_precise_t points[32];  // up to 16 points
+  lv_point_precise_t points[16];
   if (pairCount > 16) pairCount = 16;  // clamp
 
   int idx = 1;  // start reading from arg[1]
@@ -633,7 +638,7 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) { 
     points[i].y = y;
   }
 
-  lv_line_set_points(line, points, pairCount);
+  webscreen_line_set_points(line, points, pairCount);
   return js_mknull();
 }
 
@@ -692,4 +697,3 @@ static void release_subobjects_owned_by(lv_obj_t *root) {
     }
   }
 }
-

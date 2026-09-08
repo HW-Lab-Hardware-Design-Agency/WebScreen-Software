@@ -223,24 +223,7 @@ extern "C" {
 // ARDUINO COMPATIBILITY HELPERS
 // ============================================================================
 
-// Pin definitions (from webscreen_config.h)
+// Physical pins are defined once in pins_config.h (included by webscreen_config.h).
 #define LED_PIN WEBSCREEN_PIN_LED
 #define BUTTON_PIN WEBSCREEN_PIN_BUTTON
-#define OUTPUT_PIN WEBSCREEN_PIN_OUTPUT
-
-// Legacy compatibility macros
-#define PIN_LED WEBSCREEN_PIN_LED
-#define INPUT_PIN WEBSCREEN_PIN_BUTTON
-#define OUTPUT_PIN WEBSCREEN_PIN_OUTPUT
-
-// Display pin compatibility
-#define TFT_CS WEBSCREEN_TFT_CS
-#define TFT_DC WEBSCREEN_TFT_DC
-#define TFT_RST WEBSCREEN_TFT_RST
-#define TFT_SCK WEBSCREEN_TFT_SCK
-#define TFT_MOSI WEBSCREEN_TFT_MOSI
-
-// SD card pin compatibility
-#define PIN_SD_CMD WEBSCREEN_SD_CMD
-#define PIN_SD_CLK WEBSCREEN_SD_CLK
-#define PIN_SD_D0 WEBSCREEN_SD_D0
+#define TFT_RST TFT_RES

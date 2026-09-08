@@ -139,7 +139,7 @@ void rm67162_init(void) {
     .sclk_io_num = TFT_QSPI_SCK,
     .data2_io_num = TFT_QSPI_D2,
     .data3_io_num = TFT_QSPI_D3,
-    .max_transfer_sz = (SEND_BUF_SIZE * 16) + 8,
+    .max_transfer_sz = SEND_BUF_SIZE * sizeof(uint16_t),
     .flags = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_GPIO_PINS /* |
                  SPICOMMON_BUSFLAG_QUAD */
     ,
@@ -152,7 +152,7 @@ void rm67162_init(void) {
     .spics_io_num = -1,
     // .spics_io_num = TFT_QSPI_CS,
     .flags = SPI_DEVICE_HALFDUPLEX,
-    .queue_size = 17,
+    .queue_size = 1,  // All transfers use spi_device_polling_transmit().
   };
   ret = spi_bus_initialize(TFT_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
   ESP_ERROR_CHECK(ret);

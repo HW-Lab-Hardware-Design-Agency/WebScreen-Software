@@ -34,8 +34,8 @@ void dynamic_js_loop() {
   webscreen_hardware_handle_button();
 
   // Handle serial commands
-  if (Serial.available()) {
-    String line = Serial.readStringUntil('\n');
+  String line;
+  if (SerialCommands::readLine(line)) {
 
     // Check if it's a command (starts with /)
     if (line.startsWith("/")) {

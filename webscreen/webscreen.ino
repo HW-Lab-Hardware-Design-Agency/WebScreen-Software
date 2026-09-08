@@ -61,6 +61,8 @@ void setup() {
     } else {
       LOG("Wi-Fi connected successfully.");
       webscreen_ntp_setup_from_config();
+      // Preserve the initial TLS clock grace period; reconnects never wait on the UI task.
+      webscreen_ntp_wait_for_sync(WEBSCREEN_NTP_SYNC_TIMEOUT_MS);
     }
   } else {
     LOG("No WiFi configured, running in offline mode.");

@@ -61,6 +61,9 @@ extern "C" {
    */
   bool webscreen_ntp_init_tz(const char* ntp_server, const char* posix_tz);
 
+  // Boot-only grace period for certificate validation; never call from the LVGL task.
+  bool webscreen_ntp_wait_for_sync(uint32_t timeout_ms);
+
   /**
    * @brief Check if NTP time has been synchronized
    * @return true if time is synchronized, false otherwise

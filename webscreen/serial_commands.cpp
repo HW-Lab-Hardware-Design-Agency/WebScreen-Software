@@ -4,6 +4,7 @@
 #include "webscreen_hardware.h"
 #include "webscreen_runtime.h"
 #include "webscreen_base64.h"
+#include "webscreen_serial_line.h"
 #include <WiFi.h>
 #include <time.h>
 #include <sys/time.h>
@@ -67,6 +68,25 @@ void SerialCommands::init() {
   Serial.println("\n=== WebScreen Serial Console ===");
   Serial.println("Type /help for available commands");
   printPrompt();
+}
+
+bool SerialCommands::readLine(String& line) {
+  static WebscreenSerialLine<1024> input;
+  // Bound each poll so continuous serial traffic cannot starve the power button.
+  for (size_t i = 0; i < 256 && Serial.available(); i++) {
+    int c = Serial.read();
+    if (c < 0) break;
+    auto result = input.push((char)c);
+    if (result == WebscreenSerialLine<1024>::Overflow) {
+      printError("Input line too long (maximum 1023 bytes)");
+      return false;
+    }
+    if (result == WebscreenSerialLine<1024>::Ready) {
+      line = input.data();
+      return true;
+    }
+  }
+  return false;
 }
 
 void SerialCommands::processCommand(const String& command) {
@@ -807,7 +827,7 @@ bool SerialCommands::sdReady() {
   if (SD_MMC.cardType() != CARD_NONE) {
     return true;
   }
-  return SD_MMC.begin();
+  return webscreen_hardware_init_sd_card();
 }
 
 void SerialCommands::printPrompt() {

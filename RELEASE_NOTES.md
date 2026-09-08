@@ -6,6 +6,15 @@ The firmware now builds against LVGL 9.5.0 instead of 8.3.11. If you build
 locally, replace the LVGL library in your Arduino libraries folder and copy
 the new `lv_conf.h` next to it — the old v8 config no longer applies.
 
+Stability review follow-up:
+
+- Preserve JavaScript chart type numbers from LVGL 8; reject mismatched chart/meter handles and invalid ranges.
+- Fix use-after-free when a timer callback deletes itself, independent line point storage, and rectangle style-slot exhaustion.
+- Share display initialization with fallback mode, replace the 1 kHz tick task with a monotonic clock callback, and allocate screenshots explicitly in PSRAM with packed pixel output.
+- Correct SD mount frequency units (kHz), consolidate button pin aliases on GPIO 21, and use nonblocking normal console input.
+- Avoid NTP waits on the rendering task, reject incomplete script loads, and clean partial applications before entering safe mode.
+- Add native LVGL/Elk sanitizer regressions and a device smoke script; see [Firmware Validation](docs/FIRMWARE_VALIDATION.md).
+
 What changed under the hood:
 
 - New display driver API. The panel's byte-swapped RGB565 is handled by the

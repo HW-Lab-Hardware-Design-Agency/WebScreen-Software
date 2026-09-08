@@ -78,17 +78,9 @@ static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   lv_obj_set_size(rect, w, h);
   lv_obj_set_pos(rect, x, y);
 
-  // Per-rect style allocated via the tracked registry so elk_teardown_ui()
-  // frees it (a bare `new lv_style_t` here used to leak, invisible to
-  // teardown). Registry full => the rect is still drawn, just unstyled.
-  lv_style_t *styleRect = get_lv_style(alloc_tracked_style());
-  if (styleRect) {
-    lv_style_set_bg_color(styleRect, lv_color_hex(color));
-    lv_style_set_radius(styleRect, 5);
-    lv_obj_add_style(rect, styleRect, 0);
-  } else {
-    LOG("draw_rect: no free style slots, rect left unstyled");
-  }
+  // Local styles die with the rectangle and do not consume shared style slots.
+  lv_obj_set_style_bg_color(rect, lv_color_hex(color), 0);
+  lv_obj_set_style_radius(rect, 5, 0);
 
   int handle = store_lv_obj(rect);
   LOGF("draw_rect: at (%d,%d), size(%d,%d), color=0x%06X => handle %d\n", x, y, w, h, color, handle);
@@ -236,6 +228,8 @@ static jsval_t js_ram_image_free(struct js *js, jsval_t *args, int nargs) {
     return js_mkfalse();
   }
   RamImage *ri = &g_ram_images[slot];
+  lv_image_cache_drop(&ri->dsc);
+  lv_image_header_cache_drop(&ri->dsc);
   if (ri->buffer != NULL) free(ri->buffer);
   ri->used = false;
   ri->buffer = NULL;
@@ -255,7 +249,7 @@ static jsval_t js_rotate_obj(struct js *js, jsval_t *args, int nargs) {
   int angle = (int)js_getnum(args[1]);  // 0..3600 => 0..360 deg
 
   lv_obj_t *obj = get_lv_obj(handle);
-  if (!obj) {
+  if (!obj || !lv_obj_has_class(obj, &lv_image_class)) {
     LOG("rotate_obj: invalid handle");
     return js_mknull();
   }
@@ -376,4 +370,3 @@ static jsval_t js_obj_delete(struct js *js, jsval_t *args, int nargs) {
   LOGF("obj_delete: handle %d deleted\n", handle);
   return js_mknull();
 }
-

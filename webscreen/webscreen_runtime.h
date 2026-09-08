@@ -65,7 +65,7 @@ extern "C" {
 
   void webscreen_runtime_notify_button(bool pressed);
 
-  /** Queue a /screenshot; the JS task streams base64 between "=== SCREENSHOT <w>x<h> RGB565_SWAP ===" and "=== SCREENSHOT END ===". */
+  /** Queue a /screenshot; the JS task streams packed RGB565 from PSRAM between SCREENSHOT markers. */
 
   bool webscreen_runtime_request_screenshot(void);
 

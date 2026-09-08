@@ -306,26 +306,29 @@ if (wifi_status() && ntp_synced()) {
 
 ### MQTT Functions
 
-- **mqtt_init(broker, port, client_id)**
-  Initialize MQTT connection with broker details.
+- **mqtt_init(broker, port)**
+  Initialize the broker and clear the previous session's queue and subscriptions. Returns a boolean. Broker names are limited to 127 bytes; ports must be 1–65535.
 
-- **mqtt_connect(username, password)**
-  Connect to the MQTT broker with optional credentials.
+- **mqtt_connect(client_id[, username, password])**
+  Connect with optional credentials. Each string is limited to 63 bytes; oversized values are rejected. An empty password is supported. Successful credentials are retained for reconnects.
 
 - **mqtt_publish(topic, message)**
-  Publish a message to an MQTT topic.
+  Publish the full message bytes. Returns `false` if the topic exceeds 127 bytes or the packet exceeds the MQTT buffer; payloads are never silently truncated.
 
 - **mqtt_subscribe(topic)**
-  Subscribe to an MQTT topic.
+  Subscribe to a topic, returning a boolean. Up to eight distinct subscriptions are restored after reconnect; failed restoration attempts are retried every five seconds.
 
 - **mqtt_loop()**
-  Process MQTT messages. Call regularly in your main loop.
+  Compatibility no-op: firmware services MQTT between JS callbacks.
 
 - **mqtt_on_message(callback_function_name)**
-  Set the callback function name for handling incoming MQTT messages.
+  Enable incoming-message polling with a nonempty name (up to 31 bytes). The function is not invoked automatically; poll from a JS timer to avoid re-entering the engine.
+
+- **mqtt_has_message()**, **mqtt_get_topic()**, **mqtt_get_payload()**, **mqtt_msg_clear()**
+  Inspect the oldest queued message, then remove it with `mqtt_msg_clear()`. The FIFO holds four messages, each with a topic up to 127 bytes and payload up to 1024 bytes. Empty and embedded-NUL payloads retain their lengths. The MQTT packet buffer must also fit topic and protocol overhead.
 
 - **mqtt_dropped()**
-  Returns the number of incoming MQTT messages that were lost because the single message slot was overwritten before the app consumed it, or because a payload was truncated. Useful for detecting that an app is polling too slowly.
+  Count messages rejected because the queue was full or the topic/payload exceeded its limit. Existing queued messages remain intact. Reset on `mqtt_init()` and app reload.
   ```javascript
   if (mqtt_dropped() > 0) {
     print("Losing MQTT messages - poll faster");
@@ -377,12 +380,11 @@ if (wifi_status() && ntp_synced()) {
 - **create_image(filepath, x, y)**
   Create an image widget from an SD card file at the given position. Returns an object handle, or -1 on failure.
 
-- **create_image_from_ram(filepath, x, y)**
-  Load an image file from SD card into a PSRAM buffer (a "RAM image" slot, max 16) and create an image widget from it. Returns an object handle, or -1 on failure. The slot index used is printed to the serial log; slots are assigned lowest-free-first starting at 0.
+- **create_image_from_ram(filepath, x, y[, width, height])**
+  Load headerless RGB565_SWAP bytes from SD into PSRAM (max 16 slots). Width and height default to 200; each must be 1–2047. The file must contain exactly `width * height * 2` bytes, at most 2 MiB. Returns an object handle, or -1 on failure. Slot indices are logged and assigned lowest-free-first. Use `create_image()` for LVGL binary image files with headers or supported encoded formats.
 
 - **ram_image_free(slot)**
-  Free a RAM image slot's PSRAM buffer and mark the slot reusable. Returns `true` on success, `false` for an invalid or unused slot.
-  **Important:** if a live image widget still displays this slot, delete that widget first with `obj_delete()` — LVGL keeps a raw pointer to the buffer and would render freed memory.
+  Free a RAM image slot's PSRAM buffer and mark the slot reusable. Returns `false` for an invalid, unused, or still-referenced slot. Delete image widgets and meters whose image needles use the slot before freeing it.
   ```javascript
   let img = create_image_from_ram("/photo.bin", 0, 0);  // uses slot 0 if free
   // ... later ...
@@ -713,8 +715,8 @@ print("Response: " + response);
 
 ```javascript
 // Initialize MQTT
-mqtt_init("mqtt.example.com", 1883, "webscreen_device");
-mqtt_connect("username", "password");
+mqtt_init("mqtt.example.com", 1883);
+mqtt_connect("webscreen_device", "username", "password");
 
 // Publish data
 mqtt_publish("sensors/temperature", "25.5");
@@ -722,18 +724,15 @@ mqtt_publish("sensors/temperature", "25.5");
 // Subscribe to topic
 mqtt_subscribe("commands/display");
 
-// Set callback for messages
-mqtt_on_message("handleMqttMessage");
-
-function handleMqttMessage(topic, message) {
-  print("Received: " + topic + " = " + message);
-}
-
-// Main loop
-while (true) {
-  mqtt_loop();
-  delay(100);
-}
+// Enable delivery, then consume at most four messages per timer tick.
+mqtt_on_message("poll_messages");
+let poll_messages = function() {
+  for (let i = 0; i < 4 && mqtt_has_message(); i++) {
+    print("Received: " + mqtt_get_topic() + " = " + mqtt_get_payload());
+    mqtt_msg_clear();
+  }
+};
+create_timer("poll_messages", 100);
 ```
 
 ### UI Creation
@@ -802,6 +801,7 @@ For an error raised inside a function body, the line number is **relative to tha
 Runaway scripts no longer crash or reboot the device — they get a JavaScript error instead:
 
 - **Step limit**: each evaluation (the initial script run, and each timer callback) has a statement budget of 2,000,000 statements. An infinite loop terminates with a `step limit` error.
+- **Elapsed-time limits**: startup gets 10 seconds, timer/button callbacks 5 seconds, and `/eval` 1 second. A timeout reports `execution timeout`. Checks run periodically during JS execution; `/load` and `/restart_app` also interrupt busy JS. `delay()` and Wi-Fi connection waiting cooperate with interruption. Native HTTP/MQTT operations must return before their elapsed-time check can run.
 - **C-stack guard**: deeply recursive code terminates with a `C stack` error instead of overflowing the task stack and crashing the device.
 
 Errors raised in a timer callback are printed to the serial console together with arena and heap statistics. After 10 consecutive failing callbacks, the firmware restarts the JavaScript app in place (no device reboot); if the script keeps failing, the error is shown on the display and the device stays alive so you can fix the script over serial (`/load`, `/restart_app`).
@@ -809,7 +809,7 @@ Errors raised in a timer callback are printed to the serial console together wit
 ## Performance Considerations
 
 - Use `delay()` appropriately to prevent blocking the system
-- Call `mqtt_loop()` regularly when using MQTT
+- Poll queued MQTT messages from a timer; firmware services the connection between callbacks
 - Minimize frequent file I/O operations
 - Cache frequently accessed data in variables
 - Use appropriate data types for memory efficiency
@@ -957,7 +957,10 @@ create_timer("update", 1000);
 This API provides comprehensive access to WebScreen's hardware and software capabilities, enabling the creation of sophisticated embedded applications with rich user interfaces and network connectivity.
 ## Limits on the LVGL 8 branch
 
-- `create_timer(name, period_ms)` accepts names up to 55 bytes and periods from 1 to 2,147,483,647 ms. `timer_delete(name)` may safely delete the timer calling it.
+- `create_timer(name, period_ms)` accepts a simple JS identifier up to 55 bytes and periods from 1 to 2,147,483,647 ms. At most 32 app timers are active. Reusing a name resets its period; invalid requests and capacity exhaustion return `false`. Success returns `null`. `timer_delete(name)` may safely delete the timer calling it.
+- Widget handles are opaque, nonnegative numbers. Up to 256 registered widgets are active; creation returns -1 when the registry is full. Deleted widget handles stay invalid even when slots are reused. This generation protection applies to widget handles, not style or sub-object slot indices.
+- Graphics bindings reject nonnumeric, nonfinite, and out-of-range 32-bit numeric arguments with a JS error. Boolean style/flag arguments remain supported as 0/1. RGB colors use `0xRRGGBB`.
+- `str_length()` counts raw bytes, including literal quotes and embedded NULs. `str_substring(text, start, length)` clamps offsets safely and preserves those bytes; negative length means through the end. `sd_write_file(path, content)` writes raw string bytes and reports short writes as `false`.
 - Chart types retain LVGL 8 values: 0 = none, 1 = line, 2 = bar, 3 = scatter. Native chart zoom and axis ticks remain active. Point counts are limited to 1–4096; zoom is 256–4096 (256 = 1×).
 - A series must belong to the chart passed to it; scales and indicators must belong to the supplied meter. Invalid ownership or widget classes are rejected. Chart ranges must increase and fit LVGL coordinates.
 - Meter scales require 2–1000 ticks, a positive major-tick frequency, an increasing range, and an angle range of 1–360 degrees.

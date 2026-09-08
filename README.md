@@ -475,6 +475,8 @@ The firmware exposes numerous functions to your JavaScript applications. Some hi
 - **MQTT:** `mqtt_init()`, `mqtt_connect()`, `mqtt_publish()`, `mqtt_subscribe()`, `mqtt_loop()`, `mqtt_on_message()`
 
 For a full list and examples of usage, see the [JavaScript API Reference](docs/API.md).
+For timer scheduling, resource limits, MQTT polling, and recovery, see
+[Writing reliable JavaScript apps](docs/JS_APPS.md).
 
 ## Secure HTTPS Connections
 

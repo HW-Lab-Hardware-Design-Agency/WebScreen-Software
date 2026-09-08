@@ -91,12 +91,16 @@ static jsval_t js_format_time(struct js *js, jsval_t *args, int nargs) {
   if (fmt.length() == 0) return js_mkstr(js, "", 0);
   time_t t;
   if (nargs >= 2) {
-    t = (time_t)js_getnum(args[1]);
+    double epoch = js_getnum(args[1]);
+    if (js_type(args[1]) != JS_NUM || !isfinite(epoch) || epoch < 0 || epoch > 253402300799.0) {
+      return js_mkerr(js, "epoch must be between 1970 and 9999");
+    }
+    t = (time_t)epoch;
   } else {
     time(&t);
   }
   struct tm timeinfo;
-  localtime_r(&t, &timeinfo);
+  if (!localtime_r(&t, &timeinfo)) return js_mkstr(js, "", 0);
   char buf[64];
   size_t n = strftime(buf, sizeof(buf), fmt.c_str(), &timeinfo);
   return js_mkstr(js, buf, n);

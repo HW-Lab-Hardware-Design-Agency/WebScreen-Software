@@ -3,6 +3,7 @@
 // NOT a standalone header: it is included exactly once, in order, by
 // lvgl_elk.h (which is itself included only by webscreen_runtime.cpp).
 // Symbols here may depend on every fragment included before it.
+#include "webscreen_js_strings.h"
 
 /******************************************************************************
  * A2) Shared binding helpers

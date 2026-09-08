@@ -3,6 +3,7 @@
 #include "webscreen_network.h"
 #include "webscreen_base64.h"
 #include "webscreen_snapshot.h"
+#include "webscreen_js_execution.h"
 #include <lvgl.h>
 #include "pins_config.h"
 #include "rm67162.h"
@@ -17,6 +18,22 @@ extern "C" {
 static bool g_javascript_active = false;
 static bool g_fallback_active = false;
 static String g_current_script_file = "";
+// Serial status readers must not access a String being reallocated on the JS task.
+static char g_script_status[96] = "";
+static portMUX_TYPE g_script_status_mux = portMUX_INITIALIZER_UNLOCKED;
+static void webscreen_runtime_set_script_name(const char *name) {
+  g_current_script_file = name;
+  taskENTER_CRITICAL(&g_script_status_mux);
+  strlcpy(g_script_status, name, sizeof(g_script_status));
+  taskEXIT_CRITICAL(&g_script_status_mux);
+}
+static String webscreen_runtime_script_status() {
+  char name[sizeof(g_script_status)];
+  taskENTER_CRITICAL(&g_script_status_mux);
+  memcpy(name, g_script_status, sizeof(name));
+  taskEXIT_CRITICAL(&g_script_status_mux);
+  return String(name);
+}
 static String g_fallback_text = "WebScreen v" WEBSCREEN_VERSION_STRING "\nFallback Mode\nSD card or script not found";
 static String g_last_error = "";
 static uint32_t g_runtime_start_time = 0;
@@ -46,6 +63,7 @@ bool webscreen_runtime_start_javascript(const char* script_file) {
     g_last_error = "Script file path is NULL";
     return false;
   }
+  if (g_js_task_handle != NULL) return webscreen_runtime_load_new_script(script_file);
 
   WEBSCREEN_DEBUG_PRINTF("Starting JavaScript runtime with: %s\n", script_file);
 
@@ -88,12 +106,12 @@ bool webscreen_runtime_start_javascript(const char* script_file) {
     return false;
   }
 
+  webscreen_runtime_set_script_name(script_file);
   if (!webscreen_runtime_start_javascript_task()) {
     g_last_error = "Failed to start JavaScript execution task";
     return false;
   }
 
-  g_current_script_file = script_file;
   g_javascript_active = true;
   g_fallback_active = false;
   g_runtime_start_time = WEBSCREEN_MILLIS();
@@ -124,7 +142,7 @@ void webscreen_runtime_shutdown(void) {
     g_javascript_active = false;
     g_fallback_active = false;
     g_js_engine_initialized = false;
-    g_current_script_file = "";
+    webscreen_runtime_set_script_name("");
     g_js_script_content = "";
     if (g_js_script_psram) { free(g_js_script_psram); g_js_script_psram = nullptr; }
     g_js_script_psram_len = 0;
@@ -142,7 +160,7 @@ const char* webscreen_runtime_get_javascript_status(void) {
 
   static String status;
   status = "JavaScript active - Script: ";
-  status += g_current_script_file;
+  status += webscreen_runtime_script_status();
   status += " - Uptime: ";
   status += (WEBSCREEN_MILLIS() - g_runtime_start_time);
   status += "ms";
@@ -201,7 +219,7 @@ void webscreen_runtime_print_status(void) {
   WEBSCREEN_DEBUG_PRINTF("Fallback Active: %s\n", g_fallback_active ? "Yes" : "No");
 
   if (g_javascript_active) {
-    WEBSCREEN_DEBUG_PRINTF("Script File: %s\n", g_current_script_file.c_str());
+    WEBSCREEN_DEBUG_PRINTF("Script File: %s\n", webscreen_runtime_script_status().c_str());
     WEBSCREEN_DEBUG_PRINTF("Runtime Uptime: %lu ms\n",
                            WEBSCREEN_MILLIS() - g_runtime_start_time);
   }
@@ -328,11 +346,11 @@ bool webscreen_runtime_start_javascript_task(void) {
   return true;
 }
 // ---- In-place JS app restart (flag-requested; performed by the JS task itself — it owns LVGL, no cross-task locking) ----
-static volatile bool g_js_restart_requested = false;
+static std::atomic<bool> g_js_restart_requested{false};
 static char g_js_restart_reason[64] = "";
 static uint32_t g_js_restart_failures = 0;
 static const uint32_t JS_RESTART_FAILURE_LIMIT = 2;
-static volatile bool g_js_safe_mode = false;  // Restarts kept failing; wait for user
+static std::atomic<bool> g_js_safe_mode{false};  // Restarts kept failing; wait for user
 // /load target. Fixed buffer (a String would be realloc'd under the JS task); only the JS task assigns g_current_script_file.
 static char g_js_pending_script[96] = "";
 // Guards reason/pending-script/safe-mode handoff between loopTask and JS task.
@@ -392,9 +410,16 @@ bool webscreen_runtime_load_new_script(const char *script_file) {
   return true;
 }
 
+static bool webscreen_runtime_cancel_requested() { return g_js_restart_requested.load(); }
+
+extern "C" jsval_t webscreen_runtime_eval_guarded(const char *code, size_t length, uint32_t budget_ms) {
+  return webscreen_eval_with_deadline(js, code, length, budget_ms,
+                                      esp_timer_get_time, webscreen_runtime_cancel_requested);
+}
+
 // ---- /eval REPL ----------------------------------------------------------
 static char g_js_eval_buf[256] = "";
-static volatile bool g_js_eval_pending = false;
+static std::atomic<bool> g_js_eval_pending{false};
 
 bool webscreen_runtime_eval_snippet(const char *code) {
   if (!g_javascript_active || js == NULL || g_js_safe_mode) return false;
@@ -444,7 +469,8 @@ void webscreen_runtime_print_error_report(void) {
   Serial.printf("Auto-restart cycles: %lu/%lu\n",
                 (unsigned long)cycles, (unsigned long)JS_AUTO_RESTART_CYCLE_LIMIT);
   Serial.printf("Safe mode: %s\n", safe_mode ? "YES (fix the script, then /load or /restart_app)" : "no");
-  Serial.printf("Script: %s\n", g_current_script_file.length() > 0 ? g_current_script_file.c_str() : "(none)");
+  String script = webscreen_runtime_script_status();
+  Serial.printf("Script: %s\n", script.length() > 0 ? script.c_str() : "(none)");
 }
 
 // ---- Button events (hardware callback, runs on loopTask; counters live in ws_elk_basics.h) ----
@@ -455,7 +481,7 @@ void webscreen_runtime_notify_button(bool pressed) {
 }
 
 // ---- /screenshot (JS task captures at its safe point — LVGL must not be touched from other tasks) ----
-static volatile bool g_js_screenshot_pending = false;
+static std::atomic<bool> g_js_screenshot_pending{false};
 
 bool webscreen_runtime_request_screenshot(void) {
   if (!g_javascript_active || js == NULL) return false;
@@ -520,7 +546,7 @@ static bool webscreen_runtime_eval_script(char *err_buf, size_t err_len) {
     if (err_buf) strlcpy(err_buf, "no engine or empty script", err_len);
     return false;
   }
-  jsval_t result = js_eval(js, script_src, script_len);
+  jsval_t result = webscreen_runtime_eval_guarded(script_src, script_len, WEBSCREEN_JS_STARTUP_TIMEOUT_MS);
   if (js_type(result) == JS_ERR) {
     const char *error = js_str(js, result);
     if (err_buf) strlcpy(err_buf, error ? error : "unknown error", err_len);
@@ -540,7 +566,7 @@ static void webscreen_runtime_perform_inplace_restart(void) {
   g_js_pending_script[0] = '\0';
   taskEXIT_CRITICAL(&g_js_restart_mux);
   if (pending[0] != '\0') {
-    g_current_script_file = pending;  // String writes happen only on this task
+    webscreen_runtime_set_script_name(pending);
   }
 
   WEBSCREEN_DEBUG_PRINTF("In-place JS app restart (reason: %s, script: %s)\n",
@@ -636,8 +662,7 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
     if (g_js_restart_requested && !g_js_safe_mode) {
       webscreen_runtime_perform_inplace_restart();
     }
-    if (g_js_gc_requested && js != NULL) {
-      g_js_gc_requested = false;
+    if (js != NULL && g_js_gc_requested.exchange(false)) {
       js_gc(js);
     }
     // /eval: the flag stays set through the eval so loopTask never overwrites a buffer in use.
@@ -645,7 +670,7 @@ void webscreen_runtime_javascript_task(void* pvParameters) {
       if (g_js_safe_mode) {
         Serial.println("[EVAL] dropped: app is parked in safe mode");
       } else {
-        jsval_t v = js_eval(js, g_js_eval_buf, strlen(g_js_eval_buf));
+        jsval_t v = webscreen_runtime_eval_guarded(g_js_eval_buf, strlen(g_js_eval_buf), WEBSCREEN_JS_EVAL_TIMEOUT_MS);
         const char *s = js_str(js, v);
         Serial.printf("[EVAL] %s\n", s ? s : "(no result)");
         if (js_type(v) == JS_ERR && s) {
@@ -716,6 +741,7 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
   if (g_mqtt_enabled) {
     if (g_mqttClient.connected()) {
       g_mqttClient.loop();
+      elk_mqtt_restore_subscriptions();
     } else {
       // Each reconnect attempt can block this LVGL-owning task up to the ~5s socket timeout — back off exponentially.
       static unsigned long s_mqtt_backoff_ms = 5000;

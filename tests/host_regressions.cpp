@@ -13,6 +13,11 @@ static_assert(INPUT_PIN == 21, "Button must stay off the octal PSRAM bus");
 #include "webscreen_config_parse.h"
 #include "webscreen_snapshot.h"
 #include "webscreen_line.h"
+#include "webscreen_js_args.h"
+#include "webscreen_mqtt_queue.h"
+#include "webscreen_js_execution.h"
+#include "webscreen_ram_image.h"
+#include "webscreen_js_strings.h"
 
 static_assert(LVGL_VERSION_MAJOR == 8 && LVGL_VERSION_MINOR == 3, "Tests target LVGL 8.3");
 #define LOG(...) ((void)0)
@@ -26,18 +31,18 @@ static unsigned errors;
 extern "C" void webscreen_runtime_request_restart(const char *) {}
 extern "C" void webscreen_runtime_request_restart_auto(const char *) {}
 extern "C" void webscreen_runtime_note_js_error(const char *) { errors++; }
+static int64_t now_us;
+static unsigned cancellation_checks, cancel_after;
+static int64_t test_clock_us() { now_us += 250; return now_us; }
+static bool test_cancelled() { return cancel_after && ++cancellation_checks >= cancel_after; }
+extern "C" jsval_t webscreen_runtime_eval_guarded(const char *code, size_t length, uint32_t budget) {
+  return webscreen_eval_with_deadline(js, code, length, budget, test_clock_us, test_cancelled);
+}
 #include "ws_elk_timers.h"
 #include "ws_lvgl_mem_fs.h"
 
-// The binding fragments use the runtime's object registry and RAM image table.
-static std::vector<lv_obj_t *> objects;
-static int store_lv_obj(lv_obj_t *object) {
-  objects.push_back(object);
-  return (int)objects.size() - 1;
-}
-static lv_obj_t *get_lv_obj(int handle) {
-  return handle >= 0 && (size_t)handle < objects.size() ? objects[handle] : nullptr;
-}
+#include "webscreen_object_registry.h"
+
 static const int MAX_RAM_IMAGES = 16;
 static struct { bool used; lv_img_dsc_t dsc; } g_ram_images[MAX_RAM_IMAGES];
 static const lv_font_t *get_font_for_size(int) { return LV_FONT_DEFAULT; }
@@ -184,7 +189,6 @@ static void test_charts_and_meters() {
   release_subobjects_owned_by(get_lv_obj(first));
   release_subobjects_owned_by(get_lv_obj(second));
   lv_obj_clean(lv_scr_act());
-  objects.clear();
 }
 
 static void test_scatter_lifetime() {
@@ -197,7 +201,6 @@ static void test_scatter_lifetime() {
     call(js_lv_chart_set_type, {(double)chart, 3});
     release_subobjects_owned_by(get_lv_obj(chart));
     lv_obj_del(get_lv_obj(chart));
-    objects.clear();
   }
 }
 
@@ -261,9 +264,187 @@ static void test_engine_limits() {
   assert(js_usage(engine) < js_total(engine));
 }
 
+static void test_execution_deadlines() {
+  alignas(8) char arena[16384];
+  struct js *engine = js_create(arena, sizeof(arena));
+  js_setmaxsteps(engine, 0);  // Exercise the wall-clock guard independently.
+  for (const char *code : {"for (;;) {}", "for (;;) { 1; }", "for (;;) { 1; 2; }",
+                           "let loop = function() { for (;;) {} }; loop();"}) {
+    now_us = 0;
+    jsval_t result = webscreen_eval_with_deadline(engine, code, strlen(code), 1, test_clock_us, test_cancelled);
+    assert(js_type(result) == JS_ERR && strstr(js_str(engine, result), "execution timeout"));
+    assert(now_us <= 2000);
+    assert(js_getnum(js_eval(engine, "1 + 2", 5)) == 3);
+  }
+  cancellation_checks = 0;
+  cancel_after = 3;
+  jsval_t result = webscreen_eval_with_deadline(engine, "for (;;) {}", 11, 10000, test_clock_us, test_cancelled);
+  assert(js_type(result) == JS_ERR && strstr(js_str(engine, result), "app restart requested"));
+  assert(cancellation_checks == 3);
+  cancel_after = 0;
+  // A native call may use up the budget without another JS statement.
+  js_set(engine, js_glob(engine), "slow", js_mkfun([](struct js *, jsval_t *, int) {
+    now_us += 1000000;
+    return js_mknum(42);
+  }));
+  result = webscreen_eval_with_deadline(engine, "slow()", 6, 10, test_clock_us, test_cancelled);
+  assert(js_type(result) == JS_ERR && strstr(js_str(engine, result), "execution timeout"));
+  assert(js_getnum(js_eval(engine, "1 + 2", 5)) == 3);
+  // Error creation must not touch the source or interrupt context after eval.
+  {
+    char temporary[] = "1 + 2";
+    assert(js_getnum(webscreen_eval_with_deadline(engine, temporary, 5, 10, test_clock_us, test_cancelled)) == 3);
+  }
+  assert(js_type(js_mkerr(engine, "late error")) == JS_ERR);
+  assert(js_type(js_checkinterrupt(engine)) != JS_ERR);
+}
+
+static void test_ram_images() {
+  assert(webscreen_raw_image_valid(80000, 200, 200));
+  assert(webscreen_raw_image_valid(257280, 536, 240));
+  assert(!webscreen_raw_image_valid(100, 200, 200));
+  assert(!webscreen_raw_image_valid(80001, 200, 200));
+  assert(!webscreen_raw_image_valid(0, 0, 200));
+  assert(!webscreen_raw_image_valid(1, INT32_MAX, INT32_MAX));
+  uint8_t pixels[8] = {};
+  lv_img_dsc_t descriptor = {};
+  descriptor.header.w = descriptor.header.h = 2;
+  descriptor.header.cf = LV_IMG_CF_TRUE_COLOR;
+  descriptor.data_size = sizeof(pixels);
+  descriptor.data = pixels;
+  lv_obj_t *parent = lv_obj_create(lv_scr_act());
+  lv_obj_t *image = lv_img_create(parent);
+  lv_img_set_src(image, &descriptor);
+  assert(webscreen_image_in_use(lv_scr_act(), &descriptor));
+  lv_obj_t *meter = lv_meter_create(lv_scr_act());
+  lv_meter_add_needle_img(meter, lv_meter_add_scale(meter), &descriptor, 0, 0);
+  lv_obj_del(parent);
+  assert(webscreen_image_in_use(lv_scr_act(), &descriptor));
+  lv_obj_del(meter);
+  assert(!webscreen_image_in_use(lv_scr_act(), &descriptor));
+  lv_img_cache_invalidate_src(&descriptor);
+}
+
+static void test_timer_limits() {
+  eval("create_timer('normal', 10); create_timer('normal', 20);");
+  assert(timer_count() == 1);
+  eval("create_timer('normal(); missing', 10); create_timer('has space', 10); create_timer('9invalid', 10);");
+  assert(timer_count() == 1);
+  delete_all_elk_timers();
+  for (unsigned i = 0; i < WEBSCREEN_MAX_JS_TIMERS + 10; i++) {
+    char code[80];
+    snprintf(code, sizeof(code), "create_timer('timer_%u', 1000);", i);
+    eval(code);
+  }
+  assert(timer_count() == WEBSCREEN_MAX_JS_TIMERS);
+  delete_all_elk_timers();
+  assert(timer_count() == 0);
+}
+
+static void test_object_handles() {
+  int old = store_lv_obj(lv_label_create(lv_scr_act()));
+  lv_obj_del(get_lv_obj(old));
+  int fresh = store_lv_obj(lv_label_create(lv_scr_act()));
+  assert(fresh != old && get_lv_obj(old) == nullptr);
+  int child = store_lv_obj(lv_label_create(get_lv_obj(fresh)));
+  lv_obj_del(get_lv_obj(fresh));
+  assert(!get_lv_obj(fresh) && !get_lv_obj(child));
+  unsigned children = lv_obj_get_child_cnt(lv_scr_act());
+  for (unsigned i = 0; i < WEBSCREEN_MAX_OBJECTS; i++) {
+    assert(store_lv_obj(lv_label_create(lv_scr_act())) >= 0);
+  }
+  assert(store_lv_obj(lv_label_create(lv_scr_act())) == -1);
+  assert(lv_obj_get_child_cnt(lv_scr_act()) == children + WEBSCREEN_MAX_OBJECTS);
+  lv_obj_clean(lv_scr_act());
+  assert(store_lv_obj(lv_label_create(lv_scr_act())) >= 0);
+  lv_obj_clean(lv_scr_act());
+}
+
+static void test_argument_validation() {
+  int chart = (int)js_getnum(call(js_lv_chart_create, {}));
+  for (jsval_t bad : {js_mkstr(js, "4", 1), js_mknull(), js_mkundef(),
+                      js_mknum(NAN), js_mknum(INFINITY), js_mknum(1e30)}) {
+    jsval_t args[] = {js_mknum(chart), bad};
+    assert(js_type(webscreen_checked_binding<js_lv_chart_set_point_count>(js, args, 2)) == JS_ERR);
+    assert(lv_chart_get_point_count(get_lv_obj(chart)) == 10);
+  }
+  lv_obj_del(get_lv_obj(chart));
+  int style = (int)js_getnum(call(js_create_style, {}));
+  jsval_t color_args[] = {js_mknum(style), js_mknum(-1)};
+  assert(js_type(webscreen_checked_binding<js_style_set_bg_color>(js, color_args, 2)) != JS_ERR);
+  jsval_t coordinate_args[] = {js_mknum(style), js_mknum(INT32_MAX)};
+  assert(js_type(webscreen_checked_binding<js_style_set_x>(js, coordinate_args, 2)) != JS_ERR);
+  lv_style_reset(g_style_map[style]);
+  delete g_style_map[style];
+  g_style_map[style] = nullptr;
+}
+
+static void test_strings() {
+  assert(js_type(js_mkstr(js, nullptr, SIZE_MAX)) == JS_ERR);
+  const char raw[] = {'"', 'a', 0, 'b', '"'};
+  jsval_t args[] = {js_mkstr(js, raw, sizeof(raw)), js_mknum(1), js_mknum(INT32_MAX)};
+  assert(js_getnum(js_str_length(js, args, 1)) == sizeof(raw));
+  jsval_t result = js_str_substring(js, args, 3);
+  size_t length = 0;
+  const char *data = js_getstr(js, result, &length);
+  assert(length == 4 && memcmp(data, raw + 1, 4) == 0);
+  args[1] = js_mknum(-20);
+  args[2] = js_mknum(-1);
+  result = js_str_substring(js, args, 3);
+  data = js_getstr(js, result, &length);
+  assert(length == sizeof(raw) && memcmp(data, raw, length) == 0);
+  args[1] = js_mknum(1e100);
+  result = js_str_substring(js, args, 3);
+  js_getstr(js, result, &length);
+  assert(length == 0);
+  args[1] = js_mknum(NAN);
+  assert(js_type(js_str_substring(js, args, 3)) == JS_ERR);
+}
+
+static void test_mqtt_queue() {
+  WebscreenMqttQueue queue;
+  for (unsigned i = 0; i < WebscreenMqttQueue::Capacity; i++) {
+    uint8_t payload[] = {(uint8_t)i, 0, 42};
+    assert(queue.push("app/state", payload, sizeof(payload)));
+  }
+  uint8_t extra = 9;
+  assert(!queue.push("app/state", &extra, 1));
+  assert(queue.dropped() == 1);
+  for (unsigned i = 0; i < WebscreenMqttQueue::Capacity; i++) {
+    const auto *message = queue.front();
+    assert(message && message->length == 3 && message->payload[0] == i);
+    assert(message->payload[1] == 0 && message->payload[2] == 42);
+    assert(strcmp(message->topic, "app/state") == 0);
+    queue.pop();
+  }
+  assert(!queue.front());
+  uint8_t oversized[1025] = {};
+  assert(!queue.push("bad", oversized, sizeof(oversized)));
+  assert(!queue.front() && queue.dropped() == 2);
+  assert(queue.push("empty", nullptr, 0));
+  assert(queue.front()->length == 0);
+  queue.clear();
+  assert(!queue.front() && queue.dropped() == 0);
+
+  WebscreenMqttSubscriptions subscriptions;
+  assert(subscriptions.remember("first"));
+  assert(subscriptions.remember("second"));
+  assert(subscriptions.remember("first"));
+  subscriptions.request_restore();
+  unsigned calls = 0;
+  subscriptions.restore([&](const char *topic) { calls++; return strcmp(topic, "first") == 0; });
+  assert(calls == 2 && subscriptions.pending());
+  subscriptions.restore([&](const char *topic) { calls++; assert(strcmp(topic, "second") == 0); return true; });
+  assert(calls == 3 && !subscriptions.pending());
+  subscriptions.clear();
+  assert(!subscriptions.pending());
+}
+
 int main() {
   test_serial_and_configuration();
+  test_mqtt_queue();
   test_engine_limits();
+  test_execution_deadlines();
   lv_init();
   static lv_color_t draw_pixels[536 * 40];
   static lv_disp_draw_buf_t draw_buffer;
@@ -280,11 +461,16 @@ int main() {
   js = js_create(arena, sizeof(arena));
   assert(js);
   test_timers();
+  test_timer_limits();
+  test_object_handles();
+  test_argument_validation();
+  test_strings();
   test_lines();
   test_charts_and_meters();
   test_scatter_lifetime();
   test_memory_filesystem();
+  test_ram_images();
   test_screenshot();
   lv_disp_remove(display);
-  puts("PASS: serial, configuration, timer deletion, line ownership, charts/meters, memory filesystem, execution limits, RGB565_SWAP screenshots");
+  puts("PASS: serial, configuration, timer deletion, line ownership, charts/meters, memory filesystem, execution limits/deadlines/cancellation, stale handles, API validation, string bounds, MQTT queues, RAM image lifetime, RGB565_SWAP screenshots");
 }

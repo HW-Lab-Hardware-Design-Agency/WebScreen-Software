@@ -46,7 +46,7 @@ static jsval_t js_mem_info(struct js *js, jsval_t *args, int nargs) {
 
 // gc() => request a collection; never collect here (bindings run under F_CALL,
 // where GC dangles do_call_op's saved code pointer) — safe points collect instead.
-static volatile bool g_js_gc_requested = false;
+static std::atomic<bool> g_js_gc_requested{false};
 static jsval_t js_request_gc(struct js *js, jsval_t *args, int nargs) {
   g_js_gc_requested = true;
   return js_mknum((double)(js_total(js) - js_usage(js)));  // free bytes (pre-GC)
@@ -63,6 +63,8 @@ static jsval_t js_wifi_connect(struct js *js, jsval_t *args, int nargs) {
   WiFi.begin(ssid.c_str(), pass.c_str());
 
   for (uint32_t i = 0; i < 20 && WiFi.status() != WL_CONNECTED; ++i) {
+    jsval_t interrupted = js_checkinterrupt(js);
+    if (js_type(interrupted) == JS_ERR) return interrupted;
     vTaskDelay(pdMS_TO_TICKS(250));
     LOG(".");
   }
@@ -93,24 +95,24 @@ static jsval_t js_wifi_get_ip(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_delay(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 1) return js_mknull();
   double ms = js_getnum(args[0]);
-  vTaskDelay(pdMS_TO_TICKS((unsigned long)ms));
+  if (js_type(args[0]) != JS_NUM || !isfinite(ms) || ms < 0 || ms > INT32_MAX) {
+    return js_mkerr(js, "delay requires nonnegative milliseconds");
+  }
+  uint32_t started = millis();
+  do {
+    jsval_t interrupted = js_checkinterrupt(js);
+    if (js_type(interrupted) == JS_ERR) return interrupted;
+    uint32_t elapsed = millis() - started;
+    if (elapsed >= (uint32_t)ms) break;
+    uint32_t remaining = (uint32_t)ms - elapsed;
+    TickType_t ticks = pdMS_TO_TICKS(remaining < 5 ? remaining : 5);
+    vTaskDelay(ticks ? ticks : 1);
+  } while (true);
   return js_mknull();
 }
 
 static jsval_t js_get_millis(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)millis());
-}
-
-static jsval_t js_str_length(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mknum(0);
-  size_t len;
-  char *s = js_getstr(js, args[0], &len);
-  if (!s) return js_mknum(0);
-  String str(s, len);
-  if (str.startsWith("\"") && str.endsWith("\"") && str.length() >= 2) {
-    return js_mknum((double)(str.length() - 2));
-  }
-  return js_mknum((double)str.length());
 }
 
 #include "ws_elk_timers.h"
@@ -140,18 +142,19 @@ static jsval_t js_sd_read_file(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t js_sd_write_file(struct js *js, jsval_t *args, int nargs) {
   if (nargs != 2) return js_mkfalse();
-  const char *path = js_str(js, args[0]);
-  const char *data = js_str(js, args[1]);
-  if (!path || !data) return js_mkfalse();
+  String path = js_arg_str(js, args[0]);
+  size_t length = 0;
+  const char *data = js_getstr(js, args[1], &length);
+  if (path.isEmpty() || !data) return js_mkfalse();
 
   File f = SD_MMC.open(path, FILE_WRITE);
   if (!f) {
-    LOGF("Failed to open for writing: %s\n", path);
+    LOGF("Failed to open for writing: %s\n", path.c_str());
     return js_mkfalse();
   }
-  f.write((const uint8_t *)data, strlen(data));
+  size_t written = f.write((const uint8_t *)data, length);
   f.close();
-  return js_mktrue();
+  return written == length ? js_mktrue() : js_mkfalse();
 }
 
 static jsval_t js_sd_list_dir(struct js *js, jsval_t *args, int nargs) {
@@ -297,8 +300,8 @@ static jsval_t js_pad_number(struct js *js, jsval_t *args, int nargs) {
 /******************************************************************************
  * E3) Button events — short presses cross loopTask -> JS task via two single-writer counters (lock-free); long press = power off, never reaches JS.
  ******************************************************************************/
-static volatile uint32_t g_button_evt_produced = 0;  // written by loopTask only
-static volatile uint32_t g_button_evt_consumed = 0;  // written by JS task only
+static std::atomic<uint32_t> g_button_evt_produced{0};  // written by loopTask only
+static std::atomic<uint32_t> g_button_evt_consumed{0};  // written by JS task only
 static char g_button_cb_name[56] = "";
 
 extern "C" void webscreen_hardware_set_button_toggle(bool enabled);
@@ -307,8 +310,8 @@ extern "C" void webscreen_hardware_set_button_toggle(bool enabled);
 static jsval_t js_on_button(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
   String name = js_arg_str(js, args[0]);
-  if (name.length() >= sizeof(g_button_cb_name)) {
-    LOGF("on_button: function name too long (max %u chars)\n",
+  if (!name.isEmpty() && !webscreen_callback_name(name.c_str(), name.length())) {
+    LOGF("on_button: expected a simple function name (max %u chars)\n",
          (unsigned)(sizeof(g_button_cb_name) - 1));
     return js_mkfalse();
   }
@@ -340,7 +343,7 @@ static void elk_dispatch_button_event(void) {
   g_button_evt_consumed++;
   char snippet[72];
   snprintf(snippet, sizeof(snippet), "%s(1);", g_button_cb_name);
-  jsval_t res = js_eval(js, snippet, strlen(snippet));
+  jsval_t res = webscreen_runtime_eval_guarded(snippet, strlen(snippet), WEBSCREEN_JS_CALLBACK_TIMEOUT_MS);
   if (js_type(res) == JS_ERR) {
     const char *errstr = js_str(js, res);
     LOGF("[BUTTON CB] Error in %s: %s\n", snippet, errstr);

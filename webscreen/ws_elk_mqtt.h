@@ -5,77 +5,64 @@
 // Symbols here may depend on every fragment included before it.
 //
 // Contents:
-//  - onMqttMessage(): PubSubClient receive callback feeding a single-slot
+//  - onMqttMessage(): PubSubClient receive callback feeding a bounded
 //    message queue (never calls js_eval — Elk is not re-entrant)
-//  - processPendingMqttMessage(): promotes the queued message for JS polling
+//  - processPendingMqttMessage(): preserves the legacy polling entry point
 //  - elk_mqtt_try_reconnect(): one reconnect + re-subscribe attempt with the
-//    last working credentials (backoff lives in the runtime maintain loop)
+//    working credentials (backoff lives in the runtime maintain loop)
 //  - mqtt_* JS bindings: init, connect, publish, subscribe, loop, on_message,
 //    plus the has_message/get_payload/msg_clear/dropped polling API
 
-// Messages lost to single-slot overwrite or payload truncation — JS: mqtt_dropped()
-static uint32_t g_mqttDroppedCount = 0;
+#include "webscreen_mqtt_queue.h"
+static WebscreenMqttQueue g_mqttMessages;
+static WebscreenMqttSubscriptions g_mqttSubscriptions;
+static uint32_t g_mqttLastRestoreMs = 0;
 
-// Credentials of the last successful connect + last subscription, used by
+// Credentials of the last successful connect + subscriptions, used by
 // elk_mqtt_try_reconnect() after a broker drop. Empty user => anonymous.
 static char g_mqttLastClientId[64] = "";
 static char g_mqttLastUser[64] = "";
 static char g_mqttLastPass[64] = "";
 static bool g_mqttHaveCreds = false;
-static char g_mqttLastSubTopic[128] = "";
 
 void onMqttMessage(char *topic, byte *payload, unsigned int length) {
-  LOGF("[MQTT] Message arrived on topic '%s'\n", topic);
-
-  // Queue the message for processing from the C++ main loop.
-  // We must NOT call js_eval here because this callback fires inside
-  // g_mqttClient.loop(), which may be called from JS via mqtt_loop().
-  // Elk is not re-entrant — calling js_eval inside another js_eval
-  // corrupts the parser state.
-  if (g_mqttCallbackName[0] != '\0') {
-    if (g_mqttMsgPending || g_mqttMsgReady) {
-      g_mqttDroppedCount++;  // Single slot still occupied — previous message is lost
-    }
-    strncpy(g_mqttMsgTopic, topic, sizeof(g_mqttMsgTopic) - 1);
-    g_mqttMsgTopic[sizeof(g_mqttMsgTopic) - 1] = '\0';
-
-    unsigned int copyLen = length < sizeof(g_mqttMsgPayload) - 1 ? length : sizeof(g_mqttMsgPayload) - 1;
-    if (copyLen < length) {
-      g_mqttDroppedCount++;  // Payload truncated to fit the slot
-    }
-    memcpy(g_mqttMsgPayload, payload, copyLen);
-    g_mqttMsgPayload[copyLen] = '\0';
-
-    g_mqttMsgPending = true;
-  }
+  if (g_mqttCallbackName[0]) g_mqttMessages.push(topic, payload, length);
 }
 
-// Relay raw payload to JS — no C++ JSON parsing, minimal stack usage.
-void processPendingMqttMessage() {
-  if (!g_mqttMsgPending) return;
-  g_mqttMsgPending = false;
-  g_mqttMsgReady = true;
-  LOGF("[MQTT] Message ready for JS (%d bytes)\n", strlen(g_mqttMsgPayload));
-}
+// Delivery remains polling-based; never re-enter Elk from PubSubClient.
+void processPendingMqttMessage() {}
 
-// JS-callable functions to poll for MQTT messages from timer callback
 static jsval_t js_mqtt_has_message(struct js *js, jsval_t *args, int nargs) {
-  return g_mqttMsgReady ? js_mktrue() : js_mkfalse();
+  return g_mqttMessages.front() ? js_mktrue() : js_mkfalse();
 }
 
 static jsval_t js_mqtt_get_payload(struct js *js, jsval_t *args, int nargs) {
-  return js_mkstr(js, g_mqttMsgPayload, strlen(g_mqttMsgPayload));
+  const auto *message = g_mqttMessages.front();
+  return message ? js_mkstr(js, message->payload, message->length) : js_mkstr(js, "", 0);
+}
+
+static jsval_t js_mqtt_get_topic(struct js *js, jsval_t *args, int nargs) {
+  const auto *message = g_mqttMessages.front();
+  return message ? js_mkstr(js, message->topic, strlen(message->topic)) : js_mkstr(js, "", 0);
 }
 
 static jsval_t js_mqtt_msg_clear(struct js *js, jsval_t *args, int nargs) {
-  g_mqttMsgReady = false;
+  g_mqttMessages.pop();
   return js_mknull();
 }
 
-// mqtt_dropped() => count of messages lost to slot overwrite or truncation
 static jsval_t js_mqtt_dropped(struct js *js, jsval_t *args, int nargs) {
-  return js_mknum((double)g_mqttDroppedCount);
+  return js_mknum(g_mqttMessages.dropped());
 }
+
+static void elk_mqtt_restore_subscriptions() {
+  if (!g_mqttSubscriptions.pending() || !g_mqttClient.connected()) return;
+  uint32_t now = millis();
+  if (now - g_mqttLastRestoreMs < 5000) return;
+  g_mqttLastRestoreMs = now;
+  g_mqttSubscriptions.restore([](const char *topic) { return g_mqttClient.subscribe(topic); });
+}
+
 // JavaScript-exposed bridging functions
 // mqtt_init(broker, port)
 static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
@@ -83,9 +70,15 @@ static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
 
   size_t broker_len = 0;
   char *broker = js_getstr(js, args[0], &broker_len);
-  int port = (int)js_getnum(args[1]);
-
-  if (!broker || broker_len == 0 || port <= 0) return js_mkfalse();
+  double requested_port = js_getnum(args[1]);
+  if (js_type(args[1]) != JS_NUM || !isfinite(requested_port) || requested_port < 1 || requested_port > 65535 ||
+      !broker || !broker_len || broker_len >= sizeof(g_mqttBrokerCopy) || memchr(broker, 0, broker_len)) return js_mkfalse();
+  int port = (int)requested_port;
+  // Reinitializing a broker must not reuse the previous app's session state.
+  if (g_mqttClient.connected()) g_mqttClient.disconnect();
+  g_mqttHaveCreds = false;
+  g_mqttMessages.clear();
+  g_mqttSubscriptions.clear();
 
   // Copy broker string to persistent buffer — PubSubClient::setServer()
   // stores only the pointer, not a copy. The Elk JS heap pointer becomes
@@ -96,7 +89,7 @@ static jsval_t js_mqtt_init(struct js *js, jsval_t *args, int nargs) {
 
   g_mqttClient.setServer(g_mqttBrokerCopy, port);
   g_mqttClient.setCallback(onMqttMessage);
-  g_mqttClient.setBufferSize(WEBSCREEN_MQTT_MAX_PACKET_SIZE);
+  if (!g_mqttClient.setBufferSize(WEBSCREEN_MQTT_MAX_PACKET_SIZE)) return js_mkfalse();
   g_mqttClient.setSocketTimeout(5);  // 5 second MQTT handshake timeout (in seconds)
   g_wifiClient.setTimeout(3000);  // 3 second TCP connect timeout (in milliseconds)
 
@@ -121,6 +114,11 @@ static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
   size_t user_len = 0, pass_len = 0;
   char *user = (nargs >= 2) ? js_getstr(js, args[1], &user_len) : nullptr;
   char *pass = (nargs >= 3) ? js_getstr(js, args[2], &pass_len) : nullptr;
+  if (!clientID || clientID_len >= sizeof(g_mqttLastClientId) || memchr(clientID, 0, clientID_len) ||
+      (nargs >= 2 && (!user || user_len >= sizeof(g_mqttLastUser) || memchr(user, 0, user_len))) ||
+      (nargs >= 3 && (!pass || pass_len >= sizeof(g_mqttLastPass) || memchr(pass, 0, pass_len)))) {
+    return js_mkfalse();
+  }
 
   // Copy clientID to stack buffer since Elk heap pointers may not persist
   char clientID_buf[64];
@@ -137,12 +135,13 @@ static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
   bool ok = false;
   char user_buf[64] = "";
   char pass_buf[64] = "";
-  if (user && pass && user_len > 0 && pass_len > 0) {
+  if (user && user_len > 0) {
     // Copy user/pass to local buffers too
     size_t ulen = user_len < sizeof(user_buf) - 1 ? user_len : sizeof(user_buf) - 1;
     memcpy(user_buf, user, ulen); user_buf[ulen] = '\0';
     size_t plen = pass_len < sizeof(pass_buf) - 1 ? pass_len : sizeof(pass_buf) - 1;
-    memcpy(pass_buf, pass, plen); pass_buf[plen] = '\0';
+    if (plen) memcpy(pass_buf, pass, plen);
+    pass_buf[plen] = '\0';
     ok = g_mqttClient.connect(clientID_buf, user_buf, pass_buf);
   } else {
     ok = g_mqttClient.connect(clientID_buf);
@@ -158,6 +157,9 @@ static jsval_t js_mqtt_connect(struct js *js, jsval_t *args, int nargs) {
     strncpy(g_mqttLastPass, pass_buf, sizeof(g_mqttLastPass) - 1);
     g_mqttLastPass[sizeof(g_mqttLastPass) - 1] = '\0';
     g_mqttHaveCreds = true;
+    g_mqttSubscriptions.request_restore();
+    g_mqttLastRestoreMs = millis() - 5000;
+    elk_mqtt_restore_subscriptions();
     LOG("[MQTT] Connected successfully");
     return js_mktrue();
   } else {
@@ -174,14 +176,12 @@ static jsval_t js_mqtt_publish(struct js *js, jsval_t *args, int nargs) {
   char *message = js_getstr(js, args[1], &msg_len);
   if (!topic || !message || topic_len == 0) return js_mkfalse();
 
-  // Copy to stack buffers since PubSubClient needs null-terminated C strings
-  char topic_buf[128], msg_buf[512];
-  size_t tlen = topic_len < sizeof(topic_buf) - 1 ? topic_len : sizeof(topic_buf) - 1;
-  memcpy(topic_buf, topic, tlen); topic_buf[tlen] = '\0';
-  size_t mlen = msg_len < sizeof(msg_buf) - 1 ? msg_len : sizeof(msg_buf) - 1;
-  memcpy(msg_buf, message, mlen); msg_buf[mlen] = '\0';
-
-  bool ok = g_mqttClient.publish(topic_buf, msg_buf);
+  if (topic_len >= 128 || memchr(topic, 0, topic_len) || msg_len > WEBSCREEN_MQTT_MAX_PACKET_SIZE) return js_mkfalse();
+  char topic_buf[128];
+  memcpy(topic_buf, topic, topic_len);
+  topic_buf[topic_len] = '\0';
+  // PubSubClient reads these bytes synchronously and never invokes Elk.
+  bool ok = g_mqttClient.publish(topic_buf, (const uint8_t *)message, (unsigned int)msg_len, false);
   return ok ? js_mktrue() : js_mkfalse();
 }
 
@@ -192,16 +192,12 @@ static jsval_t js_mqtt_subscribe(struct js *js, jsval_t *args, int nargs) {
   char *topic = js_getstr(js, args[0], &topic_len);
   if (!topic || topic_len == 0) return js_mkfalse();
 
+  if (topic_len >= 128 || memchr(topic, 0, topic_len)) return js_mkfalse();
   char topic_buf[128];
-  size_t tlen = topic_len < sizeof(topic_buf) - 1 ? topic_len : sizeof(topic_buf) - 1;
-  memcpy(topic_buf, topic, tlen); topic_buf[tlen] = '\0';
-
+  memcpy(topic_buf, topic, topic_len); topic_buf[topic_len] = '\0';
+  if (!g_mqttSubscriptions.can_add(topic_buf)) return js_mkfalse();
   bool ok = g_mqttClient.subscribe(topic_buf);
-  if (ok) {
-    // Remember for re-subscribe after auto-reconnect
-    strncpy(g_mqttLastSubTopic, topic_buf, sizeof(g_mqttLastSubTopic) - 1);
-    g_mqttLastSubTopic[sizeof(g_mqttLastSubTopic) - 1] = '\0';
-  }
+  if (ok) g_mqttSubscriptions.remember(topic_buf);
   LOGF("[MQTT] Subscribed to '%s'? => %s\n", topic_buf, ok ? "OK" : "FAIL");
   return ok ? js_mktrue() : js_mkfalse();
 }
@@ -224,10 +220,9 @@ static bool elk_mqtt_try_reconnect(void) {
     return false;
   }
   LOG("[MQTT] Reconnected to broker");
-  if (g_mqttLastSubTopic[0] != '\0') {
-    bool sub = g_mqttClient.subscribe(g_mqttLastSubTopic);
-    LOGF("[MQTT] Re-subscribed to '%s'? => %s\n", g_mqttLastSubTopic, sub ? "OK" : "FAIL");
-  }
+  g_mqttSubscriptions.request_restore();
+  g_mqttLastRestoreMs = millis() - 5000;
+  elk_mqtt_restore_subscriptions();
   return true;
 }
 

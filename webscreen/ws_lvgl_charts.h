@@ -102,7 +102,7 @@ static jsval_t js_lv_meter_set_scale_ticks(struct js *js, jsval_t *args, int nar
     return js_mknull();
   }
   if (cnt < 2 || cnt > 1000) return js_mknull();
-  lv_meter_set_scale_ticks(mt, sc, cnt, width, length, lv_color_hex((uint32_t)col));
+  lv_meter_set_scale_ticks(mt, sc, cnt, width, length, lv_color_hex((uint32_t)(int32_t)col));
   return js_mknull();
 }
 
@@ -125,7 +125,7 @@ static jsval_t js_lv_meter_set_scale_major_ticks(struct js *js, jsval_t *args, i
     return js_mknull();
   }
   if (freq < 1 || freq > 1000) return js_mknull();
-  lv_meter_set_scale_major_ticks(mt, sc, freq, width, length, lv_color_hex((uint32_t)col), label_gap);
+  lv_meter_set_scale_major_ticks(mt, sc, freq, width, length, lv_color_hex((uint32_t)(int32_t)col), label_gap);
   return js_mknull();
 }
 
@@ -172,7 +172,7 @@ static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {  /
   bool available = false;
   for (auto *slot : g_meter_indicators) if (!slot) available = true;
   if (!available) return js_mknum(-1);
-  lv_meter_indicator_t *ind = lv_meter_add_arc(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
+  lv_meter_indicator_t *ind = lv_meter_add_arc(mt, sc, width, lv_color_hex((uint32_t)(int32_t)col), rMod);
   if (!ind) return js_mknum(-1);
   int ih = store_meter_indicator(ind, mt);
   if (ih < 0) LOG("lv_meter_add_arc: no free indicator slots");
@@ -201,8 +201,8 @@ static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nar
   for (auto *slot : g_meter_indicators) if (!slot) available = true;
   if (!available) return js_mknum(-1);
   lv_meter_indicator_t *ind = lv_meter_add_scale_lines(mt, sc,
-                                                       lv_color_hex((uint32_t)colorM),
-                                                       lv_color_hex((uint32_t)colorG),
+                                                       lv_color_hex((uint32_t)(int32_t)colorM),
+                                                       lv_color_hex((uint32_t)(int32_t)colorG),
                                                        local, widthMod);
   if (!ind) return js_mknum(-1);
   int ih = store_meter_indicator(ind, mt);
@@ -229,7 +229,7 @@ static jsval_t js_lv_meter_add_needle_line(struct js *js, jsval_t *args, int nar
   bool available = false;
   for (auto *slot : g_meter_indicators) if (!slot) available = true;
   if (!available) return js_mknum(-1);
-  lv_meter_indicator_t *ind = lv_meter_add_needle_line(mt, sc, width, lv_color_hex((uint32_t)col), rMod);
+  lv_meter_indicator_t *ind = lv_meter_add_needle_line(mt, sc, width, lv_color_hex((uint32_t)(int32_t)col), rMod);
   if (!ind) return js_mknum(-1);
   int ih = store_meter_indicator(ind, mt);
   if (ih < 0) LOG("lv_meter_add_needle_line: no free indicator slots");
@@ -537,11 +537,11 @@ static jsval_t js_lv_line_set_points(struct js *js, jsval_t *args, int nargs) { 
  *******************************************************/
 // Releases every chart-series / meter-scale / meter-indicator / span slot
 // whose owning widget is `root` or a descendant of it. Forward-declared in
-// ws_lvgl_widgets.h and called by js_obj_delete BEFORE lv_obj_del: LVGL 8.3
+// ws_lvgl_widgets.h and called by each widget's delete event: LVGL 8.3
 // destructors free these sub-objects together with their widget, so a slot
 // left behind would let a stale JS handle pass get_*() validation and reach
 // freed memory. Walks each owner's parent chain (still valid at this point),
-// same technique as the g_objects sweep. Slots whose registry entry is
+// while the widget tree is still intact. Slots whose registry entry is
 // already null are skipped — their owner pointer may be stale (e.g. after
 // elk_teardown_ui) and must not be dereferenced. Defined at the end of this
 // fragment so every registry it sweeps is visible.

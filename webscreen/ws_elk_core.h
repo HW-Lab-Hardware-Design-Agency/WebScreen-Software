@@ -44,15 +44,6 @@ extern "C" {
 static char g_mqttCallbackName[32];  // Big enough for a function name
 static char g_mqttBrokerCopy[128];   // Persistent copy of broker hostname for PubSubClient
 
-// MQTT message queue — onMqttMessage stores here, JS polls via mqtt_has_message()
-static bool g_mqttMsgPending = false;
-static char g_mqttMsgTopic[128];
-static char g_mqttMsgPayload[1024];
-
-static bool g_mqttMsgReady = false;
-static unsigned long lastMqttReconnectAttempt = 0;
-static unsigned long lastWiFiReconnectAttempt = 0;
-
 /******************************************************************************
  * A) Elk Memory + Global Instances
  ******************************************************************************/

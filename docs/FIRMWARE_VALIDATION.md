@@ -18,6 +18,11 @@ When another branch uses LVGL 9, keep a separate library collection containing
 version; do not compile this branch against LVGL 9 or its configuration.
 Build into `/tmp`; tracked `webscreen/build/` exports are release artifacts.
 
+The JS robustness pass was validated on 2026-09-08 with the versions above:
+the ESP32-S3 build passed at 2,972,459 bytes of flash (94%) and 110,696 bytes of
+static RAM (33%). The native sanitizer suite passed. Physical-device checks
+below remain pending; these results do not measure on-device frame rate.
+
 ## Native regression tests
 
 Requires Python 3, GCC/G++, and address/undefined-behavior sanitizer runtimes.
@@ -32,12 +37,16 @@ python3 tests/run_host_tests.py \
 
 Use `--sanitizer-lib-dir /path/to/runtime/libs` when sanitizer libraries are
 installed outside the compiler's search path. AddressSanitizer, LeakSanitizer,
-and UndefinedBehaviorSanitizer remain enabled.
+and UndefinedBehaviorSanitizer remain enabled, including float-to-integer overflow checks.
 
 Coverage includes serial overflow/recovery, color parsing, timer self-deletion
 and errors, execution budgets, independent line storage, widget ownership,
 chart zoom/ticks and scatter cleanup, meter registry limits, label text,
-memory filesystem seeks, and a complete 536×240 RGB565_SWAP snapshot.
+memory filesystem seeks, and a complete 536×240 RGB565_SWAP snapshot. JS app
+regressions also cover elapsed-time deadlines, cancellation and subsequent eval
+recovery, expired source buffers, non-terminated string input, substring bounds,
+stale widget handles, timer/object quotas, invalid numeric arguments, MQTT queue
+overflow and subscription restoration, and RAM-image bounds/reference lifetimes.
 
 ## Device checks
 
@@ -57,6 +66,13 @@ memory filesystem seeks, and a complete 536×240 RGB565_SWAP snapshot.
    must contain exactly 257,280 bytes, in big-endian RGB565 order.
 6. Test offline operation, WiFi reconnect, unreachable NTP/MQTT servers,
    `/ping`, MQTT subscriptions after reconnect, and BLE connect/write/notify.
+7. Subscribe to two MQTT topics, send bursts of messages, and inspect topic/payload
+   ordering plus `mqtt_dropped()`. Reconnect the broker and verify both topics
+   resume. Check that oversized publications fail rather than send partial JSON.
+8. Write and read a temporary SD file containing quotes and newlines; compare
+   exact content and delete it. Load a short raw-image file and expect -1.
+   Try freeing a valid RAM image while its widget or meter needle uses it:
+   expect `false`, then delete the consumers and expect `true`.
 
 Host tests and builds cannot validate panel timing, SD reliability, power
 behavior, or radio operation. HTTP/MQTT calls and interactive serial transfers

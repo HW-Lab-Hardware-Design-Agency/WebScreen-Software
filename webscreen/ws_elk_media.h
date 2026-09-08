@@ -116,7 +116,9 @@ static jsval_t js_gif_free(struct js *js, jsval_t *args, int nargs) {
  * F2) Load image file from SD into a RamImage slot
  ******************************************************************************/
 
-bool load_image_file_into_ram(const char *path, RamImage *outImg) {
+#include "webscreen_ram_image.h"
+
+bool load_image_file_into_ram(const char *path, RamImage *outImg, int width, int height) {
   File f = SD_MMC.open(path, FILE_READ);
   if (!f) {
     LOGF("Failed to open %s\n", path);
@@ -125,6 +127,11 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   size_t fileSize = f.size();
   LOGF("File %s is %u bytes\n", path, (unsigned)fileSize);
 
+  if (!webscreen_raw_image_valid(fileSize, width, height)) {
+    LOG("RAM image: expected width * height * 2 bytes of raw RGB565 data (max 2 MiB)");
+    f.close();
+    return false;
+  }
   uint8_t *buf = (uint8_t *)ps_malloc(fileSize);
   if (!buf) {
     LOGF("Failed to allocate %u bytes in PSRAM\n", (unsigned)fileSize);
@@ -152,13 +159,9 @@ bool load_image_file_into_ram(const char *path, RamImage *outImg) {
   d->data_size = fileSize;
   d->data = buf;
   d->header.always_zero = 0;
-  d->header.w = 200;
-  d->header.h = 200;
+  d->header.w = width;
+  d->header.h = height;
   d->header.cf = LV_IMG_CF_TRUE_COLOR;
-  // or LV_IMG_CF_RAW if using a custom decoder
-
-  // If you can't know width/height from file alone, you may just guess or parse
-  // For a PNG/JPG you'd typically use an external decoder to fill w,h
 
   LOG("Image loaded into PSRAM successfully");
   return true;

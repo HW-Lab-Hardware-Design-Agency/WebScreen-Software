@@ -1,10 +1,13 @@
 // Elk timers: included by ws_elk_basics.h on the LVGL-owning task.
 #include <math.h>
+#include "webscreen_js_args.h"
+#include "webscreen_js_execution.h"
 
 // In webscreen_runtime.cpp: restart the app in place, never a reboot; _auto keeps safe mode and counts toward the give-up ladder.
 extern "C" void webscreen_runtime_request_restart(const char *reason);
 extern "C" void webscreen_runtime_request_restart_auto(const char *reason);
 extern "C" void webscreen_runtime_note_js_error(const char *msg);
+extern "C" jsval_t webscreen_runtime_eval_guarded(const char *code, size_t length, uint32_t budget_ms);
 
 struct ElkTimerCtx {
   bool executing;
@@ -15,6 +18,7 @@ struct ElkTimerCtx {
 
 // Consecutive failed evals of one timer before requesting an in-place app restart.
 static const uint32_t JS_ERROR_STREAK_LIMIT = 10;
+static const unsigned WEBSCREEN_MAX_JS_TIMERS = 32;
 
 static uint32_t g_js_error_streak = 0;
 
@@ -51,7 +55,7 @@ static void elk_timer_cb(lv_timer_t *timer) {
   snprintf(snippet, sizeof(snippet), "%s();", func_name);
 
   ctx->executing = true;
-  jsval_t res = js_eval(js, snippet, strlen(snippet));
+  jsval_t res = webscreen_runtime_eval_guarded(snippet, strlen(snippet), WEBSCREEN_JS_CALLBACK_TIMEOUT_MS);
   ctx->executing = false;
   // timer_delete() may have removed this timer while its JS callback ran.
   if (ctx->deleted) {
@@ -131,15 +135,28 @@ static jsval_t js_create_timer(struct js *js, jsval_t *args, int nargs) {
   char *func_name_str = js_getstr(js, args[0], &func_name_len);
   double period = js_getnum(args[1]);
 
-  if (!func_name_str || func_name_len == 0 ||
+  if (!webscreen_callback_name(func_name_str, func_name_len) || js_type(args[1]) != JS_NUM ||
       !isfinite(period) || period < 1 || period > INT32_MAX) {
-    return js_mknull();
+    return js_mkfalse();
   }
+
+  unsigned count = 0;
+  for (auto *timer = lv_timer_get_next(nullptr); timer; timer = lv_timer_get_next(timer)) {
+    if (timer->timer_cb != elk_timer_cb) continue;
+    count++;
+    auto *ctx = (ElkTimerCtx *)timer->user_data;
+    if (ctx && strlen(ctx->name) == func_name_len && memcmp(ctx->name, func_name_str, func_name_len) == 0) {
+      lv_timer_set_period(timer, (uint32_t)period);
+      lv_timer_reset(timer);
+      return js_mknull();
+    }
+  }
+  if (count >= WEBSCREEN_MAX_JS_TIMERS) return js_mkfalse();
 
   ElkTimerCtx *ctx = (ElkTimerCtx *)malloc(sizeof(ElkTimerCtx));
   if (!ctx) {
     LOG("Failed to allocate memory for timer context");
-    return js_mknull();
+    return js_mkfalse();
   }
   ctx->executing = false;
   ctx->deleted = false;
@@ -148,14 +165,14 @@ static jsval_t js_create_timer(struct js *js, jsval_t *args, int nargs) {
     LOGF("create_timer: function name too long (max %u chars)\n",
          (unsigned)(sizeof(ctx->name) - 1));
     free(ctx);
-    return js_mknull();
+    return js_mkfalse();
   }
   memcpy(ctx->name, func_name_str, func_name_len);
   ctx->name[func_name_len] = '\0';
 
   if (!lv_timer_create(elk_timer_cb, (uint32_t)period, ctx)) {
     free(ctx);
-    return js_mknull();
+    return js_mkfalse();
   }
 
   LOGF("Created LVGL timer to call JS function '%s' every %dms\n", ctx->name, (int)period);

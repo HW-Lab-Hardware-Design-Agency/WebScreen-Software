@@ -19,7 +19,7 @@ if not (lvgl / 'lvgl.h').is_file():
     parser.error('--lvgl must point to an LVGL 8.3 library directory')
 build = args.build_dir or Path(tempfile.mkdtemp(prefix='webscreen-host-tests-'))
 build.mkdir(parents=True, exist_ok=True)
-flags = ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+flags = ['-O1', '-g', '-fsanitize=address,undefined,float-cast-overflow', '-fno-omit-frame-pointer',
          '-fno-pie', '-DLV_TICK_CUSTOM=0', '-DLV_CONF_INCLUDE_SIMPLE', '-I' + str(ROOT),
          '-I' + str(ROOT / 'webscreen'), '-I' + str(lvgl)]
 sources = sorted((lvgl / 'src').rglob('*.c')) + [ROOT / 'webscreen/elk.c', ROOT / 'tests/host_regressions.cpp']

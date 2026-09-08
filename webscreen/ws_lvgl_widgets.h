@@ -50,6 +50,7 @@ static jsval_t js_lvgl_draw_label(struct js *js, jsval_t *args, int nargs) {  //
     lv_obj_set_style_text_font(label, font, 0);
   }
 
+  store_lv_obj(label);
   return js_mknull();
 }
 
@@ -66,7 +67,7 @@ static jsval_t js_lvgl_draw_rect(struct js *js, jsval_t *args, int nargs) {
   // Optional color parameter (default: green 0x00ff00)
   uint32_t color = 0x00ff00;
   if (nargs >= 5) {
-    color = (uint32_t)js_getnum(args[4]);
+    color = (uint32_t)(int32_t)js_getnum(args[4]);
   }
 
   lv_obj_t *rect = lv_obj_create(lv_scr_act());
@@ -103,38 +104,14 @@ static jsval_t js_lvgl_show_image(struct js *js, jsval_t *args, int nargs) {
   lv_obj_set_pos(img, x, y);
 
   LOGF("show_image: '%s' at (%d,%d)\n", lvglPath.c_str(), x, y);
+  store_lv_obj(img);
   return js_mknull();
 }
 
 /******************************************************************************
  * G2) create_image, rotate_obj, move_obj, animate_obj (Object Handle Approach)
  ******************************************************************************/
-// std::vector-based registry
-#include <vector>
-#include <mutex>
-static std::vector<lv_obj_t *> g_objects;
-static std::mutex g_obj_mtx;
-
-static int store_lv_obj(lv_obj_t *obj) {
-  std::lock_guard<std::mutex> lock(g_obj_mtx);
-  for (size_t i = 0; i < g_objects.size(); ++i)
-    if (!g_objects[i]) {
-      g_objects[i] = obj;
-      return (int)i;
-    }
-  g_objects.push_back(obj);
-  return (int)(g_objects.size() - 1);
-}
-
-static lv_obj_t *get_lv_obj(int h) {
-  std::lock_guard<std::mutex> lock(g_obj_mtx);
-  return (h >= 0 && h < (int)g_objects.size()) ? g_objects[h] : nullptr;
-}
-
-static void release_lv_obj(int h) {
-  std::lock_guard<std::mutex> lock(g_obj_mtx);
-  if (h >= 0 && h < (int)g_objects.size()) g_objects[h] = nullptr;
-}
+#include "webscreen_object_registry.h"
 
 // Helper functions to extract RGB components from lv_color_t
 
@@ -170,7 +147,7 @@ static jsval_t js_create_image(struct js *js, jsval_t *args, int nargs) {
   return js_mknum(handle);
 }
 
-// create_image_from_ram("/somefile.bin", x, y)
+// create_image_from_ram("/somefile.bin", x, y [, width, height])
 static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     LOG("create_image_from_ram: expects path, x, y");
@@ -195,7 +172,9 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
   }
   RamImage *ri = &g_ram_images[slot];
 
-  if (!load_image_file_into_ram(path.c_str(), ri)) {
+  int width = nargs >= 4 ? (int)js_getnum(args[3]) : 200;
+  int height = nargs >= 5 ? (int)js_getnum(args[4]) : 200;
+  if (!load_image_file_into_ram(path.c_str(), ri, width, height)) {
     LOG("Could not load image into RAM");
     return js_mknum(-1);
   }
@@ -208,14 +187,16 @@ static jsval_t js_create_image_from_ram(struct js *js, jsval_t *args, int nargs)
   int handle = store_lv_obj(img);
   LOGF("create_image_from_ram: '%s' => ram slot=%d => handle %d\n",
        path.c_str(), slot, handle);
+  if (handle < 0) {
+    lv_img_cache_invalidate_src(&ri->dsc);
+    free(ri->buffer);
+    *ri = {};
+  }
   return js_mknum(handle);
 }
 
 // ram_image_free(slot) => free a RamImage slot's PSRAM buffer and mark it
-// reusable. Returns true on success, false for invalid/unused slots.
-// CALLER CONTRACT: if a live lv_img widget still shows this slot, the app
-// must delete that widget first (obj_delete) — LVGL keeps a raw pointer to
-// the descriptor/buffer and would render freed PSRAM.
+// reusable. Refuse buffers still referenced by an image or meter needle.
 static jsval_t js_ram_image_free(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
   int slot = (int)js_getnum(args[0]);
@@ -223,6 +204,7 @@ static jsval_t js_ram_image_free(struct js *js, jsval_t *args, int nargs) {
     return js_mkfalse();
   }
   RamImage *ri = &g_ram_images[slot];
+  if (webscreen_image_in_use(lv_scr_act(), &ri->dsc)) return js_mkfalse();
   lv_img_cache_invalidate_src(&ri->dsc);
   if (ri->buffer != NULL) free(ri->buffer);
   ri->used = false;
@@ -339,27 +321,7 @@ static jsval_t js_obj_delete(struct js *js, jsval_t *args, int nargs) {
     LOGF("obj_delete: invalid handle %d\n", handle);
     return js_mknull();
   }
-  // lv_obj_del also deletes every descendant, so before deleting we sweep the
-  // registry and null every handle whose object is the target or sits below
-  // it in the widget tree (parent chains are still valid at this point).
-  // This keeps child handles from dangling; objects re-parented OUT of this
-  // subtree are unaffected. Must run before lv_obj_del.
-  {
-    std::lock_guard<std::mutex> lock(g_obj_mtx);
-    for (size_t i = 0; i < g_objects.size(); ++i) {
-      for (lv_obj_t *p = g_objects[i]; p != nullptr; p = lv_obj_get_parent(p)) {
-        if (p == obj) {
-          g_objects[i] = nullptr;
-          break;
-        }
-      }
-    }
-  }
-  // Same sweep for the sub-object registries: lv_obj_del's destructors free
-  // chart series, meter scales/indicators and spans together with their
-  // widget, so any slot owned by this subtree must be nulled first or a stale
-  // handle would pass validation and reach freed memory.
-  release_subobjects_owned_by(obj);
+  // Delete events release handles and subobjects for the entire subtree.
   lv_obj_del(obj);
   LOGF("obj_delete: handle %d deleted\n", handle);
   return js_mknull();

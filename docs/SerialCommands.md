@@ -323,6 +323,8 @@ WebScreen> /restart_app
 - Leave safe mode after fixing a failing script
 
 #### `/eval <js-code>`
+
+Execution is limited to one second of elapsed time and the engine's statement budget. Busy JavaScript cooperates with `/load` and `/restart_app` cancellation. Synchronous native HTTP/MQTT calls must return before cancellation or elapsed-time checks take effect.
 Evaluates a one-line JavaScript snippet **inside the running app**, sharing its globals and engine state — a live REPL for inspecting or poking at a running script.
 
 **Usage:**

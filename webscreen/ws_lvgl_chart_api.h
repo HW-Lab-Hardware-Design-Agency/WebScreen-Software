@@ -149,7 +149,7 @@ static jsval_t js_lv_chart_add_series(struct js *js, jsval_t *args, int nargs) {
   bool available = false;
   for (auto *series : g_chart_series) if (!series) available = true;
   if (!available) return js_mknum(-1);
-  lv_chart_series_t *ser = lv_chart_add_series(obj, lv_color_hex((uint32_t)col), (lv_chart_axis_t)axis);
+  lv_chart_series_t *ser = lv_chart_add_series(obj, lv_color_hex((uint32_t)(int32_t)col), (lv_chart_axis_t)axis);
   if (!ser) return js_mknum(-1);
   // LVGL 8.3 does not initialize the X-buffer ownership flag or its values.
   ser->x_ext_buf_assigned = false;

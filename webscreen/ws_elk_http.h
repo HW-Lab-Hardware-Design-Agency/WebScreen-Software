@@ -268,61 +268,9 @@ static jsval_t js_str_index_of(struct js *js, jsval_t *args, int nargs) {
   }
   String needleStr(needle_cstr, needle_len);
 
-  // Strip surrounding quotes if present
-  if (haystackStr.startsWith("\"") && haystackStr.endsWith("\"") && haystackStr.length() >= 2) {
-    haystackStr = haystackStr.substring(1, haystackStr.length() - 1);
-  }
-  if (needleStr.startsWith("\"") && needleStr.endsWith("\"") && needleStr.length() >= 2) {
-    needleStr = needleStr.substring(1, needleStr.length() - 1);
-  }
-
   return js_mknum(haystackStr.indexOf(needleStr));
 }
 
-// Bridging function to perform string substring extraction
-static jsval_t js_str_substring(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 3) {
-    LOG("str_substring: Not enough arguments");
-    return js_mkstr(js, "", 0);
-  }
-
-  // Retrieve string
-  size_t str_len;
-  char *str_cstr = js_getstr(js, args[0], &str_len);
-  if (!str_cstr) {
-    LOG("str_substring: Argument 1 is not a string");
-    return js_mkstr(js, "", 0);
-  }
-  String strStr(str_cstr, str_len);
-
-  // Check if arguments 2 and 3 are numbers
-  if (js_type(args[1]) != JS_NUM || js_type(args[2]) != JS_NUM) {
-    LOG("str_substring: Arguments 2 and 3 must be numbers");
-    return js_mkstr(js, "", 0);
-  }
-
-  // Extract numerical values
-  int start = (int)js_getnum(args[1]);
-  int length = (int)js_getnum(args[2]);
-
-  // Strip surrounding quotes if present
-  if (strStr.startsWith("\"") && strStr.endsWith("\"") && strStr.length() >= 2) {
-    strStr = strStr.substring(1, strStr.length() - 1);
-  }
-
-  // Handle negative length (extract until end)
-  if (length < 0) {
-    strStr = strStr.substring(start);
-  } else {  // Ensure that start + length does not exceed string length
-    int end = start + length;
-    if (end > (int)strStr.length()) {
-      end = strStr.length();
-    }
-    strStr = strStr.substring(start, end);
-  }
-
-  return js_mkstr(js, strStr.c_str(), strStr.length());
-}
 // TLS handshake transiently needs ~45KB of contiguous internal heap;
 // attempting it any lower fails deep inside mbedTLS and can reset the device
 // instead of failing the request.

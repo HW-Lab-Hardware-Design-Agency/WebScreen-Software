@@ -163,7 +163,7 @@ static jsval_t js_obj_add_style(struct js *js, jsval_t *args, int nargs) {
     double color = js_getnum(args[1]);                           \
     lv_style_t *st = get_lv_style(styleH);                       \
     if (!st) return js_mknull();                                 \
-    lv_setter(st, lv_color_hex((uint32_t)color));                \
+    lv_setter(st, lv_color_hex((uint32_t)(int32_t)color));       \
     return js_mknull();                                          \
   }
 
@@ -216,8 +216,8 @@ WS_STYLE_SETTER_NUM(js_style_set_pad_hor, lv_style_set_pad_hor, int, int)
 // Some dimension-related style props
 WS_STYLE_SETTER_NUM(js_style_set_width, lv_style_set_width, int, lv_coord_t)
 WS_STYLE_SETTER_NUM(js_style_set_height, lv_style_set_height, int, lv_coord_t)
-WS_STYLE_SETTER_NUM(js_style_set_x, lv_style_set_x, double, lv_coord_t)
-WS_STYLE_SETTER_NUM(js_style_set_y, lv_style_set_y, double, lv_coord_t)
+WS_STYLE_SETTER_NUM(js_style_set_x, lv_style_set_x, int, lv_coord_t)
+WS_STYLE_SETTER_NUM(js_style_set_y, lv_style_set_y, int, lv_coord_t)
 
 /******************************************************************************
  * H2) Additional object property functions
@@ -370,7 +370,7 @@ static jsval_t js_obj_set_style_base_dir(struct js *js, jsval_t *args, int nargs
 
 // Slot registry for chart series (mirrors g_style_map). Series, meter scales,
 // meter indicators and spans are not lv_obj_t, so they cannot live in
-// g_objects; they used to be handed to JS as raw pointers packed into doubles
+// the widget registry; they used to be handed to JS as raw pointers packed into doubles
 // and cast straight back — any wrong/stale/NaN number became a wild pointer
 // dereference inside LVGL (LoadProhibited reset). JS now gets a small slot
 // index; apps that just pass the returned number back in keep working.

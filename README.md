@@ -17,7 +17,7 @@ WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Ge
 ### Hardware Integration
 - **ESP32-S3 Platform**: Full PSRAM support and optimized memory allocation
 - **RM67162 Display**: 536x240 AMOLED with QSPI interface and brightness control
-- **Power Management**: Smart power button handling on GPIO 33
+- **Power Management**: Smart power button handling on GPIO 21
 - **Storage Interface**: SD_MMC card support with robust initialization
 
 ### Networking & Connectivity  
@@ -72,15 +72,16 @@ This is the easiest way to get started with WebScreen without any development se
 
 2. **Install ESP32 Boards**
    ```
-   Tools → Board Manager → Search "ESP32" → Install v2.0.3+
+   Tools → Board Manager → Search "ESP32" → Install v3.3.2 (tested)
    ```
 
 3. **Install Required Libraries**
    ```
    Library Manager → Install:
    - ArduinoJson (by Benoit Blanchon) - v6.x or later
-   - LVGL (by kisvegabor) - v8.3.X
+   - LVGL (by kisvegabor) - v8.3.11 (this branch remains on LVGL 8)
    - PubSubClient (by Nick O'Leary) - v2.8 or later
+   - NimBLE-Arduino (by h2zero) - v2.3.1 (2.x callbacks)
    ```
 
 4. **Configure LVGL**
@@ -92,7 +93,9 @@ This is the easiest way to get started with WebScreen without any development se
    Key LVGL settings configured for WebScreen:
    - Color depth: 16-bit (RGB565) with byte swap enabled
    - Custom memory management using stdlib malloc/free
-   - Display refresh: 30ms for stability
+   - Display refresh: 30ms; one shared 40-line draw buffer
+   - Custom monotonic clock from `esp_timer_get_time()`; no periodic 1ms interrupt
+   - Snapshots enabled; screenshot storage allocated in PSRAM
    - **Enabled fonts**: Montserrat 14, 20, 28, 34, 40, 44, 48
    - **Image formats**: PNG, GIF, SJPG (BMP disabled)
    - **Widgets**: Label, Image, Arc, Line, Button, Chart, Meter, Span
@@ -108,6 +111,7 @@ This is the easiest way to get started with WebScreen without any development se
    - **Board**: ESP32S3 Dev Module  
    - **CPU Frequency**: 240MHz
    - **Flash Size**: 16MB (or your board's flash size)
+   - **Partition Scheme**: 16M Flash (3MB APP/9.9MB FATFS), `app3M_fat9M_16MB`
    - **PSRAM**: OPI PSRAM  
    - **USB CDC On Boot**: Enabled
    - **Upload Speed**: 921600
@@ -116,7 +120,17 @@ This is the easiest way to get started with WebScreen without any development se
 
 #### Option 3: Direct Compilation
 
-For advanced users who want to modify the source code, you can compile directly from the Arduino IDE following the steps above.
+After installing the libraries and copying `lv_conf.h` as above:
+
+```sh
+arduino-cli compile \
+  -b esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,CDCOnBoot=cdc \
+  --build-path /tmp/webscreen-build --warnings all -j 6 webscreen
+```
+
+See [firmware validation](docs/FIRMWARE_VALIDATION.md) for native sanitizer tests,
+using an isolated LVGL 8 library, and device smoke checks. The stability backport
+and compatibility details are recorded in [the review](docs/LVGL8_REVIEW.md).
 
 ### Hardware Setup
 
@@ -130,8 +144,8 @@ For advanced users who want to modify the source code, you can compile directly 
 
 #### Power Button
 - **Single Press**: Toggle screen on/off
-- **Long Press**: System functions (if implemented)
-- **Pin**: GPIO 33 (INPUT_PULLUP)
+- **Long Press**: Power off (hold for 3 seconds)
+- **Pin**: GPIO 21 (INPUT_PULLUP)
 
 ## Configuration
 

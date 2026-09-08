@@ -1,8 +1,9 @@
 #include "webscreen_runtime.h"
 #include "webscreen_main.h"
 #include "webscreen_network.h"
+#include "webscreen_base64.h"
+#include "webscreen_snapshot.h"
 #include <lvgl.h>
-#include "tick.h"
 #include "pins_config.h"
 #include "rm67162.h"
 #include "globals.h"
@@ -19,7 +20,6 @@ static String g_current_script_file = "";
 static String g_fallback_text = "WebScreen v" WEBSCREEN_VERSION_STRING "\nFallback Mode\nSD card or script not found";
 static String g_last_error = "";
 static uint32_t g_runtime_start_time = 0;
-static bool g_lvgl_initialized = false;
 
 extern struct js* js;
 extern uint8_t *elk_memory;
@@ -29,11 +29,7 @@ static TaskHandle_t g_js_task_handle = NULL;
 static bool g_js_engine_initialized = false;
 static String g_js_script_content = "";
 
-// Script source in PSRAM — Elk stores function bodies as pointers into the
-// original source string.  If that buffer lives on the regular heap, any heap
-// corruption (e.g. from lwip/PubSubClient) silently damages function bodies
-// and causes "; expected" parse errors.  PSRAM is a separate address space,
-// immune to regular-heap overflow/corruption.
+// Prefer PSRAM for large script text; Elk copies function bodies into its arena.
 static char  *g_js_script_psram     = nullptr;
 static size_t g_js_script_psram_len = 0;
 
@@ -42,7 +38,6 @@ static unsigned long g_last_wifi_reconnect_attempt = 0;
 
 // g_wifiClient and g_mqttClient are defined in lvgl_elk.h (included above)
 static uint32_t g_loop_count = 0;
-static uint32_t g_last_performance_check = 0;
 static uint32_t g_avg_loop_time_us = 0;
 static uint32_t g_max_loop_time_us = 0;
 
@@ -63,7 +58,10 @@ bool webscreen_runtime_start_javascript(const char* script_file) {
 
   webscreen_runtime_shutdown();
 
-  init_lvgl_display();
+  if (!init_lvgl_display()) {
+    g_last_error = "Failed to initialize display";
+    return false;
+  }
 
   if (!webscreen_runtime_init_sd_filesystem()) {
     g_last_error = "Failed to initialize SD filesystem";
@@ -101,23 +99,7 @@ bool webscreen_runtime_start_javascript(const char* script_file) {
   g_runtime_start_time = WEBSCREEN_MILLIS();
   g_last_error = "";
 
-  WEBSCREEN_DEBUG_PRINTLN("JavaScript runtime started (simulated)");
-  return true;
-}
-bool webscreen_runtime_start_fallback(void) {
-  WEBSCREEN_DEBUG_PRINTLN("Starting fallback application");
-  webscreen_runtime_shutdown();
-  if (!webscreen_runtime_init_lvgl()) {
-    g_last_error = "Failed to initialize LVGL for fallback";
-    return false;
-  }
-
-  g_javascript_active = false;
-  g_fallback_active = true;
-  g_runtime_start_time = WEBSCREEN_MILLIS();
-  g_last_error = "";
-
-  WEBSCREEN_DEBUG_PRINTLN("Fallback application started");
+  WEBSCREEN_DEBUG_PRINTLN("JavaScript runtime started");
   return true;
 }
 void webscreen_runtime_loop_javascript(void) {
@@ -125,34 +107,7 @@ void webscreen_runtime_loop_javascript(void) {
     return;
   }
 
-  vTaskDelay(pdMS_TO_TICKS(50));
-}
-void webscreen_runtime_loop_fallback(void) {
-  if (!g_fallback_active) {
-    return;
-  }
-  webscreen_runtime_lvgl_timer_handler();
-  static uint32_t last_update = 0;
-  static int animation_frame = 0;
-
-  if (WEBSCREEN_MILLIS() - last_update > 1000) {  // Update every second
-    last_update = WEBSCREEN_MILLIS();
-    animation_frame++;
-    String animated_text = g_fallback_text;
-    for (int i = 0; i < (animation_frame % 4); i++) {
-      animated_text += ".";
-    }
-
-    WEBSCREEN_DEBUG_PRINTF("Fallback frame %d: %s\n", animation_frame, animated_text.c_str());
-  }
-  if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
-    input.trim();
-
-    if (input.length() > 0) {
-      webscreen_runtime_set_fallback_text(input.c_str());
-    }
-  }
+  vTaskDelay(pdMS_TO_TICKS(5));
 }
 void webscreen_runtime_shutdown(void) {
   if (g_javascript_active || g_fallback_active) {
@@ -194,27 +149,6 @@ const char* webscreen_runtime_get_javascript_status(void) {
 
   return status.c_str();
 }
-bool webscreen_runtime_execute_javascript(const char* code) {
-  if (!g_javascript_active || !code) {
-    return false;
-  }
-  WEBSCREEN_DEBUG_PRINTF("Executing JS: %s\n", code);
-  if (strstr(code, "print(")) {
-
-    const char* start = strchr(code, '"');
-    if (start) {
-      start++;  // Skip opening quote
-      const char* end = strchr(start, '"');
-      if (end) {
-        String text = String(start).substring(0, end - start);
-        webscreen_runtime_set_fallback_text(text.c_str());
-        return true;
-      }
-    }
-  }
-
-  return true;  // Simulate successful execution
-}
 void webscreen_runtime_get_javascript_stats(uint32_t* exec_count,
                                             uint32_t* avg_time_us,
                                             uint32_t* error_count) {
@@ -225,70 +159,31 @@ void webscreen_runtime_get_javascript_stats(uint32_t* exec_count,
 bool webscreen_runtime_is_fallback_active(void) {
   return g_fallback_active;
 }
-void webscreen_runtime_set_fallback_text(const char* text) {
-  if (text) {
-    g_fallback_text = text;
-    WEBSCREEN_DEBUG_PRINTF("Fallback text updated: %s\n", text);
-  }
-}
-
-const char* webscreen_runtime_get_fallback_status(void) {
-  if (!g_fallback_active) {
-    return "Fallback application inactive";
-  }
-
-  static String status;
-  status = "Fallback active - Uptime: ";
-  status += (WEBSCREEN_MILLIS() - g_runtime_start_time);
-  status += "ms";
-
-  return status.c_str();
-}
-bool webscreen_runtime_init_lvgl(void) {
-
-  g_lvgl_initialized = true;
-  return true;
-}
-void webscreen_runtime_lvgl_timer_handler(void) {
-  if (g_lvgl_initialized) {
-    lv_timer_handler();
-  }
-}
-
-void* webscreen_runtime_get_lvgl_display(void) {
-  if (g_lvgl_initialized) {
-    return lv_disp_get_default();
-  }
-  return nullptr;
-}
-void webscreen_runtime_set_background_color(uint32_t color) {
-  WEBSCREEN_DEBUG_PRINTF("Background color set to 0x%06X\n", color);
-  if (g_lvgl_initialized) {
-    lv_obj_t* scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(color), 0);
-  }
-}
-void webscreen_runtime_set_foreground_color(uint32_t color) {
-  WEBSCREEN_DEBUG_PRINTF("Foreground color set to 0x%06X\n", color);
-  if (g_lvgl_initialized) {
-    lv_obj_t* scr = lv_scr_act();
-    lv_obj_set_style_text_color(scr, lv_color_hex(color), 0);
-  }
-}
 void webscreen_runtime_get_memory_usage(uint32_t* js_heap_used,
                                         uint32_t* lvgl_memory_used,
                                         uint32_t* total_runtime_memory) {
-
-  if (js_heap_used) *js_heap_used = g_javascript_active ? 50000 : 0;
-  if (lvgl_memory_used) *lvgl_memory_used = 100000;
-  if (total_runtime_memory) *total_runtime_memory = 150000;
+  if (js_heap_used) *js_heap_used = js ? (uint32_t)js_usage(js) : 0;
+  if (lvgl_memory_used) *lvgl_memory_used = (uint32_t)(ESP.getHeapSize() - ESP.getFreeHeap());
+  if (total_runtime_memory) *total_runtime_memory = js ? (uint32_t)js_total(js) : 0;
 }
+
+void webscreen_runtime_get_js_arena(uint32_t* used, uint32_t* total) {
+  if (used) *used = js ? (uint32_t)js_usage(js) : 0;
+  if (total) *total = js ? (uint32_t)js_total(js) : 0;
+}
+
 bool webscreen_runtime_garbage_collect(void) {
-  if (g_javascript_active) {
-    WEBSCREEN_DEBUG_PRINTLN("JavaScript garbage collection triggered");
+  // Only requests a GC; the JS task runs it at its next safe point (mid-eval compaction corrupts the arena).
+  if (g_javascript_active && js != NULL) {
+    g_js_gc_requested = true;
+    WEBSCREEN_DEBUG_PRINTLN("JavaScript garbage collection requested");
     return true;
   }
   return false;
+}
+
+void webscreen_runtime_set_js_heap_kb(int kb) {
+  set_elk_heap_kb(kb);
 }
 
 const char* webscreen_runtime_get_last_error(void) {
@@ -299,23 +194,6 @@ void webscreen_runtime_clear_errors(void) {
 }
 bool webscreen_runtime_has_errors(void) {
   return g_last_error.length() > 0;
-}
-void webscreen_runtime_set_performance_monitoring(bool enable) {
-  WEBSCREEN_DEBUG_PRINTF("Performance monitoring: %s\n", enable ? "Enabled" : "Disabled");
-
-  if (enable) {
-    g_loop_count = 0;
-    g_avg_loop_time_us = 0;
-    g_max_loop_time_us = 0;
-    g_last_performance_check = WEBSCREEN_MILLIS();
-  }
-}
-void webscreen_runtime_get_performance_stats(uint32_t* avg_loop_time_us,
-                                             uint32_t* max_loop_time_us,
-                                             uint32_t* fps) {
-  if (avg_loop_time_us) *avg_loop_time_us = g_avg_loop_time_us;
-  if (max_loop_time_us) *max_loop_time_us = g_max_loop_time_us;
-  if (fps) *fps = g_avg_loop_time_us > 0 ? (1000000 / g_avg_loop_time_us) : 0;
 }
 void webscreen_runtime_print_status(void) {
   WEBSCREEN_DEBUG_PRINTLN("\n=== RUNTIME STATUS ===");
@@ -361,18 +239,12 @@ bool webscreen_runtime_init_javascript_engine(void) {
     return false;
   }
 
-  // Disable Elk's automatic GC (set threshold to full heap size).
-  //
-  // Elk's GC triggers inside js_stmt() at the start of EVERY statement,
-  // including during nested function calls. GC compacts the heap and adjusts
-  // js->code, but does NOT adjust the saved `code` pointer on the C stack in
-  // do_call_op(). This leaves a dangling pointer that causes "; expected"
-  // parse errors after the function returns.
-  //
-  // Manual GC via js_gc(js) in the timer callback (every 60 iterations,
-  // BETWEEN js_eval calls) is safe because no saved code pointers exist
-  // on the stack at that point.
-  js_setgct(js, elk_memory_size);  // Never auto-trigger; rely on manual GC
+  // Auto-GC at 3/4 arena; elk.c skips collection while F_CALL is set, so compaction only happens at top-level statement boundaries.
+  js_setgct(js, (elk_memory_size / 4) * 3);
+
+  // C-stack ceiling + step budget turn runaway scripts (deep recursion, while(true){}) into recoverable JS errors.
+  js_setmaxcss(js, 10 * 1024);
+  js_setmaxsteps(js, 2 * 1000 * 1000);
 
   webscreen_runtime_register_js_functions();
 
@@ -393,31 +265,39 @@ bool webscreen_runtime_load_script(const char* script_file) {
     return false;
   }
 
-  g_js_script_content = file.readString();
-  file.close();
-
-  if (g_js_script_content.length() == 0) {
-    WEBSCREEN_DEBUG_PRINTLN("Script file is empty");
+  size_t fsize = file.size();
+  if (fsize == 0 || fsize > 1024 * 1024 || file.isDirectory()) {
+    WEBSCREEN_DEBUG_PRINTLN("Script must be a nonempty file of at most 1 MiB");
+    file.close();
     return false;
   }
 
-  // Copy script to PSRAM so Elk's function-body pointers survive any
-  // regular-heap corruption from MQTT / lwip / PubSubClient operations.
   if (g_js_script_psram) { free(g_js_script_psram); g_js_script_psram = nullptr; }
-  g_js_script_psram_len = g_js_script_content.length();
-  g_js_script_psram = (char *)ps_malloc(g_js_script_psram_len + 1);
-  if (g_js_script_psram) {
-    memcpy(g_js_script_psram, g_js_script_content.c_str(), g_js_script_psram_len + 1);
-    // Free the regular-heap copy — we no longer need it
-    g_js_script_content = "";
-    WEBSCREEN_DEBUG_PRINTF("Script copied to PSRAM (%u bytes)\n", g_js_script_psram_len);
-  } else {
-    WEBSCREEN_DEBUG_PRINTLN("WARNING: ps_malloc failed for script, using heap copy (vulnerable to corruption)");
-    g_js_script_psram_len = 0;
-  }
+  g_js_script_psram_len = 0;
+  g_js_script_content = "";
 
-  WEBSCREEN_DEBUG_PRINTF("Script loaded successfully (%u bytes)\n",
-      g_js_script_psram ? g_js_script_psram_len : g_js_script_content.length());
+  char *buf = (char *)ps_malloc(fsize + 1);
+  if (buf) {
+    size_t got = file.read((uint8_t *)buf, fsize);
+    file.close();
+    buf[got] = '\0';
+    if (got != fsize) {
+      free(buf);
+      WEBSCREEN_DEBUG_PRINTLN("Script read failed");
+      return false;
+    }
+    g_js_script_psram = buf;
+    g_js_script_psram_len = got;
+    WEBSCREEN_DEBUG_PRINTF("Script loaded to PSRAM (%u bytes)\n", (unsigned)got);
+  } else {
+    WEBSCREEN_DEBUG_PRINTLN("WARNING: ps_malloc failed for script, using heap copy");
+    g_js_script_content = file.readString();
+    file.close();
+    if (g_js_script_content.length() != fsize) {
+      g_js_script_content = "";
+      return false;
+    }
+  }
   return true;
 }
 bool webscreen_runtime_start_javascript_task(void) {
@@ -428,6 +308,7 @@ bool webscreen_runtime_start_javascript_task(void) {
 
   WEBSCREEN_DEBUG_PRINTLN("Starting JavaScript execution task...");
 
+  // Core 1, away from core-0 WiFi/lwip; priority 1 matches loopTask so a long JS eval can't lock out the power button.
   BaseType_t result = xTaskCreatePinnedToCore(
     webscreen_runtime_javascript_task,
     "WebScreenJS",
@@ -435,7 +316,7 @@ bool webscreen_runtime_start_javascript_task(void) {
     NULL,   // Parameters
     1,      // Priority
     &g_js_task_handle,
-    0  // Core
+    1  // Core
   );
 
   if (result != pdPASS) {
@@ -446,30 +327,352 @@ bool webscreen_runtime_start_javascript_task(void) {
   WEBSCREEN_DEBUG_PRINTLN("JavaScript task started successfully");
   return true;
 }
-void webscreen_runtime_javascript_task(void* pvParameters) {
-  WEBSCREEN_DEBUG_PRINTLN("JavaScript task started");
-  vTaskDelay(pdMS_TO_TICKS(100));
-  // Prefer the PSRAM copy (immune to regular-heap corruption).
+// ---- In-place JS app restart (flag-requested; performed by the JS task itself — it owns LVGL, no cross-task locking) ----
+static volatile bool g_js_restart_requested = false;
+static char g_js_restart_reason[64] = "";
+static uint32_t g_js_restart_failures = 0;
+static const uint32_t JS_RESTART_FAILURE_LIMIT = 2;
+static volatile bool g_js_safe_mode = false;  // Restarts kept failing; wait for user
+// /load target. Fixed buffer (a String would be realloc'd under the JS task); only the JS task assigns g_current_script_file.
+static char g_js_pending_script[96] = "";
+// Guards reason/pending-script/safe-mode handoff between loopTask and JS task.
+static portMUX_TYPE g_js_restart_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Give-up ladder for automatic restarts: 3 streak-triggered restarts without a healthy interval park the app in safe mode.
+static uint32_t g_js_auto_restart_cycles = 0;
+static uint32_t g_js_last_auto_restart_ms = 0;
+static const uint32_t JS_AUTO_RESTART_CYCLE_LIMIT = 3;
+static const uint32_t JS_HEALTHY_INTERVAL_MS = 60000;
+
+void webscreen_runtime_request_restart(const char *reason) {
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(g_js_restart_reason, reason ? reason : "unspecified", sizeof(g_js_restart_reason));
+  g_js_safe_mode = false;  // An explicit USER request always gets a fresh try
+  g_js_auto_restart_cycles = 0;
+  g_js_restart_requested = true;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+}
+
+// Automatic escalation (timer error streak). Must not lift safe mode — leftover timers of a broken script would un-park it forever.
+void webscreen_runtime_request_restart_auto(const char *reason) {
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  if (g_js_safe_mode) {
+    taskEXIT_CRITICAL(&g_js_restart_mux);
+    return;  // Parked: only /restart_app or /load may revive the app
+  }
+  uint32_t now = WEBSCREEN_MILLIS();
+  if (now - g_js_last_auto_restart_ms > JS_HEALTHY_INTERVAL_MS) {
+    g_js_auto_restart_cycles = 0;  // App ran healthy for a while — fresh ladder
+  }
+  g_js_last_auto_restart_ms = now;
+  g_js_auto_restart_cycles++;
+  strlcpy(g_js_restart_reason, reason ? reason : "unspecified", sizeof(g_js_restart_reason));
+  g_js_restart_requested = true;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+}
+
+bool webscreen_runtime_load_new_script(const char *script_file) {
+  if (!script_file || !SD_MMC.exists(script_file)) {
+    return false;
+  }
+  if (strlen(script_file) >= sizeof(g_js_pending_script)) {
+    WEBSCREEN_DEBUG_PRINTF("load_new_script: path too long (%u chars, max %u)\n",
+                           (unsigned)strlen(script_file),
+                           (unsigned)(sizeof(g_js_pending_script) - 1));
+    return false;
+  }
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(g_js_pending_script, script_file, sizeof(g_js_pending_script));
+  g_js_restart_failures = 0;
+  strlcpy(g_js_restart_reason, "script change", sizeof(g_js_restart_reason));
+  g_js_safe_mode = false;
+  g_js_auto_restart_cycles = 0;
+  g_js_restart_requested = true;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+  return true;
+}
+
+// ---- /eval REPL ----------------------------------------------------------
+static char g_js_eval_buf[256] = "";
+static volatile bool g_js_eval_pending = false;
+
+bool webscreen_runtime_eval_snippet(const char *code) {
+  if (!g_javascript_active || js == NULL || g_js_safe_mode) return false;
+  if (g_js_eval_pending) return false;  // previous snippet still in flight
+  if (!code || code[0] == '\0' || strlen(code) >= sizeof(g_js_eval_buf)) return false;
+  strlcpy(g_js_eval_buf, code, sizeof(g_js_eval_buf));
+  g_js_eval_pending = true;
+  return true;
+}
+
+// ---- Last-error record (/errors) — fixed buffer, writable from any task under the restart mux ----
+static char g_js_last_error[160] = "";
+static uint32_t g_js_last_error_ms = 0;
+
+void webscreen_runtime_note_js_error(const char *msg) {
+  if (!msg) return;
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(g_js_last_error, msg, sizeof(g_js_last_error));
+  g_js_last_error_ms = WEBSCREEN_MILLIS();
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+}
+
+void webscreen_runtime_print_error_report(void) {
+  char last[sizeof(g_js_last_error)];
+  uint32_t when, failures, cycles;
+  bool safe_mode;
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  strlcpy(last, g_js_last_error, sizeof(last));
+  when = g_js_last_error_ms;
+  failures = g_js_restart_failures;
+  cycles = g_js_auto_restart_cycles;
+  safe_mode = g_js_safe_mode;
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+
+  Serial.println("\n=== JS Error Report ===");
+  if (last[0] != '\0') {
+    Serial.printf("Last JS error (%lus ago): %s\n",
+                  (unsigned long)((WEBSCREEN_MILLIS() - when) / 1000), last);
+  } else {
+    Serial.println("Last JS error: none");
+  }
+  if (g_last_error.length() > 0) {
+    Serial.printf("Startup error: %s\n", g_last_error.c_str());
+  }
+  Serial.printf("Restart failures: %lu/%lu\n",
+                (unsigned long)failures, (unsigned long)JS_RESTART_FAILURE_LIMIT);
+  Serial.printf("Auto-restart cycles: %lu/%lu\n",
+                (unsigned long)cycles, (unsigned long)JS_AUTO_RESTART_CYCLE_LIMIT);
+  Serial.printf("Safe mode: %s\n", safe_mode ? "YES (fix the script, then /load or /restart_app)" : "no");
+  Serial.printf("Script: %s\n", g_current_script_file.length() > 0 ? g_current_script_file.c_str() : "(none)");
+}
+
+// ---- Button events (hardware callback, runs on loopTask; counters live in ws_elk_basics.h) ----
+void webscreen_runtime_notify_button(bool pressed) {
+  if (pressed) {
+    g_button_evt_produced++;
+  }
+}
+
+// ---- /screenshot (JS task captures at its safe point — LVGL must not be touched from other tasks) ----
+static volatile bool g_js_screenshot_pending = false;
+
+bool webscreen_runtime_request_screenshot(void) {
+  if (!g_javascript_active || js == NULL) return false;
+  if (g_js_screenshot_pending) return false;  // previous capture still in flight
+  g_js_screenshot_pending = true;
+  return true;
+}
+
+static void webscreen_runtime_stream_screenshot(void) {
+  lv_obj_t *screen = lv_scr_act();
+  lv_obj_update_layout(screen);
+  uint32_t size = lv_snapshot_buf_size_needed(screen, LV_IMG_CF_TRUE_COLOR);
+  uint8_t *pixels = size ? (uint8_t *)ps_malloc(size) : nullptr;
+  lv_img_dsc_t snapshot = {};
+  if (!webscreen_snapshot_take(screen, &snapshot, pixels, size)) {
+    free(pixels);
+    Serial.println("[ERROR] Screenshot failed (snapshot allocation)");
+    return;
+  }
+
+  const lv_img_dsc_t *snap = &snapshot;
+  Serial.printf("=== SCREENSHOT %ux%u RGB565%s ===\n",
+                (unsigned)snap->header.w, (unsigned)snap->header.h,
+                LV_COLOR_16_SWAP ? "_SWAP" : "");
+
+  // 57 raw bytes -> 76 base64 chars per line (classic MIME width)
+  const uint8_t *data = snap->data;
+  size_t len = snap->data_size;
+  char b64[80];
+  size_t lines = 0;
+  for (size_t off = 0; off < len; off += 57) {
+    size_t chunk = len - off;
+    if (chunk > 57) chunk = 57;
+    webscreen_base64_encode(data + off, chunk, b64);
+    Serial.println(b64);
+    // Yield so the USB-CDC TX buffer drains and the watchdog stays fed.
+    if ((++lines & 0xFF) == 0) vTaskDelay(1);
+  }
+  Serial.println("=== SCREENSHOT END ===");
+
+  free(pixels);
+}
+
+static void webscreen_runtime_show_error_screen(const char *msg) {
+  // Failed evaluations may have created widgets, timers, or network sessions.
+  elk_teardown_ui();
+  elk_teardown_media();
+  elk_teardown_comm();
+  lv_obj_t *label = lv_label_create(lv_scr_act());
+  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(label, 500);
+  lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(label, msg);
+}
+
+// On failure copies the JS error into err_buf — js_str points into the arena, which the next eval may clobber.
+static bool webscreen_runtime_eval_script(char *err_buf, size_t err_len) {
   const char *script_src = g_js_script_psram ? g_js_script_psram : g_js_script_content.c_str();
   size_t      script_len = g_js_script_psram ? g_js_script_psram_len : g_js_script_content.length();
 
-  if (js && script_len > 0) {
-    jsval_t result = js_eval(js, script_src, script_len);
-    if (js_type(result) == JS_ERR) {
-      const char *error = js_str(js, result);
-      WEBSCREEN_DEBUG_PRINT("JavaScript execution error: ");
-      WEBSCREEN_DEBUG_PRINTLN(error ? error : "unknown error");
-    } else {
-      WEBSCREEN_DEBUG_PRINTLN("JavaScript script executed successfully");
-    }
+  if (!js || script_len == 0) {
+    if (err_buf) strlcpy(err_buf, "no engine or empty script", err_len);
+    return false;
   }
-  for (;;) {
+  jsval_t result = js_eval(js, script_src, script_len);
+  if (js_type(result) == JS_ERR) {
+    const char *error = js_str(js, result);
+    if (err_buf) strlcpy(err_buf, error ? error : "unknown error", err_len);
+    return false;
+  }
+  return true;
+}
 
-    if (g_mqtt_enabled) {
-      webscreen_runtime_wifi_mqtt_maintain_loop();
+// Runs on the JS task. Teardown order matters: UI, then media buffers, then comm.
+static void webscreen_runtime_perform_inplace_restart(void) {
+  char reason[sizeof(g_js_restart_reason)];
+  char pending[sizeof(g_js_pending_script)];
+  taskENTER_CRITICAL(&g_js_restart_mux);
+  g_js_restart_requested = false;
+  strlcpy(reason, g_js_restart_reason, sizeof(reason));
+  strlcpy(pending, g_js_pending_script, sizeof(pending));
+  g_js_pending_script[0] = '\0';
+  taskEXIT_CRITICAL(&g_js_restart_mux);
+  if (pending[0] != '\0') {
+    g_current_script_file = pending;  // String writes happen only on this task
+  }
+
+  WEBSCREEN_DEBUG_PRINTF("In-place JS app restart (reason: %s, script: %s)\n",
+                         reason, g_current_script_file.c_str());
+
+  elk_teardown_ui();
+  elk_teardown_media();
+  elk_teardown_comm();
+
+  // Re-create the engine over the SAME arena and re-register the API.
+  g_js_engine_initialized = false;
+  if (!webscreen_runtime_init_javascript_engine()) {
+    webscreen_runtime_show_error_screen("WebScreen: JS engine re-init failed.\nUse /reboot to power-cycle.");
+    g_js_safe_mode = true;
+    return;
+  }
+
+  char err[128] = "";
+  bool ok = webscreen_runtime_load_script(g_current_script_file.c_str()) &&
+            webscreen_runtime_eval_script(err, sizeof(err));
+
+  if (ok) {
+    if (g_js_auto_restart_cycles >= JS_AUTO_RESTART_CYCLE_LIMIT) {
+      // Timer-error restart loop: park instead of churning. The fresh eval's timers must go, or their error streaks would re-request.
+      delete_all_elk_timers();
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+               "WebScreen: script '%s' keeps failing in its timer callbacks.\n\n"
+               "Fix the script, then run /load or /restart_app.",
+               g_current_script_file.c_str());
+      webscreen_runtime_show_error_screen(msg);
+      taskENTER_CRITICAL(&g_js_restart_mux);
+      if (!g_js_restart_requested) {
+        g_js_safe_mode = true;
+      }
+      taskEXIT_CRITICAL(&g_js_restart_mux);
+      WEBSCREEN_DEBUG_PRINTLN("JS app parked in safe mode (timer-error restart loop)");
+      return;
     }
-    lv_timer_handler();
-    vTaskDelay(pdMS_TO_TICKS(5));
+    g_js_restart_failures = 0;
+    WEBSCREEN_DEBUG_PRINTLN("JS app restarted successfully");
+    return;
+  }
+
+  g_js_restart_failures++;
+  WEBSCREEN_DEBUG_PRINTF("JS app restart failed (%u/%u): %s\n",
+                         g_js_restart_failures, JS_RESTART_FAILURE_LIMIT, err);
+  webscreen_runtime_note_js_error(err);
+  if (g_js_restart_failures >= JS_RESTART_FAILURE_LIMIT) {
+    // Park but keep serial alive. Delete timers a partial eval created — their error streaks would auto-request restarts.
+    delete_all_elk_timers();
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "WebScreen: script '%s' keeps failing:\n%s\n\n"
+             "Fix the script, then run /load or /restart_app.",
+             g_current_script_file.c_str(), err);
+    webscreen_runtime_show_error_screen(msg);
+    // A /load that raced this failing restart deserves its try, not safe mode.
+    taskENTER_CRITICAL(&g_js_restart_mux);
+    if (!g_js_restart_requested) {
+      g_js_safe_mode = true;
+    }
+    taskEXIT_CRITICAL(&g_js_restart_mux);
+  } else {
+    g_js_restart_requested = true;  // One more attempt
+  }
+}
+
+void webscreen_runtime_javascript_task(void* pvParameters) {
+  WEBSCREEN_DEBUG_PRINTLN("JavaScript task started");
+  vTaskDelay(pdMS_TO_TICKS(100));
+
+  char err[128] = "";
+  if (!webscreen_runtime_eval_script(err, sizeof(err))) {
+    WEBSCREEN_DEBUG_PRINT("JavaScript execution error: ");
+    WEBSCREEN_DEBUG_PRINTLN(err);
+    webscreen_runtime_note_js_error(err);
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "WebScreen: script '%s' failed:\n%s\n\n"
+             "Fix the script, then run /load or /restart_app.",
+             g_current_script_file.c_str(), err);
+    webscreen_runtime_show_error_screen(msg);
+    taskENTER_CRITICAL(&g_js_restart_mux);
+    if (!g_js_restart_requested) g_js_safe_mode = true;
+    taskEXIT_CRITICAL(&g_js_restart_mux);
+  } else {
+    WEBSCREEN_DEBUG_PRINTLN("JavaScript script executed successfully");
+  }
+
+  for (;;) {
+    uint32_t loop_start_us = micros();
+    if (g_js_restart_requested && !g_js_safe_mode) {
+      webscreen_runtime_perform_inplace_restart();
+    }
+    if (g_js_gc_requested && js != NULL) {
+      g_js_gc_requested = false;
+      js_gc(js);
+    }
+    // /eval: the flag stays set through the eval so loopTask never overwrites a buffer in use.
+    if (g_js_eval_pending && js != NULL) {
+      if (g_js_safe_mode) {
+        Serial.println("[EVAL] dropped: app is parked in safe mode");
+      } else {
+        jsval_t v = js_eval(js, g_js_eval_buf, strlen(g_js_eval_buf));
+        const char *s = js_str(js, v);
+        Serial.printf("[EVAL] %s\n", s ? s : "(no result)");
+        if (js_type(v) == JS_ERR && s) {
+          char rec[160];
+          snprintf(rec, sizeof(rec), "eval: %s", s);
+          webscreen_runtime_note_js_error(rec);
+        }
+      }
+      g_js_eval_pending = false;
+    }
+    if (g_js_screenshot_pending) {
+      webscreen_runtime_stream_screenshot();
+      g_js_screenshot_pending = false;
+    }
+    elk_dispatch_button_event();
+    // Unconditional: also handles WiFi reconnect for non-MQTT apps (MQTT work is gated internally).
+    webscreen_runtime_wifi_mqtt_maintain_loop();
+    uint32_t next_timer_ms = lv_timer_handler();
+    uint32_t elapsed_us = micros() - loop_start_us;
+    g_loop_count++;
+    g_avg_loop_time_us = g_loop_count == 1 ? elapsed_us :
+                        (uint32_t)(((uint64_t)g_avg_loop_time_us * 7 + elapsed_us) / 8);
+    if (elapsed_us > g_max_loop_time_us) g_max_loop_time_us = elapsed_us;
+    // Honor imminent animation/timer deadlines while polling serial requests at least every 5 ms.
+    uint32_t sleep_ms = next_timer_ms < 5 ? next_timer_ms : 5;
+    TickType_t sleep_ticks = pdMS_TO_TICKS(sleep_ms);
+    vTaskDelay(sleep_ticks ? sleep_ticks : 1);
   }
 }
 extern void register_js_functions();
@@ -491,9 +694,12 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     g_was_wifi_connected = false;
     unsigned long now = WEBSCREEN_MILLIS();
 
-    if (now - g_last_wifi_reconnect_attempt > 10000) {
+    // Skip reconnect when no SSID was ever configured — offline devices are a supported mode.
+    if (WiFi.SSID().length() > 0 &&
+        now - g_last_wifi_reconnect_attempt > 10000) {
       g_last_wifi_reconnect_attempt = now;
       WEBSCREEN_DEBUG_PRINTLN("Wi-Fi disconnected, attempting reconnection...");
+      WiFi.reconnect();
     }
     return;
   }
@@ -510,6 +716,18 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
   if (g_mqtt_enabled) {
     if (g_mqttClient.connected()) {
       g_mqttClient.loop();
+    } else {
+      // Each reconnect attempt can block this LVGL-owning task up to the ~5s socket timeout — back off exponentially.
+      static unsigned long s_mqtt_backoff_ms = 5000;
+      unsigned long now = WEBSCREEN_MILLIS();
+      if (now - g_last_mqtt_reconnect_attempt > s_mqtt_backoff_ms) {
+        g_last_mqtt_reconnect_attempt = now;
+        if (elk_mqtt_try_reconnect()) {
+          s_mqtt_backoff_ms = 5000;
+        } else if (s_mqtt_backoff_ms < 60000) {
+          s_mqtt_backoff_ms = s_mqtt_backoff_ms > 30000 ? 60000 : s_mqtt_backoff_ms * 2;
+        }
+      }
     }
     // Messages are queued by onMqttMessage callback.
     // JS polls via mqtt_has_message() from its timer — no js_eval from C++.
@@ -517,7 +735,7 @@ void webscreen_runtime_wifi_mqtt_maintain_loop(void) {
     processPendingMqttMessage();
   }
 }
-extern void init_lvgl_display();
+extern bool init_lvgl_display();
 extern void init_lv_fs();
 extern void init_mem_fs();
 extern void init_ram_images();

@@ -2,17 +2,91 @@
 #include "globals.h"
 #include "webscreen_config.h"
 #include "webscreen_hardware.h"
+#include "webscreen_runtime.h"
+#include "webscreen_base64.h"
+#include "webscreen_serial_line.h"
 #include <WiFi.h>
 #include <time.h>
 #include <sys/time.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+
+// Abort blocking receive loops if the host stops sending (loopTask must never hang)
+static const unsigned long SERIAL_RX_TIMEOUT_MS = 30000;
+
+enum ArgStyle : uint8_t {
+  ARGS_IGNORED,
+  ARGS_RAW,
+  ARGS_DEFAULT_ROOT,
+};
+
+struct SerialCommands::Command {
+  const char* name;
+  const char* alias;
+  void (*handler)(const String& args);
+  ArgStyle argStyle;
+  const char* usage;
+  const char* desc;
+};
+
+// Row order = /help listing order; a nullptr handler marks a help-only row.
+const SerialCommands::Command SerialCommands::kCommands[] = {
+  { "help",        "h",        [](const String&) { showHelp(); },   ARGS_IGNORED,      "/help",                    "Show this help" },
+  { "stats",       nullptr,    [](const String&) { showStats(); },  ARGS_IGNORED,      "/stats",                   "Show system statistics" },
+  { "info",        nullptr,    [](const String&) { showInfo(); },   ARGS_IGNORED,      "/info",                    "Show device information" },
+  { "write",       nullptr,    writeScript,                         ARGS_RAW,          "/write <filename>",        "Write JS script to SD card (interactive)" },
+  { "upload",      nullptr,    uploadFile,                          ARGS_RAW,          "/upload <file> [base64]",  "Upload any file (text or base64-encoded)" },
+  { "config",      nullptr,    configCommand,                       ARGS_RAW,          "/config get <key>",        "Get config value from webscreen.json" },
+  { "config",      nullptr,    nullptr,                             ARGS_RAW,          "/config set <key> <val>",  "Set config value in webscreen.json" },
+  { "ls",          "list",     listFiles,                           ARGS_DEFAULT_ROOT, "/ls [path] [json]",        "List files/directories (json = machine-readable)" },
+  { "cat",         "view",     catFile,                             ARGS_RAW,          "/cat <file>",              "Display file contents" },
+  { "rm",          "delete",   deleteFile,                          ARGS_RAW,          "/rm <file|empty-dir>",     "Delete file or empty directory" },
+  { "mkdir",       nullptr,    makeDirectory,                       ARGS_RAW,          "/mkdir <path>",            "Create directory on SD card" },
+  { "download",    "dl",       downloadFile64,                      ARGS_RAW,          "/download <file>",         "Dump file as base64 (host-side download)" },
+  { "load",        "run",      loadApp,                             ARGS_RAW,          "/load <script.js> [save]", "Load/switch to different JS app (save = persist to config)" },
+  { "restart_app", nullptr,    [](const String&) { restartApp(); }, ARGS_IGNORED,      "/restart_app",             "Restart the JS app in place (no reboot)" },
+  { "eval",        nullptr,    evalJs,                              ARGS_RAW,          "/eval <js-code>",          "Evaluate JS in the running app (REPL)" },
+  { "errors",      nullptr,    [](const String&) { showErrors(); }, ARGS_IGNORED,      "/errors",                  "Show last JS error and restart-ladder state" },
+  { "gc",          nullptr,    [](const String&) { runGC(); },      ARGS_IGNORED,      "/gc",                      "Run JS garbage collection" },
+  { "screenshot",  "ss",       [](const String&) { screenshot(); }, ARGS_IGNORED,      "/screenshot",              "Capture the screen as base64 RGB565" },
+  { "wget",        "fetch",    wget,                                ARGS_RAW,          "/wget <url> [file]",       "Download file from URL to SD card" },
+  { "ping",        nullptr,    ping,                                ARGS_RAW,          "/ping <host>",             "Test network connectivity" },
+  { "backup",      nullptr,    backup,                              ARGS_RAW,          "/backup [save|restore]",   "Backup/restore configuration" },
+  { "monitor",     "mon",      monitor,                             ARGS_RAW,          "/monitor [cpu|mem|net]",   "Live system monitoring" },
+  { "brightness",  nullptr,    setBrightness,                       ARGS_RAW,          "/brightness <0-255>",      "Set display brightness" },
+  { "time",        nullptr,    [](const String&) { showTime(); },   ARGS_IGNORED,      "/time",                    "Show current device time" },
+  { "settime",     nullptr,    setTime,                             ARGS_RAW,          "/settime <epoch> [tz]",    "Set device time from epoch" },
+  { "factory_reset", nullptr,  factoryReset,                        ARGS_RAW,          "/factory_reset confirm",   "Delete webscreen.json and reboot to fallback" },
+  { "reboot",      "restart",  [](const String&) { reboot(); },     ARGS_IGNORED,      "/reboot",                  "Restart the device" },
+};
+
+const size_t SerialCommands::kCommandCount = sizeof(SerialCommands::kCommands) / sizeof(SerialCommands::kCommands[0]);
 
 void SerialCommands::init() {
   Serial.println("\n=== WebScreen Serial Console ===");
   Serial.println("Type /help for available commands");
   printPrompt();
+}
+
+bool SerialCommands::readLine(String& line) {
+  static WebscreenSerialLine<1024> input;
+  // Bound each poll so continuous serial traffic cannot starve the power button.
+  for (size_t i = 0; i < 256 && Serial.available(); i++) {
+    int c = Serial.read();
+    if (c < 0) break;
+    auto result = input.push((char)c);
+    if (result == WebscreenSerialLine<1024>::Overflow) {
+      printError("Input line too long (maximum 1023 bytes)");
+      return false;
+    }
+    if (result == WebscreenSerialLine<1024>::Ready) {
+      line = input.data();
+      return true;
+    }
+  }
+  return false;
 }
 
 void SerialCommands::processCommand(const String& command) {
@@ -36,95 +110,46 @@ void SerialCommands::processCommand(const String& command) {
   String args = (spaceIndex > 0) ? cmd.substring(spaceIndex + 1) : "";
   
   baseCmd.toLowerCase();
-  
-  if (baseCmd == "help" || baseCmd == "h") {
-    showHelp();
-  }
-  else if (baseCmd == "stats") {
-    showStats();
-  }
-  else if (baseCmd == "info") {
-    showInfo();
-  }
-  else if (baseCmd == "write") {
-    writeScript(args);
-  }
-  else if (baseCmd == "upload") {
-    uploadFile(args);
-  }
-  else if (baseCmd == "config") {
-    if (args.startsWith("get ")) {
-      configGet(args.substring(4));
-    } else if (args.startsWith("set ")) {
-      configSet(args.substring(4));
-    } else {
-      printError("Usage: /config get <key> or /config set <key> <value>");
+
+  const Command* match = nullptr;
+  for (size_t i = 0; i < kCommandCount; i++) {
+    const Command& c = kCommands[i];
+    if (c.handler == nullptr) continue;
+    if (baseCmd == c.name || (c.alias != nullptr && baseCmd == c.alias)) {
+      match = &c;
+      break;
     }
   }
-  else if (baseCmd == "ls" || baseCmd == "list") {
-    listFiles(args.length() > 0 ? args : "/");
-  }
-  else if (baseCmd == "rm" || baseCmd == "delete") {
-    deleteFile(args);
-  }
-  else if (baseCmd == "cat" || baseCmd == "view") {
-    catFile(args);
-  }
-  else if (baseCmd == "reboot" || baseCmd == "restart") {
-    reboot();
-  }
-  else if (baseCmd == "load" || baseCmd == "run") {
-    loadApp(args);
-  }
-  else if (baseCmd == "wget" || baseCmd == "download") {
-    wget(args);
-  }
-  else if (baseCmd == "ping") {
-    ping(args);
-  }
-  else if (baseCmd == "backup") {
-    backup(args);
-  }
-  else if (baseCmd == "monitor" || baseCmd == "mon") {
-    monitor(args);
-  }
-  else if (baseCmd == "brightness") {
-    setBrightness(args);
-  }
-  else if (baseCmd == "time") {
-    showTime();
-  }
-  else if (baseCmd == "settime") {
-    setTime(args);
-  }
-  else {
+
+  if (match == nullptr) {
     printError("Unknown command: " + baseCmd + ". Type /help for available commands.");
+  } else if (match->argStyle == ARGS_DEFAULT_ROOT && args.length() == 0) {
+    match->handler("/");
+  } else {
+    match->handler(args);
   }
-  
+
   printPrompt();
+}
+
+void SerialCommands::configCommand(const String& args) {
+  if (args.startsWith("get ")) {
+    configGet(args.substring(4));
+  } else if (args.startsWith("set ")) {
+    configSet(args.substring(4));
+  } else {
+    printError("Usage: /config get <key> or /config set <key> <value>");
+  }
 }
 
 void SerialCommands::showHelp() {
   Serial.println("\n=== WebScreen Commands ===");
-  Serial.println("/help                    - Show this help");
-  Serial.println("/stats                   - Show system statistics");
-  Serial.println("/info                    - Show device information");
-  Serial.println("/write <filename>        - Write JS script to SD card (interactive)");
-  Serial.println("/upload <file> [base64]  - Upload any file (text or base64-encoded)");
-  Serial.println("/config get <key>        - Get config value from webscreen.json");
-  Serial.println("/config set <key> <val>  - Set config value in webscreen.json");
-  Serial.println("/ls [path]               - List files/directories");
-  Serial.println("/cat <file>              - Display file contents");
-  Serial.println("/rm <file>               - Delete file");
-  Serial.println("/load <script.js>        - Load/switch to different JS app");
-  Serial.println("/wget <url> [file]       - Download file from URL to SD card");
-  Serial.println("/ping <host>             - Test network connectivity");
-  Serial.println("/backup [save|restore]   - Backup/restore configuration");
-  Serial.println("/monitor [cpu|mem|net]   - Live system monitoring");
-  Serial.println("/brightness <0-255>     - Set display brightness");
-  Serial.println("/time                    - Show current device time");
-  Serial.println("/settime <epoch> [tz]    - Set device time from epoch");
-  Serial.println("/reboot                  - Restart the device");
+  for (size_t i = 0; i < kCommandCount; i++) {
+    const Command& c = kCommands[i];
+    char line[96];
+    snprintf(line, sizeof(line), "%-25s- %s", c.usage, c.desc);
+    Serial.println(line);
+  }
   Serial.println("\nExamples:");
   Serial.println("/write hello.js");
   Serial.println("/upload image.png base64");
@@ -143,7 +168,20 @@ void SerialCommands::showStats() {
   Serial.printf("Total Heap: %s\n", formatBytes(ESP.getHeapSize()).c_str());
   Serial.printf("Free PSRAM: %s\n", formatBytes(ESP.getFreePsram()).c_str());
   Serial.printf("Total PSRAM: %s\n", formatBytes(ESP.getPsramSize()).c_str());
-  
+  Serial.printf("Heap Low Watermark: %s\n", formatBytes(esp_get_minimum_free_heap_size()).c_str());
+  Serial.printf("Largest Free Block: %s\n",
+                formatBytes(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)).c_str());
+
+  // JavaScript engine
+  uint32_t jsUsed = 0, jsTotal = 0;
+  webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
+  if (jsTotal > 0) {
+    Serial.printf("JS Arena Used: %s\n", formatBytes(jsUsed).c_str());
+    Serial.printf("JS Arena Total: %s\n", formatBytes(jsTotal).c_str());
+  } else {
+    Serial.println("JS Arena: Not running");
+  }
+
   // Storage
   if (SD_MMC.cardSize() > 0) {
     uint64_t cardSize = SD_MMC.cardSize();
@@ -184,6 +222,13 @@ void SerialCommands::showInfo() {
   Serial.printf("SDK Version: %s\n", ESP.getSdkVersion());
   Serial.println("WebScreen Version: " WEBSCREEN_VERSION_STRING);
   Serial.println("Build Date: " __DATE__ " " __TIME__);
+
+  uint32_t jsUsed = 0, jsTotal = 0;
+  webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
+  if (jsTotal > 0) {
+    Serial.printf("JS Arena Used: %s\n", formatBytes(jsUsed).c_str());
+    Serial.printf("JS Arena Total: %s\n", formatBytes(jsTotal).c_str());
+  }
 }
 
 void SerialCommands::writeScript(const String& args) {
@@ -192,7 +237,7 @@ void SerialCommands::writeScript(const String& args) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -213,21 +258,28 @@ void SerialCommands::writeScript(const String& args) {
   
   String line;
   while (true) {
+    unsigned long waitStart = millis();
     while (!Serial.available()) {
+      if (millis() - waitStart >= SERIAL_RX_TIMEOUT_MS) {
+        file.close();
+        SD_MMC.remove(filename);
+        printError("Write aborted: no data received for 30 seconds (" + filename + " removed)");
+        return;
+      }
       delay(10);
     }
-    
+
     line = Serial.readStringUntil('\n');
     line.trim();
-    
+
     if (line == "END") {
       break;
     }
-    
+
     file.println(line);
     Serial.println("+ " + line);
   }
-  
+
   file.close();
   printSuccess("Script saved: " + filename + " (" + formatBytes(SD_MMC.open(filename).size()) + ")");
 }
@@ -244,7 +296,8 @@ static const uint8_t base64_decode_table[128] = {
   41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 64, 64, 64, 64, 64
 };
 
-static size_t base64_decode(const char* input, size_t inputLen, uint8_t* output) {
+// Returns the decoded byte count, or -1 if the decoded data would overflow outputSize.
+static int base64_decode(const char* input, size_t inputLen, uint8_t* output, size_t outputSize) {
   size_t outputLen = 0;
   uint32_t buffer = 0;
   int bitsCollected = 0;
@@ -262,11 +315,14 @@ static size_t base64_decode(const char* input, size_t inputLen, uint8_t* output)
 
     if (bitsCollected >= 8) {
       bitsCollected -= 8;
+      if (outputLen >= outputSize) {
+        return -1;
+      }
       output[outputLen++] = (buffer >> bitsCollected) & 0xFF;
     }
   }
 
-  return outputLen;
+  return (int)outputLen;
 }
 
 void SerialCommands::uploadFile(const String& args) {
@@ -275,7 +331,7 @@ void SerialCommands::uploadFile(const String& args) {
     return;
   }
 
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -307,13 +363,26 @@ void SerialCommands::uploadFile(const String& args) {
 
   size_t totalBytes = 0;
   String line;
+  bool aborted = false;
+  String abortReason;
 
   // Buffer for base64 decoding
   uint8_t decodeBuffer[512];
 
   while (true) {
+    unsigned long waitStart = millis();
+    bool timedOut = false;
     while (!Serial.available()) {
+      if (millis() - waitStart >= SERIAL_RX_TIMEOUT_MS) {
+        timedOut = true;
+        break;
+      }
       delay(10);
+    }
+    if (timedOut) {
+      aborted = true;
+      abortReason = "no data received for 30 seconds";
+      break;
     }
 
     line = Serial.readStringUntil('\n');
@@ -323,12 +392,22 @@ void SerialCommands::uploadFile(const String& args) {
       break;
     }
 
+    if (aborted) {
+      continue;  // drain remaining chunks until END so the stream stays in sync
+    }
+
     if (isBase64) {
       // Decode base64 and write binary data
-      size_t decodedLen = base64_decode(line.c_str(), line.length(), decodeBuffer);
+      int decodedLen = base64_decode(line.c_str(), line.length(), decodeBuffer, sizeof(decodeBuffer));
+      if (decodedLen < 0) {
+        aborted = true;
+        abortReason = "chunk exceeds " + String((unsigned int)sizeof(decodeBuffer)) + " decoded bytes per line";
+        printError("Upload aborted: " + abortReason);
+        continue;
+      }
       if (decodedLen > 0) {
-        file.write(decodeBuffer, decodedLen);
-        totalBytes += decodedLen;
+        file.write(decodeBuffer, (size_t)decodedLen);
+        totalBytes += (size_t)decodedLen;
       }
       // Show progress every 10KB
       if (totalBytes % 10240 < 512) {
@@ -344,7 +423,12 @@ void SerialCommands::uploadFile(const String& args) {
 
   file.close();
   Serial.println();
-  printSuccess("File saved: " + filename + " (" + formatBytes(totalBytes) + ")");
+  if (aborted) {
+    SD_MMC.remove(filename);  // partial file is unusable
+    printError("Upload failed: " + abortReason + " (" + filename + " removed)");
+  } else {
+    printSuccess("File saved: " + filename + " (" + formatBytes(totalBytes) + ")");
+  }
 }
 
 void SerialCommands::configSet(const String& args) {
@@ -357,7 +441,7 @@ void SerialCommands::configSet(const String& args) {
   String key = args.substring(0, spaceIndex);
   String value = args.substring(spaceIndex + 1);
 
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -402,7 +486,7 @@ void SerialCommands::configGet(const String& args) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -442,31 +526,88 @@ void SerialCommands::configGet(const String& args) {
   }
 }
 
+// Print a string as a JSON value, escaping quotes/backslashes/control chars
+static void printJsonString(const char* s) {
+  Serial.print('"');
+  for (; *s; s++) {
+    char c = *s;
+    if (c == '"' || c == '\\') {
+      Serial.print('\\');
+      Serial.print(c);
+    } else if ((uint8_t)c < 0x20) {
+      Serial.printf("\\u%04x", (unsigned)c);
+    } else {
+      Serial.print(c);
+    }
+  }
+  Serial.print('"');
+}
+
 void SerialCommands::listFiles(const String& path) {
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
-  
-  File root = SD_MMC.open(path);
+
+  // Trailing "json" token switches to a one-line machine-readable listing
+  String p = path;
+  p.trim();
+  bool json = false;
+  if (p == "json") {
+    json = true;
+    p = "/";
+  } else if (p.endsWith(" json")) {
+    json = true;
+    p = p.substring(0, p.length() - 5);
+    p.trim();
+  }
+  if (p.length() == 0) p = "/";
+
+  File root = SD_MMC.open(p);
   if (!root || !root.isDirectory()) {
-    printError("Cannot open directory: " + path);
+    printError("Cannot open directory: " + p);
     return;
   }
-  
-  Serial.println("\nDirectory listing for: " + path);
-  Serial.println("Type    Size        Name");
-  Serial.println("--------------------------------");
-  
-  File file = root.openNextFile();
-  while (file) {
-    Serial.printf("%-7s %-10s %s\n", 
-                  file.isDirectory() ? "DIR" : "FILE",
-                  file.isDirectory() ? "" : formatBytes(file.size()).c_str(),
-                  file.name());
-    file = root.openNextFile();
+
+  size_t fileCount = 0, dirCount = 0;
+
+  if (json) {
+    Serial.print("{\"path\":");
+    printJsonString(p.c_str());
+    Serial.print(",\"entries\":[");
+    File file = root.openNextFile();
+    bool first = true;
+    while (file) {
+      if (!first) Serial.print(',');
+      first = false;
+      Serial.print("{\"name\":");
+      printJsonString(file.name());
+      Serial.printf(",\"dir\":%s,\"size\":%u}",
+                    file.isDirectory() ? "true" : "false",
+                    file.isDirectory() ? 0 : (unsigned)file.size());
+      if (file.isDirectory()) dirCount++; else fileCount++;
+      file = root.openNextFile();
+    }
+    Serial.println("]}");
+  } else {
+    Serial.println("\nDirectory listing for: " + p);
+    Serial.println("Type    Size        Name");
+    Serial.println("--------------------------------");
+
+    File file = root.openNextFile();
+    while (file) {
+      Serial.printf("%-7s %-10s %s\n",
+                    file.isDirectory() ? "DIR" : "FILE",
+                    file.isDirectory() ? "" : formatBytes(file.size()).c_str(),
+                    file.name());
+      if (file.isDirectory()) dirCount++; else fileCount++;
+      file = root.openNextFile();
+    }
+    // End marker so host tools know the listing is complete
+    Serial.printf("Total: %u files, %u directories\n",
+                  (unsigned)fileCount, (unsigned)dirCount);
   }
-  
+
   root.close();
 }
 
@@ -476,17 +617,122 @@ void SerialCommands::deleteFile(const String& path) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
   
   String fullPath = path.startsWith("/") ? path : ("/" + path);
-  
-  if (SD_MMC.remove(fullPath)) {
+
+  File f = SD_MMC.open(fullPath);
+  bool isDir = f && f.isDirectory();
+  if (f) f.close();
+
+  if (isDir) {
+    if (SD_MMC.rmdir(fullPath)) {
+      printSuccess("Directory removed: " + fullPath);
+    } else {
+      printError("Cannot remove directory (not empty?): " + fullPath);
+    }
+  } else if (SD_MMC.remove(fullPath)) {
     printSuccess("File deleted: " + fullPath);
   } else {
     printError("Cannot delete file: " + fullPath);
+  }
+}
+
+void SerialCommands::makeDirectory(const String& path) {
+  if (path.length() == 0) {
+    printError("Usage: /mkdir <path>");
+    return;
+  }
+
+  if (!sdReady()) {
+    printError("SD card not available");
+    return;
+  }
+
+  String fullPath = path.startsWith("/") ? path : ("/" + path);
+  fullPath.trim();
+
+  if (SD_MMC.exists(fullPath)) {
+    printError("Already exists: " + fullPath);
+  } else if (SD_MMC.mkdir(fullPath)) {
+    printSuccess("Directory created: " + fullPath);
+  } else {
+    printError("Cannot create directory: " + fullPath);
+  }
+}
+
+void SerialCommands::downloadFile64(const String& path) {
+  if (path.length() == 0) {
+    printError("Usage: /download <file>");
+    return;
+  }
+
+  if (!sdReady()) {
+    printError("SD card not available");
+    return;
+  }
+
+  String fullPath = path.startsWith("/") ? path : ("/" + path);
+  fullPath.trim();
+
+  File file = SD_MMC.open(fullPath, FILE_READ);
+  if (!file || file.isDirectory()) {
+    if (file) file.close();
+    printError("Cannot open file: " + fullPath);
+    return;
+  }
+
+  Serial.printf("=== DOWNLOAD %s SIZE %u ===\n", fullPath.c_str(), (unsigned)file.size());
+
+  // 57 raw bytes -> one 76-char base64 line (classic MIME width)
+  uint8_t raw[57 * 8];
+  char b64[80];
+  size_t n;
+  while ((n = file.read(raw, sizeof(raw))) > 0) {
+    for (size_t off = 0; off < n; off += 57) {
+      size_t chunk = n - off;
+      if (chunk > 57) chunk = 57;
+      webscreen_base64_encode(raw + off, chunk, b64);
+      Serial.println(b64);
+    }
+  }
+  file.close();
+
+  Serial.println("=== DOWNLOAD END ===");
+}
+
+void SerialCommands::factoryReset(const String& args) {
+  String a = args;
+  a.trim();
+  a.toLowerCase();
+  if (a != "confirm") {
+    printError("This deletes /webscreen.json and reboots into fallback mode. Run '/factory_reset confirm' to proceed.");
+    return;
+  }
+
+  if (!sdReady()) {
+    printError("SD card not available");
+    return;
+  }
+
+  if (SD_MMC.exists("/webscreen.json") && !SD_MMC.remove("/webscreen.json")) {
+    printError("Cannot delete /webscreen.json");
+    return;
+  }
+
+  printSuccess("Configuration deleted. Rebooting into fallback mode in 3 seconds...");
+  delay(3000);
+  ESP.restart();
+}
+
+void SerialCommands::screenshot() {
+  if (webscreen_runtime_request_screenshot()) {
+    Serial.println("Queued. Data follows as an '=== SCREENSHOT ... ===' block");
+  } else {
+    printError("Screenshot unavailable (JS runtime not running, or a capture is in flight)");
   }
 }
 
@@ -496,7 +742,7 @@ void SerialCommands::catFile(const String& path) {
     return;
   }
   
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -525,20 +771,39 @@ void SerialCommands::reboot() {
 
 void SerialCommands::loadApp(const String& scriptName) {
   if (scriptName.length() == 0) {
-    printError("Usage: /load <script.js>");
+    printError("Usage: /load <script.js> [save]");
     return;
   }
-  
-  if (!SD_MMC.begin()) {
+
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode). Set the script in webscreen.json (/config set script <file>) and /reboot.");
+    return;
+  }
+
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
-  
-  String fullPath = scriptName.startsWith("/") ? scriptName : ("/" + scriptName);
+
+  // Trailing "save" also persists the script to webscreen.json (otherwise /load is session-only)
+  String name = scriptName;
+  bool persist = false;
+  int spaceIndex = name.indexOf(' ');
+  if (spaceIndex > 0) {
+    String opt = name.substring(spaceIndex + 1);
+    opt.trim();
+    opt.toLowerCase();
+    if (opt == "save") {
+      persist = true;
+      name = name.substring(0, spaceIndex);
+    }
+  }
+
+  String fullPath = name.startsWith("/") ? name : ("/" + name);
   if (!fullPath.endsWith(".js")) {
     fullPath += ".js";
   }
-  
+
   // Check if file exists
   File file = SD_MMC.open(fullPath, FILE_READ);
   if (!file) {
@@ -546,15 +811,23 @@ void SerialCommands::loadApp(const String& scriptName) {
     return;
   }
   file.close();
-  
-  // Update global script filename for restart
-  extern String g_script_filename;
-  g_script_filename = fullPath;
-  
-  printSuccess("Script queued for loading: " + fullPath);
-  printSuccess("Restarting to load new script...");
-  delay(2000);
-  ESP.restart();
+
+  if (webscreen_runtime_load_new_script(fullPath.c_str())) {
+    printSuccess("Loading script: " + fullPath);
+    if (persist) {
+      configSet("script " + fullPath);
+    }
+  } else {
+    printError("Cannot load script: " + fullPath);
+  }
+}
+
+// Re-running SD_MMC.begin() per command re-probes the card; only remount when the card is absent.
+bool SerialCommands::sdReady() {
+  if (SD_MMC.cardType() != CARD_NONE) {
+    return true;
+  }
+  return webscreen_hardware_init_sd_card();
 }
 
 void SerialCommands::printPrompt() {
@@ -611,7 +884,7 @@ void SerialCommands::wget(const String& args) {
   }
   
   // Check SD card
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -777,7 +1050,7 @@ void SerialCommands::ping(const String& args) {
 }
 
 void SerialCommands::backup(const String& args) {
-  if (!SD_MMC.begin()) {
+  if (!sdReady()) {
     printError("SD card not available");
     return;
   }
@@ -947,8 +1220,14 @@ void SerialCommands::monitor(const String& args) {
   
   unsigned long lastUpdate = 0;
   const unsigned long updateInterval = 1000; // Update every second
-  
+  unsigned long monitorStart = millis();
+
   while (!Serial.available()) {
+    if (millis() - monitorStart >= SERIAL_RX_TIMEOUT_MS) {
+      Serial.println();
+      printError("Monitor stopped: no input for 30 seconds");
+      break;
+    }
     if (millis() - lastUpdate >= updateInterval) {
       lastUpdate = millis();
       
@@ -1118,4 +1397,46 @@ void SerialCommands::setTime(const String& args) {
                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   printSuccess("Device time synchronized");
+}
+
+void SerialCommands::restartApp() {
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode). Use /reboot.");
+    return;
+  }
+  webscreen_runtime_request_restart("serial /restart_app");
+  printSuccess("JS app restart requested (in-place, no reboot)");
+}
+
+void SerialCommands::evalJs(const String& args) {
+  String code = args;
+  code.trim();
+  if (code.length() == 0) {
+    printError("Usage: /eval <js-code>   e.g. /eval print(mem_info())");
+    return;
+  }
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode)");
+    return;
+  }
+  if (webscreen_runtime_eval_snippet(code.c_str())) {
+    Serial.println("Queued. Result follows as [EVAL] ...");
+  } else {
+    printError("Cannot queue eval (busy, safe mode, or snippet longer than 255 chars)");
+  }
+}
+
+void SerialCommands::showErrors() {
+  webscreen_runtime_print_error_report();
+}
+
+void SerialCommands::runGC() {
+  if (webscreen_runtime_garbage_collect()) {
+    // GC runs on the JS task at its next safe point, so these numbers are pre-GC.
+    uint32_t jsUsed = 0, jsTotal = 0;
+    webscreen_runtime_get_js_arena(&jsUsed, &jsTotal);
+    printSuccess("GC requested (runs at the JS task's next safe point). JS arena now: " + formatBytes(jsUsed) + " / " + formatBytes(jsTotal) + " used");
+  } else {
+    printError("Garbage collection unavailable (JS engine not running)");
+  }
 }

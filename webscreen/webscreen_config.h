@@ -9,14 +9,16 @@
 #pragma once
 
 #include <Arduino.h>
+#include "pins_config.h"
 
 // ============================================================================
 // FIRMWARE VERSION
 // ============================================================================
+// Keep major >= 2: WebScreen-Admin parses this from /info to enable /upload.
 #define WEBSCREEN_VERSION_MAJOR 2
-#define WEBSCREEN_VERSION_MINOR 0
+#define WEBSCREEN_VERSION_MINOR 2
 #define WEBSCREEN_VERSION_PATCH 0
-#define WEBSCREEN_VERSION_STRING "0.2.3-dev"
+#define WEBSCREEN_VERSION_STRING "2.2.0-dev"
 
 // ============================================================================
 // HARDWARE CONFIGURATION
@@ -28,24 +30,25 @@
 #define WEBSCREEN_DISPLAY_ROTATION 1  // 90 degrees
 
 // Pin Definitions (ESP32-S3 WebScreen Hardware)
-#define WEBSCREEN_PIN_LED 38
-#define WEBSCREEN_PIN_BUTTON 33
-#define WEBSCREEN_PIN_OUTPUT 1
+#define WEBSCREEN_PIN_LED PIN_LED
+// GPIO 21 = user button. Never use GPIO 33-37: octal-PSRAM bus, pinMode() on them kills PSRAM.
+#define WEBSCREEN_PIN_BUTTON INPUT_PIN
+#define WEBSCREEN_PIN_OUTPUT OUTPUT_PIN
 
 // Display Pins (RM67162 AMOLED)
-#define WEBSCREEN_TFT_CS 6
-#define WEBSCREEN_TFT_DC 7
-#define WEBSCREEN_TFT_RST 17
-#define WEBSCREEN_TFT_SCK 47
-#define WEBSCREEN_TFT_MOSI 18
-#define WEBSCREEN_TFT_D1 7
-#define WEBSCREEN_TFT_D2 48
-#define WEBSCREEN_TFT_D3 5
+#define WEBSCREEN_TFT_CS TFT_CS
+#define WEBSCREEN_TFT_DC TFT_DC
+#define WEBSCREEN_TFT_RST TFT_RES
+#define WEBSCREEN_TFT_SCK TFT_SCK
+#define WEBSCREEN_TFT_MOSI TFT_MOSI
+#define WEBSCREEN_TFT_D1 TFT_QSPI_D1
+#define WEBSCREEN_TFT_D2 TFT_QSPI_D2
+#define WEBSCREEN_TFT_D3 TFT_QSPI_D3
 
 // SD Card Pins
-#define WEBSCREEN_SD_CMD 13
-#define WEBSCREEN_SD_CLK 11
-#define WEBSCREEN_SD_D0 12
+#define WEBSCREEN_SD_CMD PIN_SD_CMD
+#define WEBSCREEN_SD_CLK PIN_SD_CLK
+#define WEBSCREEN_SD_D0 PIN_SD_D0
 
 // ============================================================================
 // MEMORY CONFIGURATION
@@ -93,6 +96,7 @@
 // Timing
 #define WEBSCREEN_LOOP_DELAY_MS 1
 #define WEBSCREEN_BUTTON_DEBOUNCE_MS 50
+#define WEBSCREEN_POWER_OFF_HOLD_MS 3000  // Hold button 3 seconds to power off
 #define WEBSCREEN_STATS_REPORT_INTERVAL_MS 300000  // 5 minutes
 
 // Watchdog
@@ -131,8 +135,8 @@
 #define WEBSCREEN_LVGL_INDEV_READ_PERIOD_MS 30
 
 // LVGL Features (aligned with lv_conf.h)
-#define WEBSCREEN_LVGL_USE_PSRAM 1      // Use PSRAM for LVGL buffers
-#define WEBSCREEN_LVGL_DOUBLE_BUFFER 1  // Enable double buffering if PSRAM available
+#define WEBSCREEN_LVGL_USE_PSRAM 0      // Draw buffer lives in internal RAM
+#define WEBSCREEN_LVGL_DOUBLE_BUFFER 0  // Synchronous panel transfers use one buffer
 #define WEBSCREEN_LVGL_COLOR_DEPTH 16   // 16-bit color depth
 
 // ============================================================================
@@ -160,10 +164,14 @@
 
 // Debug vs Release builds
 #ifdef WEBSCREEN_DEBUG
-#define WEBSCREEN_LOG_LEVEL 0  // Debug level
+#ifndef WEBSCREEN_LOG_LEVEL
+#define WEBSCREEN_LOG_LEVEL 1
+#endif
 #define WEBSCREEN_ENABLE_ASSERTIONS 1
 #else
-#define WEBSCREEN_LOG_LEVEL 2  // Info level
+#ifndef WEBSCREEN_LOG_LEVEL
+#define WEBSCREEN_LOG_LEVEL 1
+#endif
 #define WEBSCREEN_ENABLE_ASSERTIONS 0
 #endif
 

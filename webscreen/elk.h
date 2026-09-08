@@ -43,9 +43,20 @@ extern "C" {
 
   void js_setgct(struct js *, size_t);  // Set GC trigger threshold
 
+  void js_setmaxsteps(struct js *, size_t);  // Statement budget per eval, 0 = off
+
+  // Optional cooperative interrupt; NULL continues, otherwise return an error message.
+  void js_setinterrupt(struct js *, const char *(*check)(void *), void *context);
+
+  jsval_t js_checkinterrupt(struct js *);  // Also callable by yielding native bindings
+
   void js_gc(struct js *);  // Force garbage collection
 
   void js_stats(struct js *, size_t *total, size_t *min, size_t *cstacksize);
+
+  size_t js_usage(struct js *);  // Current arena bytes used (brk)
+
+  size_t js_total(struct js *);  // Arena capacity in bytes
 
   void js_dump(struct js *);  // Print debug info. Requires -DJS_DUMP
 

@@ -24,6 +24,9 @@ void setup() {
   pinMode(OUTPUT_PIN, OUTPUT);
   digitalWrite(OUTPUT_PIN, HIGH);
 
+  // Power button
+  pinMode(INPUT_PIN, INPUT_PULLUP);
+
   if (!webscreen_hardware_init_sd_card()) {
     LOG("SD card mount fail => starting fallback mode.");
     useFallback = true;
@@ -58,6 +61,8 @@ void setup() {
     } else {
       LOG("Wi-Fi connected successfully.");
       webscreen_ntp_setup_from_config();
+      // Preserve the initial TLS clock grace period; reconnects never wait on the UI task.
+      webscreen_ntp_wait_for_sync(WEBSCREEN_NTP_SYNC_TIMEOUT_MS);
     }
   } else {
     LOG("No WiFi configured, running in offline mode.");
@@ -81,7 +86,12 @@ void setup() {
   // Script exists, run it (with or without WiFi)
   LOG("Script file found, starting JavaScript runtime...");
   useFallback = false;
-  dynamic_js_setup();
+  if (!dynamic_js_setup()) {
+    // Never leave a dead screen: drop to fallback, serial still available for recovery
+    LOG("JavaScript runtime failed to start => starting fallback mode.");
+    useFallback = true;
+    fallback_setup();
+  }
 }
 
 void loop() {

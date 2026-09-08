@@ -16,7 +16,10 @@ static bool g_display_on = true;
 static uint8_t g_brightness = 200;
 static bool g_last_button_state = HIGH;
 static uint32_t g_last_button_time = 0;
+static uint32_t g_button_press_start = 0;
+static bool g_button_held = false;
 static void (*g_button_callback)(bool) = nullptr;
+static bool g_button_toggle_enabled = true;
 bool webscreen_hardware_init(void) {
   if (g_hardware_initialized) {
     return true;
@@ -52,20 +55,24 @@ void webscreen_hardware_shutdown(void) {
 bool webscreen_hardware_init_sd_card(void) {
   WEBSCREEN_DEBUG_PRINTLN("Initializing SD Card...");
   SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
+
+  // Card must init at 400 kHz first; a high-frequency first mount times out and wedges the host.
   for (int i = 0; i < 3; i++) {
 
     WEBSCREEN_DEBUG_PRINTF("Attempt %d: Mounting SD card at a safe, low frequency...\n", i + 1);
-    if (SD_MMC.begin("/sdcard", true, false, 400000)) {
+    // Arduino's frequency argument is in kHz, matching host.max_freq_khz.
+    if (SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_PROBING)) {
       WEBSCREEN_DEBUG_PRINTLN("SD Card mounted successfully at low frequency.");
       SD_MMC.end();
       WEBSCREEN_DEBUG_PRINTLN("Re-mounting SD card at high frequency...");
-      if (SD_MMC.begin("/sdcard", true, false, 10000000)) {
+      if (SD_MMC.begin("/sdcard", true, false, 10000)) {
         WEBSCREEN_DEBUG_PRINTLN("SD Card re-mounted successfully at high frequency.");
         return true;
       } else {
         WEBSCREEN_DEBUG_PRINTLN("Failed to re-mount at high frequency. Falling back to low speed mount.");
 
-        if (SD_MMC.begin("/sdcard", true, false, 400000)) {
+        SD_MMC.end();
+        if (SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_PROBING)) {
           WEBSCREEN_DEBUG_PRINTLN("Continuing at safe, low frequency.");
           return true;
         }
@@ -99,6 +106,10 @@ bool webscreen_display_set_brightness(uint8_t brightness) {
 uint8_t webscreen_display_get_brightness(void) {
   return g_brightness;
 }
+void webscreen_hardware_sync_brightness(uint8_t v) {
+  // Cache-only, for modules that drive the panel directly; display off/on restores the latest value
+  g_brightness = v;
+}
 bool webscreen_display_set_rotation(uint8_t rotation) {
   if (rotation > 3) {
     return false;
@@ -114,6 +125,8 @@ void webscreen_display_power(bool on) {
     webscreen_display_set_brightness(g_brightness);
   } else {
     WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_LED);
+    // Panel keeps rendering with LED low; bypass the setter so g_brightness keeps the restore value
+    lcd_brightness(0);
   }
 
   WEBSCREEN_DEBUG_PRINTF("Display power: %s\n", on ? "ON" : "OFF");
@@ -124,20 +137,40 @@ bool webscreen_display_is_on(void) {
 void webscreen_hardware_handle_button(void) {
   bool current_button_state = WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON);
   uint32_t current_time = WEBSCREEN_MILLIS();
+
+  // Button just pressed (HIGH -> LOW transition, active LOW with pull-up)
   if (g_last_button_state == HIGH && current_button_state == LOW) {
     if (current_time - g_last_button_time > WEBSCREEN_BUTTON_DEBOUNCE_MS) {
+      g_button_press_start = current_time;
+      g_button_held = true;
+      g_last_button_time = current_time;
+    }
+  }
 
-      g_display_on = !g_display_on;
-      webscreen_display_power(g_display_on);
+  // Button still held — check for long press power off
+  if (g_button_held && current_button_state == LOW) {
+    if (current_time - g_button_press_start >= WEBSCREEN_POWER_OFF_HOLD_MS) {
+      WEBSCREEN_DEBUG_PRINTLN("Long press detected — powering off!");
+      webscreen_hardware_power_off();
+      // Does not return
+    }
+  }
+
+  // Button released (LOW -> HIGH transition)
+  if (g_last_button_state == LOW && current_button_state == HIGH) {
+    if (g_button_held && (current_time - g_button_press_start < WEBSCREEN_POWER_OFF_HOLD_MS)) {
+      // Short press — toggle display unless a JS app has claimed the button
+      if (g_button_toggle_enabled) {
+        g_display_on = !g_display_on;
+        webscreen_display_power(g_display_on);
+        WEBSCREEN_DEBUG_PRINTF("Button short press - Display %s\n",
+                               g_display_on ? "ON" : "OFF");
+      }
       if (g_button_callback) {
         g_button_callback(true);
       }
-
-      WEBSCREEN_DEBUG_PRINTF("Button pressed - Display %s\n",
-                             g_display_on ? "ON" : "OFF");
-
-      g_last_button_time = current_time;
     }
+    g_button_held = false;
   }
 
   g_last_button_state = current_button_state;
@@ -147,6 +180,9 @@ bool webscreen_hardware_button_pressed(void) {
 }
 void webscreen_hardware_set_button_callback(void (*callback)(bool pressed)) {
   g_button_callback = callback;
+}
+void webscreen_hardware_set_button_toggle(bool enabled) {
+  g_button_toggle_enabled = enabled;
 }
 uint16_t webscreen_hardware_get_battery_voltage(void) {
 
@@ -168,8 +204,22 @@ void webscreen_hardware_set_power_saving(bool enable) {
 }
 void webscreen_hardware_deep_sleep(uint32_t duration_ms) {
   WEBSCREEN_DEBUG_PRINTF("Entering deep sleep for %lu ms\n", duration_ms);
-  esp_sleep_enable_timer_wakeup(duration_ms * 1000);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 0);
+  esp_sleep_enable_timer_wakeup((uint64_t)duration_ms * 1000);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)WEBSCREEN_PIN_BUTTON, 0);
+  esp_deep_sleep_start();
+}
+void webscreen_hardware_power_off(void) {
+  WEBSCREEN_DEBUG_PRINTLN("Power latch released — shutting down.");
+  Serial.flush();
+
+  // Turn off display first
+  webscreen_display_power(false);
+
+  // Release the power latch
+  WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_OUTPUT);
+
+  // If the latch circuit doesn't cut power immediately, halt here
+  WEBSCREEN_DELAY(1000);
   esp_deep_sleep_start();
 }
 void webscreen_hardware_set_led(bool on) {

@@ -101,12 +101,48 @@ For more information, please read the [Developer Certificate of Origin](https://
 If you’re new to the project:
 
 1. **Set Up Your Development Environment:**  
-   Follow the instructions in the [Quick Start](#quick-start) section of the README.md.
+   Follow the installation instructions in [README.md](../README.md).
 2. **Review the Code:**  
    Familiarize yourself with the core modules (e.g., dynamic JavaScript execution, fallback UI, SD card file handling).
 3. **Join the Community:**  
    If you have questions or need guidance, open an issue or join our discussions.
 4. **Start Contributing:**  
    Look for issues labeled `Simple` or `PR needed` to find a good starting point.
+
+## Building and Testing
+
+This branch uses LVGL 8.3.11 and the repository's `lv_conf.h`. Follow the build
+instructions in [README.md](../README.md). If other projects use LVGL 9, keep
+LVGL 8 in a separate `libraries/lvgl/` directory, place `lv_conf.h` beside it,
+and add `--library /path/to/libraries/lvgl` to `arduino-cli compile`.
+Build into `/tmp`; update tracked `webscreen/build/` exports only for releases.
+
+### Native regression tests
+
+Install Python 3, GCC/G++, and their address/undefined-behavior sanitizer
+runtimes, then run:
+
+```sh
+python3 tests/run_host_tests.py \
+  --lvgl /path/to/lvgl-8.3.11 \
+  --build-dir /tmp/webscreen-lvgl8-tests
+```
+
+Use `--sanitizer-lib-dir /path/to/runtime/libs` if the sanitizer libraries are
+outside the compiler's search path. The suite runs real LVGL and Elk with an
+in-memory display, checking memory safety, script limits, widget and timer
+lifetimes, strings, MQTT queues, and screenshots.
+
+### Device checks
+
+- Copy `tests/firmware_smoke.js` to SD and run `/load firmware_smoke.js`. Verify
+  charts, meters, lines, and the self-deleting timer. Repeat `/restart_app`
+  while monitoring `/stats` for stable memory use.
+- Check missing/invalid SD configuration and failing scripts. Use `/errors`
+  to inspect failures and `/load` to recover. Verify serial remains usable.
+- Exercise changed display, button, SD, Wi-Fi, MQTT, and BLE behavior on the
+  device. Check MQTT delivery after reconnect and media cleanup after reloads.
+- Include board/library versions and test results in the PR. Native tests
+  cannot validate panel timing, power behavior, SD reliability, or radios.
 
 Thank you for contributing to WebScreen—your efforts help make this project better for everyone!

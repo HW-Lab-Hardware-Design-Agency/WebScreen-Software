@@ -128,9 +128,8 @@ arduino-cli compile \
   --build-path /tmp/webscreen-build --warnings all -j 6 webscreen
 ```
 
-See [firmware validation](docs/FIRMWARE_VALIDATION.md) for native sanitizer tests,
-using an isolated LVGL 8 library, and device smoke checks. The stability backport
-and compatibility details are recorded in [the review](docs/LVGL8_REVIEW.md).
+See [building and testing](docs/CONTRIBUTING.md#building-and-testing) for using
+an isolated LVGL 8 library, running native sanitizer tests, and device checks.
 
 ### Hardware Setup
 

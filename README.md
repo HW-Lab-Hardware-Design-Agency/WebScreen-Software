@@ -84,11 +84,22 @@ This is the easiest way to get started with WebScreen without any development se
    - NimBLE-Arduino (by h2zero) - v2.3.1 (2.x callbacks)
    ```
 
+   In Library Manager, select **8.3.11** in LVGL's version dropdown before
+   installing. The `dev` branch requires LVGL 8; the migration branch uses
+   LVGL 9.5. Arduino IDE shares installed libraries between Git branches, so
+   switching branches does not switch LVGL automatically.
+
 4. **Configure LVGL**
    Copy the provided `lv_conf.h` file to your Arduino libraries folder:
    ```
    cp WebScreen-Software/lv_conf.h ~/Arduino/libraries/
    ```
+
+   Copy the configuration again whenever switching LVGL versions, then restart
+   Arduino IDE. Keep backups outside `~/Arduino/libraries/` so Arduino does not
+   discover both versions. Errors mentioning missing `lv_disp_drv_t`,
+   `LV_IMG_CF_TRUE_COLOR_ALPHA`, or `lv_meter_t` on `dev` indicate that LVGL 9
+   was selected instead of LVGL 8.3.11.
 
    Key LVGL settings configured for WebScreen:
    - Color depth: 16-bit (RGB565) with byte swap enabled

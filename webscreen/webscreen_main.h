@@ -17,62 +17,6 @@ extern "C" {
 #endif
 
   /**
- * @brief Initialize the WebScreen application
- * 
- * This function initializes all WebScreen subsystems including:
- * - Memory management
- * - Hardware abstraction layer
- * - Display system
- * - Storage (SD card)
- * - Network connectivity
- * - JavaScript runtime or fallback app
- * 
- * Called from Arduino setup() function.
- * 
- * @return true if initialization successful, false on critical failure
- */
-
-  bool webscreen_setup(void);
-
-  /**
- * @brief Main application loop
- * 
- * This function runs the main WebScreen application logic:
- * - Power button handling
- * - Runtime execution (JavaScript or fallback)
- * - Network maintenance
- * - System health monitoring
- * 
- * Called repeatedly from Arduino loop() function.
- */
-
-  void webscreen_loop(void);
-
-  /**
- * @brief Get current application state
- * 
- * @return String describing current state (for debugging)
- */
-  const char *webscreen_get_state(void);
-
-  /**
- * @brief Check if system is healthy
- * 
- * @return true if system is operating normally
- */
-
-  bool webscreen_is_healthy(void);
-
-  /**
- * @brief Request graceful shutdown
- * 
- * Initiates a controlled shutdown of all subsystems.
- * Useful for power management or error recovery.
- */
-
-  void webscreen_shutdown(void);
-
-  /**
  * @brief Load configuration from SD card JSON file
  * 
  * Reads and parses the webscreen.json configuration file from SD card.
@@ -155,7 +99,7 @@ typedef struct {  // WiFi Configuration
   uint32_t last_modified;   ///< Last modification timestamp
 } webscreen_config_t;
 
-// Global configuration instance (defined in webscreen.ino)
+// Global configuration instance (defined in webscreen_main.cpp)
 extern webscreen_config_t g_webscreen_config;
 
 // ============================================================================

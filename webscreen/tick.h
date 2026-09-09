@@ -2,7 +2,7 @@
 #include <lvgl.h>
 #include "esp_timer.h"
 
-static void start_lvgl_tick() {
+static inline void start_lvgl_tick() {
   static bool started = false;  // guard: run only once
   if (started) return;
 

@@ -74,6 +74,10 @@ extern "C" {
 
   uint8_t webscreen_display_get_brightness(void);
 
+  // Sync the cached brightness (0-255) without touching the panel, so display off/on restores it
+
+  void webscreen_hardware_sync_brightness(uint8_t v);
+
   /**
  * @brief Set display rotation
  * @param rotation Rotation value (0-3)
@@ -123,6 +127,10 @@ extern "C" {
 
   void webscreen_hardware_set_button_callback(void (*callback)(bool pressed));
 
+  // Enable/disable the short-press display toggle (suppressed while a JS app claims the button)
+
+  void webscreen_hardware_set_button_toggle(bool enabled);
+
   // ============================================================================
   // POWER MANAGEMENT
   // ============================================================================
@@ -147,6 +155,15 @@ extern "C" {
  */
 
   void webscreen_hardware_deep_sleep(uint32_t duration_ms);
+
+  /**
+ * @brief Release power latch to turn off the device
+ *
+ * Drives OUTPUT_PIN LOW to cut power via the latch circuit.
+ * This function does not return.
+ */
+
+  void webscreen_hardware_power_off(void);
 
   // ============================================================================
   // LED CONTROL
@@ -206,24 +223,7 @@ extern "C" {
 // ARDUINO COMPATIBILITY HELPERS
 // ============================================================================
 
-// Pin definitions (from webscreen_config.h)
+// Physical pins are defined once in pins_config.h (included by webscreen_config.h).
 #define LED_PIN WEBSCREEN_PIN_LED
 #define BUTTON_PIN WEBSCREEN_PIN_BUTTON
-#define OUTPUT_PIN WEBSCREEN_PIN_OUTPUT
-
-// Legacy compatibility macros
-#define PIN_LED WEBSCREEN_PIN_LED
-#define INPUT_PIN WEBSCREEN_PIN_BUTTON
-#define OUTPUT_PIN WEBSCREEN_PIN_OUTPUT
-
-// Display pin compatibility
-#define TFT_CS WEBSCREEN_TFT_CS
-#define TFT_DC WEBSCREEN_TFT_DC
-#define TFT_RST WEBSCREEN_TFT_RST
-#define TFT_SCK WEBSCREEN_TFT_SCK
-#define TFT_MOSI WEBSCREEN_TFT_MOSI
-
-// SD card pin compatibility
-#define PIN_SD_CMD WEBSCREEN_SD_CMD
-#define PIN_SD_CLK WEBSCREEN_SD_CLK
-#define PIN_SD_D0 WEBSCREEN_SD_D0
+#define TFT_RST TFT_RES

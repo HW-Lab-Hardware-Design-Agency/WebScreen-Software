@@ -41,7 +41,7 @@ struct js {
   jsoff_t css;        // Max observed C stack size
   jsoff_t lwm;        // JS RAM low watermark: min free RAM observed
   const char *code;   // Currently parsed code snippet
-  char errmsg[33];    // Error message placeholder
+  char errmsg[64];    // Error message placeholder (incl. " (line N)" suffix)
   uint8_t tok;        // Last parsed token value
   uint8_t consumed;   // Indicator that last parsed token was consumed
   uint8_t flags;      // Execution flags, see F_* constants below
@@ -63,6 +63,10 @@ struct js {
   jsoff_t gct;        // GC threshold. If brk > gct, trigger GC
   jsoff_t maxcss;     // Maximum allowed C stack size usage
   void *cstk;         // C stack pointer at the beginning of js_eval()
+  jsoff_t steps;      // Statements executed since last top-level js_eval()
+  jsoff_t maxsteps;   // Statement budget per js_eval(), 0 = unlimited
+  const char *(*interrupt)(void *);
+  void *interrupt_context;
 };
 
 // A JS memory stores diffenent entities: objects, properties, strings
@@ -238,9 +242,21 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
 jsval_t js_mkerr(struct js *js, const char *xx, ...) {
   va_list ap;
   size_t n = cpy(js->errmsg, sizeof(js->errmsg), "ERROR: ", 7);
+  int k;
   va_start(ap, xx);
-  vsnprintf(js->errmsg + n, sizeof(js->errmsg) - n, xx, ap);
+  k = vsnprintf(js->errmsg + n, sizeof(js->errmsg) - n, xx, ap);
   va_end(ap);
+  if (k > 0) n += (size_t) k;
+  if (n > sizeof(js->errmsg) - 1) n = sizeof(js->errmsg) - 1;
+  // Append 1-based line of the failing token (inside a call, js->code is the function body, so it is body-relative).
+  if (js->code != NULL && js->clen > 0 && js->toff <= js->clen) {
+    jsoff_t line = 1, i;
+    for (i = 0; i < js->toff; i++) {
+      if (js->code[i] == '\n') line++;
+    }
+    snprintf(js->errmsg + n, sizeof(js->errmsg) - n, " (line %u)",
+             (unsigned) line);
+  }
   js->errmsg[sizeof(js->errmsg) - 1] = '\0';
   js->pos = js->clen, js->tok = TOK_EOF, js->consumed = 0;  // Jump to the end
   return mkval(T_ERR, 0);
@@ -282,6 +298,7 @@ bool js_truthy(struct js *js, jsval_t v) {
 
 static jsoff_t js_alloc(struct js *js, size_t size) {
   jsoff_t ofs = js->brk;
+  if (size > js->size - js->brk) return ~(jsoff_t)0;
   size = align32((jsoff_t)size);  // 4-byte align, (n + k - 1) / k * k
   if (js->brk + size > js->size) return ~(jsoff_t)0;
   js->brk += (jsoff_t)size;
@@ -293,13 +310,15 @@ static jsval_t mkentity(struct js *js, jsoff_t b, const void *buf, size_t len) {
   if (ofs == (jsoff_t)~0) return js_mkerr(js, "oom");
   memcpy(&js->mem[ofs], &b, sizeof(b));
   // Using memmove - in case we're stringifying data from the free JS mem
-  if (buf != NULL) memmove(&js->mem[ofs + sizeof(b)], buf, len);
+  // String callers provide exactly len - 1 bytes; the terminator is ours.
+  if (buf != NULL) memmove(&js->mem[ofs + sizeof(b)], buf, len - ((b & 3) == T_STR ? 1 : 0));
   if ((b & 3) == T_STR) js->mem[ofs + sizeof(b) + len - 1] = 0;  // 0-terminate
   // printf("MKE: %u @ %u type %d\n", js->brk - ofs, ofs, b & 3);
   return mkval(b & 3, ofs);
 }
 
 jsval_t js_mkstr(struct js *js, const void *ptr, size_t len) {
+  if (len >= ((jsoff_t)~0 >> 2)) return js_mkerr(js, "string too large");
   jsoff_t n = (jsoff_t)(len + 1);
   // printf("MKSTR %u %u\n", n, js->brk);
   return mkentity(js, (jsoff_t)((n << 2) | T_STR), ptr, n);
@@ -317,9 +336,12 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   memcpy(buf, &koff, sizeof(koff));           // Initialize prop data: copy key
   memcpy(buf + sizeof(koff), &v, sizeof(v));  // Copy value
   jsoff_t brk = js->brk | T_OBJ;              // New prop offset
-  memcpy(&js->mem[head], &brk, sizeof(brk));  // Repoint head to the new prop
   // printf("PROP: %u -> %u\n", b, brk);
-  return mkentity(js, (b & ~3U) | T_PROP, buf, sizeof(buf));  // Create new prop
+  // Upstream fix (cesanta/elk a128ee2): create the prop first, repoint the head only on success.
+  jsval_t res = mkentity(js, (b & ~3U) | T_PROP, buf, sizeof(buf));
+  if (!is_err(res))
+    memcpy(&js->mem[head], &brk, sizeof(brk));  // Repoint head to the new prop
+  return res;
 }
 
 // Return T_OBJ/T_PROP/T_STR entity size based on the first word in memory
@@ -549,11 +571,15 @@ static inline uint8_t lookahead(struct js *js) {
   return tok;
 }
 
-static void mkscope(struct js *js) {
+static bool mkscope(struct js *js) {
   assert((js->flags & F_NOEXEC) == 0);
   jsoff_t prev = (jsoff_t)vdata(js->scope);
-  js->scope = mkobj(js, prev);
+  jsval_t scope = mkobj(js, prev);
+  // On OOM keep the old scope and report failure so callers propagate the error.
+  if (is_err(scope)) return false;
+  js->scope = scope;
   // printf("ENTER SCOPE %u, prev %u\n", (jsoff_t) vdata(js->scope), prev);
+  return true;
 }
 
 static void delscope(struct js *js) {
@@ -563,7 +589,7 @@ static void delscope(struct js *js) {
 
 static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
-  if (create_scope) mkscope(js);  // Enter new scope
+  if (create_scope && !mkscope(js)) return js_mkerr(js, "oom");  // Enter new scope
   js->consumed = 1;
   // jsoff_t pos = js->pos;
   while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !is_err(res)) {
@@ -718,7 +744,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen) {
   // printf("JSCALL [%.*s] -> %.*s\n", (int) js->clen, js->code, (int) fnlen,
   // fn);
   // printf("JSCALL, nogc %u [%.*s]\n", js->nogc, (int) fnlen, fn);
-  mkscope(js);  // Create function call scope
+  if (!mkscope(js)) return js_mkerr(js, "oom");  // Create function call scope
   // Loop over arguments list "(a, b)" and set scope variables
   while (fnpos < fnlen) {
     fnpos = skiptonext(fn, fnlen, fnpos);          // Skip to the identifier
@@ -790,8 +816,15 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_TYPEOF:  return js_mkstr(js, typestr(vtype(r)), strlen(typestr(vtype(r))));
     case TOK_CALL:    return do_call_op(js, l, r);
     case TOK_ASSIGN:  return assign(js, lhs, r);
-    case TOK_POSTINC: { do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l; }
-    case TOK_POSTDEC: { do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l; }
+    // Upstream fix (cesanta/elk a07410e): reject ++/-- on a non-lvalue.
+    case TOK_POSTINC: {
+      if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for ++");
+      do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l;
+    }
+    case TOK_POSTDEC: {
+      if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for --");
+      do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l;
+    }
     case TOK_NOT:     if (vtype(r) == T_BOOL) return mkval(T_BOOL, !vdata(r)); break;
   }
   if (is_assign(op))    return do_assign_op(js, op, lhs, r);
@@ -978,10 +1011,6 @@ static jsval_t js_call_dot(struct js *js) {
   if (vtype(res) == T_CODEREF) {
     jsoff_t _cr_off = coderefoff(res), _cr_len = codereflen(res);
     res = lookup(js, &js->code[_cr_off], _cr_len);
-    if (is_err(res) && js->code >= (const char*)js->mem && js->code < (const char*)js->mem + js->size) {
-      printf("[LOOKUP DBG] '%.*s' not found! pos=%u clen=%u\n",
-             (int)_cr_len, &js->code[_cr_off], (unsigned)js->pos, (unsigned)js->clen);
-    }
   }
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT) {
     if (js->tok == TOK_DOT) {
@@ -1112,12 +1141,6 @@ static jsval_t js_ternary(struct js *js) {
 
 static jsval_t js_assignment(struct js *js) {
   jsval_t res = js_ternary(js);
-  if (is_err(res)) {
-    if (js->code >= (const char*)js->mem && js->code < (const char*)js->mem + js->size) {
-      printf("[ASSIGN DBG] ternary returned err, pos=%u clen=%u consumed=%d tok=%d\n",
-             (unsigned)js->pos, (unsigned)js->clen, js->consumed, (int)js->tok);
-    }
-  }
   while (!is_err(res) && (next(js) == TOK_ASSIGN || js->tok == TOK_PLUS_ASSIGN || js->tok == TOK_MINUS_ASSIGN || js->tok == TOK_MUL_ASSIGN || js->tok == TOK_DIV_ASSIGN || js->tok == TOK_REM_ASSIGN || js->tok == TOK_SHL_ASSIGN || js->tok == TOK_SHR_ASSIGN || js->tok == TOK_ZSHR_ASSIGN || js->tok == TOK_AND_ASSIGN || js->tok == TOK_XOR_ASSIGN || js->tok == TOK_OR_ASSIGN)) {
     uint8_t op = js->tok;
     js->consumed = 1;
@@ -1210,7 +1233,7 @@ static jsval_t js_for(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t v, res = js_mkundef();
   jsoff_t pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-  if (exe) mkscope(js);  // Enter new scope
+  if (exe && !mkscope(js)) return js_mkerr(js, "oom");  // Enter new scope
   if (!expect(js, TOK_FOR, &res)) goto done;
   if (!expect(js, TOK_LPAREN, &res)) goto done;
 
@@ -1241,6 +1264,15 @@ static jsval_t js_for(struct js *js) {
   if (is_err2(&v, &res)) goto done;
   pos4 = js->pos;  // end of body
   while (!(flags & F_NOEXEC)) {
+    // Count iterations against the step budget too: an empty body executes zero statements.
+    if (++js->steps > js->maxsteps && js->maxsteps != 0) {
+      res = js_mkerr(js, "step limit");
+      goto done;
+    }
+    if ((js->steps & 63) == 1) {
+      res = js_checkinterrupt(js);
+      if (is_err(res)) goto done;
+    }
     js->flags = flags, js->pos = pos1, js->consumed = 1;
     if (next(js) != TOK_SEMICOLON) {     // Is condition specified?
       v = resolveprop(js, js_expr(js));  // Yes. check condition
@@ -1300,7 +1332,16 @@ static jsval_t js_return(struct js *js) {
 static jsval_t js_stmt(struct js *js) {
   jsval_t res;
   // jsoff_t pos = js->pos - js->tlen;
-  if (js->brk > js->gct) js_gc(js);
+  // GC only outside F_CALL (do_call_op holds raw code pointers GC cannot fix up)
+  // and outside F_NOEXEC (C frames hold unrooted arena temporaries mid-expression).
+  if (js->brk > js->gct && !(js->flags & (F_CALL | F_NOEXEC))) js_gc(js);
+  // Statement budget: turn while(true){} into a JS error instead of starving the task.
+  if (++js->steps > js->maxsteps && js->maxsteps != 0)
+    return js_mkerr(js, "step limit");
+  if ((js->steps & 63) == 1) {
+    res = js_checkinterrupt(js);
+    if (is_err(res)) return res;
+  }
   switch (next(js)) {  // clang-format off
     case TOK_CASE: case TOK_CATCH: case TOK_CLASS: case TOK_CONST:
     case TOK_DEFAULT: case TOK_DELETE: case TOK_DO: case TOK_FINALLY:
@@ -1320,12 +1361,6 @@ static jsval_t js_stmt(struct js *js) {
   }
   //printf("STMT [%.*s] -> %s, tok %d, flags %d\n", (int) (js->pos - pos), &js->code[pos], js_str(js, res), next(js), js->flags);
   if (next(js) != TOK_SEMICOLON && next(js) != TOK_EOF && next(js) != TOK_RBRACE) {
-    printf("[ELK DBG] ;expected at stmt-end  tok=%d pos=%u clen=%u code_in_heap=%d\n",
-           (int)js->tok, (unsigned)js->pos, (unsigned)js->clen,
-           (js->code >= (const char*)js->mem && js->code < (const char*)js->mem + js->size));
-    int ctx = (int)js->clen - (int)js->pos;
-    if (ctx > 40) ctx = 40;
-    if (ctx > 0) printf("[ELK DBG] remaining: [%.*s]\n", ctx, &js->code[js->pos]);
     return js_mkerr(js, "; expected");
   }
   js->consumed = 1;
@@ -1350,6 +1385,17 @@ struct js *js_create(void *buf, size_t len) {
 // clang-format off
 void js_setgct(struct js *js, size_t gct) { js->gct = (jsoff_t) gct; }
 void js_setmaxcss(struct js *js, size_t max) { js->maxcss = (jsoff_t) max; }
+void js_setmaxsteps(struct js *js, size_t max) { js->maxsteps = (jsoff_t) max; }
+void js_setinterrupt(struct js *js, const char *(*check)(void *), void *context) {
+  js->interrupt = check;
+  js->interrupt_context = context;
+}
+jsval_t js_checkinterrupt(struct js *js) {
+  const char *reason = js->interrupt ? js->interrupt(js->interrupt_context) : NULL;
+  return reason ? js_mkerr(js, "%s", reason) : js_mkundef();
+}
+size_t js_usage(struct js *js) { return js->brk; }   // Current arena bytes used
+size_t js_total(struct js *js) { return js->size; }  // Arena capacity
 jsval_t js_mktrue(void) { return mkval(T_BOOL, 1); }
 jsval_t js_mkfalse(void) { return mkval(T_BOOL, 0); }
 jsval_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
@@ -1404,15 +1450,29 @@ bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
 jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   // printf("EVAL: [%.*s]\n", (int) len, buf);
   jsval_t res = js_mkundef();
+  bool top_level = !(js->flags & F_CALL);
   if (len == (size_t)~0U) len = strlen(buf);
   js->consumed = 1;
   js->tok = TOK_ERR;
   js->code = buf;
   js->clen = (jsoff_t)len;
   js->pos = 0;
-  js->cstk = &res;
+  // Function bodies run through a nested js_eval (call_js sets F_CALL first);
+  // the C-stack baseline/high-water mark and step budget reset only at top level.
+  if (top_level) {
+    js->cstk = &res;
+    js->css = 0;
+    js->steps = 0;
+  }
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
+  }
+  // Public API calls after eval (including allocation errors) must not read
+  // a caller's expired stack snippet while formatting source line numbers.
+  if (top_level) {
+    js->code = NULL;
+    js->clen = js->pos = js->toff = 0;
+    js->cstk = NULL;
   }
   return res;
 }

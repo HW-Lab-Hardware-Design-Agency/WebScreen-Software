@@ -43,12 +43,6 @@ void lcd_setRotation(uint8_t r);
 
 void lcd_DrawPoint(uint16_t x, uint16_t y, uint16_t color);
 
-void lcd_fill(uint16_t xsta,
-              uint16_t ysta,
-              uint16_t xend,
-              uint16_t yend,
-              uint16_t color);
-
 void lcd_PushColors(uint16_t x,
                     uint16_t y,
                     uint16_t width,

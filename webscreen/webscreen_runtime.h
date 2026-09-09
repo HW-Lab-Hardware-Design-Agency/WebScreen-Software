@@ -29,16 +29,45 @@ extern "C" {
 
   bool webscreen_runtime_start_javascript(const char* script_file);
 
-  /**
- * @brief Start fallback application
- * 
- * Starts the built-in fallback application when JavaScript runtime
- * is unavailable or has failed.
- * 
- * @return true if fallback started successfully, false otherwise
- */
+  /** Request an in-place restart of the JS app (no device reboot); safe to call from any task. */
 
-  bool webscreen_runtime_start_fallback(void);
+  void webscreen_runtime_request_restart(const char* reason);
+
+  /** Automatic restart escalation (timer bridge): does not lift safe mode; repeated cycles park the app. */
+
+  void webscreen_runtime_request_restart_auto(const char* reason);
+
+  /** Switch to a different script and restart the JS app in place. */
+
+  bool webscreen_runtime_load_new_script(const char* script_file);
+
+  /** Current Elk arena usage/capacity in bytes (0 if the engine is not running). */
+
+  void webscreen_runtime_get_js_arena(uint32_t* used, uint32_t* total);
+
+  /** Set Elk arena size (clamped 64..1024 KB); no effect once the arena is allocated. */
+
+  void webscreen_runtime_set_js_heap_kb(int kb);
+
+  /** Queue a one-shot /eval snippet (max 255 chars, one in flight); the JS task prints the result to Serial as [EVAL]. */
+
+  bool webscreen_runtime_eval_snippet(const char* code);
+
+  /** Record the most recent JS error (reported by /errors); safe from any task. */
+
+  void webscreen_runtime_note_js_error(const char* msg);
+
+  /** Print the JS error/restart-ladder report to Serial (/errors). */
+
+  void webscreen_runtime_print_error_report(void);
+
+  /** Power-button press from loopTask; queued lock-free for the JS task's on_button() handler. */
+
+  void webscreen_runtime_notify_button(bool pressed);
+
+  /** Queue a /screenshot; the JS task streams packed RGB565 from PSRAM between SCREENSHOT markers. */
+
+  bool webscreen_runtime_request_screenshot(void);
 
   /**
  * @brief Run JavaScript runtime loop
@@ -48,15 +77,6 @@ extern "C" {
  */
 
   void webscreen_runtime_loop_javascript(void);
-
-  /**
- * @brief Run fallback application loop
- * 
- * Executes one iteration of the fallback application. Should be called
- * repeatedly from the main loop when in fallback mode.
- */
-
-  void webscreen_runtime_loop_fallback(void);
 
   /**
  * @brief Shutdown all runtimes
@@ -84,14 +104,6 @@ extern "C" {
   const char* webscreen_runtime_get_javascript_status(void);
 
   /**
- * @brief Execute JavaScript code
- * @param code JavaScript code string to execute
- * @return true if execution successful, false on error
- */
-
-  bool webscreen_runtime_execute_javascript(const char* code);
-
-  /**
  * @brief Get JavaScript execution statistics
  * @param exec_count Pointer to store execution count
  * @param avg_time_us Pointer to store average execution time in microseconds
@@ -112,59 +124,6 @@ extern "C" {
  */
 
   bool webscreen_runtime_is_fallback_active(void);
-
-  /**
- * @brief Update fallback display text
- * @param text Text to display in fallback application
- */
-
-  void webscreen_runtime_set_fallback_text(const char* text);
-
-  /**
- * @brief Get fallback application status
- * @return String describing current status
- */
-  const char* webscreen_runtime_get_fallback_status(void);
-
-  // ============================================================================
-  // LVGL INTEGRATION
-  // ============================================================================
-
-  /**
- * @brief Initialize LVGL graphics library
- * @return true if initialization successful, false otherwise
- */
-
-  bool webscreen_runtime_init_lvgl(void);
-
-  /**
- * @brief Run LVGL timer handler
- * 
- * Processes LVGL timers and animations. Should be called regularly
- * from both JavaScript and fallback runtime loops.
- */
-
-  void webscreen_runtime_lvgl_timer_handler(void);
-
-  /**
- * @brief Get LVGL display object
- * @return Pointer to LVGL display object, or NULL if not initialized
- */
-  void* webscreen_runtime_get_lvgl_display(void);
-
-  /**
- * @brief Set LVGL background color
- * @param color RGB color value (0xRRGGBB)
- */
-
-  void webscreen_runtime_set_background_color(uint32_t color);
-
-  /**
- * @brief Set LVGL foreground color
- * @param color RGB color value (0xRRGGBB)
- */
-
-  void webscreen_runtime_set_foreground_color(uint32_t color);
 
   // ============================================================================
   // MEMORY MANAGEMENT
@@ -212,26 +171,8 @@ extern "C" {
   bool webscreen_runtime_has_errors(void);
 
   // ============================================================================
-  // PERFORMANCE MONITORING
+  // STATUS
   // ============================================================================
-
-  /**
- * @brief Enable or disable performance monitoring
- * @param enable true to enable monitoring, false to disable
- */
-
-  void webscreen_runtime_set_performance_monitoring(bool enable);
-
-  /**
- * @brief Get performance statistics
- * @param avg_loop_time_us Average loop time in microseconds
- * @param max_loop_time_us Maximum loop time in microseconds
- * @param fps Frames per second (for display updates)
- */
-
-  void webscreen_runtime_get_performance_stats(uint32_t* avg_loop_time_us,
-                                               uint32_t* max_loop_time_us,
-                                               uint32_t* fps);
 
   /**
  * @brief Print runtime status to serial
@@ -307,18 +248,6 @@ extern "C" {
 
 #ifdef __cplusplus
 }
-#endif
-
-// ============================================================================
-// COMPATIBILITY WITH EXISTING CODE
-// ============================================================================
-
-// Legacy function names for backward compatibility
-#ifdef WEBSCREEN_ENABLE_DEPRECATED_API
-#define dynamic_js_setup() webscreen_runtime_start_javascript(g_webscreen_config.script_file)
-#define dynamic_js_loop() webscreen_runtime_loop_javascript()
-#define fallback_setup() webscreen_runtime_start_fallback()
-#define fallback_loop() webscreen_runtime_loop_fallback()
 #endif
 
 // ============================================================================

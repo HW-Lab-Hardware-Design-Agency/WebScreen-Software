@@ -1,2 +1,15 @@
 node_modules
 dist
+
+# Local agent instructions and internal working notes
+/AGENTS.md
+/BINARY_LOADING_IMPLEMENTATION.md
+/CAMERA_IMPROVEMENTS.md
+/CAMERA_INTEGRATION_SUMMARY.md
+/CHANGES.md
+/EMBEDDER.md
+/IMAGE_CONVERSION_GUIDE.md
+/LVGL_9_MIGRATION.md
+/REFACTORING_PLAN.md
+/docs/FIRMWARE_VALIDATION.md
+/docs/LVGL8_REVIEW.md

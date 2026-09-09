@@ -6,6 +6,8 @@
 
 WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Get the notifications you want, build custom JavaScript apps, and stay in the zone—no distractions. Powered by ESP32-S3 with an AMOLED screen, fully open hardware and software.
 
+The current firmware on `main` is **3.0.0**, using **LVGL 8.3.11**. It supports the WebScreen Admin and Serial IDE workflows below, including verified uploads, file downloads, app reloads, and screenshots. Use the libraries and `lv_conf.h` from the branch you build; see [Browser Tools & Firmware Compatibility](#browser-tools--firmware-compatibility).
+
 ## Core Features
 
 ### Runtime Environment
@@ -85,20 +87,20 @@ This is the easiest way to get started with WebScreen without any development se
    ```
 
    In Library Manager, select **8.3.11** in LVGL's version dropdown before
-   installing. The `dev` branch requires LVGL 8; the migration branch uses
+   installing. This release requires LVGL 8; the migration branch uses
    LVGL 9.5. Arduino IDE shares installed libraries between Git branches, so
    switching branches does not switch LVGL automatically.
 
 4. **Configure LVGL**
-   Copy the provided `lv_conf.h` file to your Arduino libraries folder:
-   ```
-   cp WebScreen-Software/lv_conf.h ~/Arduino/libraries/
+   From the repository root, copy the provided `lv_conf.h` beside the installed `lvgl` folder. Adjust the path for your Arduino sketchbook:
+   ```sh
+   cp lv_conf.h ~/Arduino/libraries/lv_conf.h
    ```
 
    Copy the configuration again whenever switching LVGL versions, then restart
    Arduino IDE. Keep backups outside `~/Arduino/libraries/` so Arduino does not
    discover both versions. Errors mentioning missing `lv_disp_drv_t`,
-   `LV_IMG_CF_TRUE_COLOR_ALPHA`, or `lv_meter_t` on `dev` indicate that LVGL 9
+   `LV_IMG_CF_TRUE_COLOR_ALPHA`, or `lv_meter_t` on `main` indicate that LVGL 9
    was selected instead of LVGL 8.3.11.
 
    Key LVGL settings configured for WebScreen:
@@ -129,7 +131,11 @@ This is the easiest way to get started with WebScreen without any development se
 
    ![Board Settings](docs/arduino_tools_settings.png)
 
-#### Option 3: Direct Compilation
+7. **Compile and Upload**
+
+   Use **Sketch → Verify/Compile**, then **Sketch → Upload**. Open Serial Monitor at **115200 baud** and run `/info` and `/help` to confirm the installed firmware and available commands. Close Serial Monitor before connecting a browser tool to the same port.
+
+#### Option 3: Arduino CLI
 
 After installing the libraries and copying `lv_conf.h` as above:
 
@@ -142,9 +148,33 @@ arduino-cli compile \
 See [building and testing](docs/CONTRIBUTING.md#building-and-testing) for using
 an isolated LVGL 8 library, running native sanitizer tests, and device checks.
 
-### Hardware Setup
+## Browser Tools & Firmware Compatibility
 
-#### Upload Mode (if USB not detected)
+| Tool | Use |
+|------|-----|
+| [WebScreen Admin](https://admin.webscreen.cc/) · [source](https://github.com/HW-Lab-Hardware-Design-Agency/WebScreen-Admin) | Install apps, manage SD-card files, edit settings, and adjust brightness. |
+| [WebScreen Serial IDE](https://github.com/HW-Lab-Hardware-Design-Agency/WebScreen-Serial-IDE) | Edit scripts, recover local drafts, upload files, use the serial console, and capture screenshots on compatible firmware. Its README includes local startup instructions. |
+| [WebScreen Awesome](https://github.com/HW-Lab-Hardware-Design-Agency/WebScreen-Awesome) | Find JavaScript apps and their required configuration and media files. |
+
+Use desktop Chrome or Edge with a USB data cable. Browser USB access requires HTTPS or localhost. Close Arduino Serial Monitor/Plotter and other Admin or IDE tabs using the device before connecting. File and settings operations require a mounted SD card.
+
+Firmware **3.0.0** provides the following commands used by the browser tools. Run `/info` to check the installed version and `/help` to inspect its commands, especially when connecting an older device:
+
+| Feature | Firmware 3.0.0 commands and behavior |
+|---------|---------------------------|
+| Verified uploads | `/upload <file> base64` and a final `[OK] File saved:` acknowledgement after `END`. |
+| Reliable file browsing | `/ls <path> json`, or a text listing ending with `Total: …`. |
+| IDE file opening and binary downloads | `/download <file>` with a framed base64 response. |
+| Run and save as the boot app | `/load <file> save`. |
+| Live JavaScript evaluation | `/eval <code>`; one line, at most 255 UTF-8 bytes. |
+| App diagnostics and restart | `/errors`, `/gc`, and `/restart_app`. |
+| Screenshots | `/screenshot` emitting a complete RGB565 stream while the JavaScript runtime is active. |
+
+Use `/download <file>` to transfer an SD-card file to the computer and `/wget <url> [file]` to download from the network to the SD card. Updating a browser tool does not update the device firmware.
+
+## Hardware Setup
+
+### Upload Mode (if USB not detected)
 1. Power off device
 2. Hold **BOOT** button (behind RST button)  
 3. Connect USB-C cable
@@ -152,7 +182,7 @@ an isolated LVGL 8 library, running native sanitizer tests, and device checks.
 5. Upload firmware
 6. Press **RESET** to run
 
-#### Power Button
+### Power Button
 - **Single Press**: Toggle screen on/off
 - **Long Press**: Power off (hold for 3 seconds)
 - **Pin**: GPIO 21 (INPUT_PULLUP)
@@ -198,6 +228,19 @@ WebScreen uses a JSON configuration file stored on the SD card as `/webscreen.js
 | | `foreground` | Text/foreground color (hex) | `"#FFFFFF"` |
 | **display** | `brightness` | Display brightness (0-255) | `200` |
 | **Root** | `script` | JavaScript file to execute | `"app.js"` |
+| | `js_heap_kb` | Optional Elk arena size; positive values are clamped to 64–1024 KB | Firmware default |
+| **Root** | `timezone` | Timezone setting; also accepts `system.timezone` | `"UTC"` |
+| **system** | `ntp_server` | Time server used after WiFi connects | `"pool.ntp.org"` |
+
+### Editing Settings in WebScreen Admin
+
+Connect the device and open **Settings** to load `/webscreen.json`. The saved WiFi password is masked; use the eye button to inspect it. Brightness changes are sent live, while **Save settings** stores the selected value for startup. Restart the device to apply other saved settings.
+
+Under **Advanced → Add property**, enter a name, type, and value, such as `settings.weather.city` (Text), `refresh_seconds` (Number), or `notifications_enabled` (Boolean). Dots create nested objects. Existing custom properties load into the form and can be edited or removed. **View webscreen.json** previews the complete document before saving.
+
+Custom properties must be read explicitly by your app, for example with `sd_read_file('/webscreen.json')` and the JSON helpers documented in [docs/API.md](docs/API.md). Keep configuration small: this branch's startup loader uses a 1 KB ArduinoJson document with ArduinoJson 6; ArduinoJson 7 uses dynamic allocation. A successful save does not prove the firmware can parse a larger document at boot.
+
+For nested settings, edit the complete JSON file or use Admin. This branch's `/config get` traverses nested paths, but `/config set` only splits the first dot and stores values as strings; it cannot safely replace a typed, deeply nested configuration editor.
 
 ### Example Configurations
 
@@ -225,7 +268,7 @@ WebScreen uses a JSON configuration file stored on the SD card as `/webscreen.js
   },
   "screen": {
     "background": "#1a1a2e",
-    "foreground": "#eee"
+    "foreground": "#eeeeee"
   },
   "script": "weather.js"
 }
@@ -293,8 +336,8 @@ WebScreen features a modular architecture with clear separation of concerns:
 │  ┌─────────────────────────────────────────────────────────┐│
 │  │             webscreen_main.cpp/.h                      ││
 │  │  • Configuration loading and management                ││
-│  │  • Application state management                        ││
-│  │  • Main setup and loop coordination                    ││
+│  │  • Shared settings storage                             ││
+│  │  • Boot coordinated by webscreen.ino                    ││
 │  └─────────────────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────────────────┤
 │                  Hardware Abstraction                      │
@@ -364,27 +407,23 @@ WebScreen includes a custom `lv_conf.h` file optimized for ESP32-S3 with AMOLED 
 - Shadow caching disabled for predictable memory consumption
 - Memory management uses ESP32 heap allocator
 
-#### Debug Build
-To enable debug mode, uncomment this line in `webscreen/webscreen_config.h`:
-```cpp
-#define WEBSCREEN_DEBUG 1
-```
-This enables verbose logging and memory debugging features.
+#### Build Verification
+
+Compile before uploading, then check startup output at 115200 baud. Record the firmware commit, ESP32 board package, LVGL version, and board settings when reporting a problem. A successful compile still requires hardware checks for display output, SD-card access, networking, and the affected JavaScript APIs.
 
 ### Runtime Modes
 
 | Mode | Trigger | Description |
 |------|---------|-------------|
-| **JavaScript** | Valid `script_file` found | Full JavaScript runtime with all APIs |
-| **Fallback** | No script or WiFi failure | Built-in notification app with GIF animation |
-| **Recovery** | System errors detected | Minimal mode with error reporting |
-| **Update** | Special SD card structure | Firmware update mode |
+| **JavaScript** | Valid configuration and the file named by `script` exist | Runs the app with the firmware's Elk API bindings; WiFi is optional. |
+| **Fallback** | SD card cannot mount, configuration cannot be read/parsed, the script is missing, or runtime initialization fails | Built-in notification app with GIF animation; serial remains available. |
+| **JavaScript safe mode** | Repeated app failures exhaust automatic recovery | App execution is paused; inspect `/errors`, upload a correction, then `/load` or `/restart_app`. |
 
 ### Development & Debugging
 
 #### Serial Monitor Output
 ```
-[1234.567] INFO: [Main] WebScreen v2.0 initializing...
+[1234.567] INFO: [Main] WebScreen v3.0.0 initializing...
 [1234.678] INFO: [Memory] PSRAM: 8388608 bytes available
 [1234.789] INFO: [Display] RM67162 initialized (536x240)
 [1234.890] INFO: [WiFi] Connected to MyNetwork (192.168.1.100)
@@ -393,7 +432,7 @@ This enables verbose logging and memory debugging features.
 
 #### Serial Commands
 
-WebScreen includes a comprehensive serial command system for interactive development. Commands work in both fallback and dynamic JavaScript modes:
+WebScreen includes a comprehensive serial command system for interactive development. Storage and configuration commands work in fallback and JavaScript modes. `/load`, `/restart_app`, `/eval`, and `/screenshot` require the JavaScript runtime:
 
 **Core Commands:**
 ```
@@ -401,8 +440,15 @@ WebScreen includes a comprehensive serial command system for interactive develop
 /stats                   - Display system statistics (memory, storage, WiFi)
 /info                    - Show device information and version
 /write <filename>        - Interactive JavaScript editor
-/load <script.js>        - Switch to different JS application
+/load <script.js> [save] - Switch app in place; save also persists the boot app
+/restart_app             - Restart the current JavaScript app without reboot
+/eval <code>             - Evaluate one line in the running app
+/errors                  - Show JavaScript errors and recovery state
+/gc                      - Request JavaScript garbage collection
+/screenshot              - Capture the display as base64 RGB565
 /brightness <0-255>      - Set display brightness (no args to query current)
+/time                    - Show device time
+/settime <epoch> [tz]    - Set device time and optional timezone
 /reboot                  - Restart the device
 ```
 
@@ -422,10 +468,15 @@ WebScreen includes a comprehensive serial command system for interactive develop
 
 **File Operations:**
 ```
-/ls [path]               - List files/directories
+/ls [path] [json]        - List files/directories; json gives structured output
 /cat <file>              - Display file contents
-/rm <file>               - Delete file
+/rm <file|empty-dir>     - Delete file or empty directory
+/mkdir <path>            - Create an SD-card directory
+/download <file>         - Transfer an SD-card file as framed base64
+/upload <file> [base64]  - Receive file data until a line containing END
 ```
+
+Use base64 uploads to preserve blank lines, indentation, Unicode, and a literal `END` in file contents. The browser tools encode and pace chunks automatically, then wait for the device acknowledgement.
 
 **Example Development Workflow:**
 ```
@@ -436,40 +487,36 @@ Enter JavaScript code. End with a line containing only 'END':
 + END
 [OK] Script saved: /hello.js (45 bytes)
 
-WebScreen> /load hello.js
-[OK] Script queued for loading: /hello.js
-[OK] Restarting to load new script...
+WebScreen> /load /hello.js save
+[OK] Loading script: /hello.js
+[OK] Config updated: script = /hello.js
 ```
+
+While JavaScript is active, `/load /hello.js` switches apps for the current session without rebooting; add `save` to run it after the next boot as well. If the device is in fallback mode, set `/config set script /hello.js` and then `/reboot` to start the JavaScript runtime.
 
 For detailed command reference, see [docs/SerialCommands.md](docs/SerialCommands.md).
 
-#### Debug Commands
-```cpp
-// Memory usage report
-memory_print_report();
-
-// Display statistics  
-display_print_status();
-
-// System health check
-webscreen_error_print_report();
-
-// Network status
-wifi_manager_print_status();
-```
-
 #### Performance Monitoring
-```cpp
-// Enable performance profiling
-display_set_performance_monitoring(true);
 
-// Monitor frame rate and memory usage
-display_stats_t stats;
-display_get_stats(&stats);
-Serial.printf("FPS: %d, Memory: %d KB\n", stats.last_fps, stats.memory_used/1024);
+Use the serial console to inspect memory, storage, and network status:
+
+```text
+/stats
+/monitor mem
+/monitor net
 ```
+
+Press a key to leave monitoring before issuing another command. `/errors` reports JavaScript failures and `/gc` requests garbage collection at a safe point.
 
 ## JavaScript API
+
+### Elk Compatibility
+
+Apps run in the Elk interpreter bundled in [webscreen/elk.c](webscreen/elk.c). Use `let`, function expressions such as `let refresh = function() { ... };`, and bounded `for` loops. This interpreter reports `while`, `const`, `var`, classes, and `switch` as not implemented. Browser or Node.js execution alone does not validate firmware compatibility.
+
+Schedule repeated work with a named callback, such as `create_timer('refresh', 1000)`, and keep callbacks short so display updates can continue. Follow each app's setup instructions in [WebScreen Awesome](https://github.com/HW-Lab-Hardware-Design-Agency/WebScreen-Awesome) and include its required assets on the SD card.
+
+### Available Bindings
 
 The firmware exposes numerous functions to your JavaScript applications. Some highlights include:
 - **Basic:** `print()`, `delay()`
@@ -512,7 +559,15 @@ http_set_ca_cert_from_sd("/timeapi.pem");
 
 ### For Developers
 
-WebScreen is designed to be contributor-friendly with comprehensive documentation and testing frameworks.
+The repository includes native regression tests against real LVGL and Elk, plus a script for device checks. Run the host suite with Python 3, GCC/G++, sanitizer runtimes, and LVGL 8.3.11 installed:
+
+```sh
+python3 tests/run_host_tests.py \
+  --lvgl /path/to/lvgl-8.3.11 \
+  --build-dir /tmp/webscreen-lvgl8-tests
+```
+
+For device checks, copy [tests/firmware_smoke.js](tests/firmware_smoke.js) to the SD card, run `/load /firmware_smoke.js`, and monitor `/stats` during repeated `/restart_app` cycles. See [Building and Testing](docs/CONTRIBUTING.md#building-and-testing) for prerequisites and validation details. Host and browser tests do not replace firmware compilation and hardware testing.
 
 #### Getting Started
 1. **Read the Docs**: Check out [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed guidelines

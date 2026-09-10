@@ -15,6 +15,7 @@
 #include "ws_lvgl_widgets.h"
 #include "ws_lvgl_styles.h"
 #include "ws_lvgl_charts.h"
+#include "ws_lvgl_arclabel.h"
 #include "ws_elk_http.h"
 #include "ws_elk_sd_ext.h"
 #include "ws_elk_ble.h"

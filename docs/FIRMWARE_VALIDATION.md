@@ -39,6 +39,32 @@ These tests do not emulate ESP32 hardware or network stacks.
 
 ## Device smoke test
 
+### Interactive LVGL Lab
+
+1. Copy the updated `lv_conf.h` to your Arduino libraries folder and rebuild/upload
+   this branch. The new arc-label bindings require this firmware update.
+2. Upload [`tests/lvgl95_showcase.js`](../tests/lvgl95_showcase.js) to the SD card
+   through Admin/Serial IDE, then run `/load lvgl95_showcase.js`. No Wi-Fi or media
+   assets are needed. Loading without `save` keeps your existing startup app.
+3. Expect animated curved text around a scale-based gauge, a smooth curve chart,
+   and red/green/blue swatches along the bottom.
+4. Short presses cycle **curve → bar (with reversed curved text) → paused → curve**.
+   The paused view is useful for `/screenshot`; long press still powers off.
+5. Check `/errors`, repeat `/restart_app`, and compare `/stats` after warm-up for
+   continuing memory growth. Text should remain intact after `/gc`.
+
+The host suite executes the actual script with Elk, production LVGL bindings,
+and simulated button events over repeated loads. It also writes
+`lvgl95-showcase-{0,1,2}.ppm` previews in the host build directory. Physical display
+timing, button wiring, and SD/USB transfers still need board testing.
+
+### Migration regressions
+
+For focused visual tests, use the [five-app demo pack](../tests/demos/README.md).
+It separates curved text, chart types, gauges, static typography, and line motion.
+The host suite executes every mode; the pack includes commands and expected
+behavior for running each app on the board.
+
 1. Copy `tests/migration_smoke.js` to the root of a FAT32 SD card. Run
    `/load migration_smoke.js` at 115200 baud.
 2. Expect a changing **bar** chart, rotating meter needle, two separate bottom

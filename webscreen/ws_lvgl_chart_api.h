@@ -44,9 +44,10 @@ static jsval_t js_lv_chart_set_type(struct js *js, jsval_t *args, int nargs) {  
   lv_obj_t *obj = get_lv_obj(h);
   if (!obj || !lv_obj_check_type(obj, &lv_chart_class)) return js_mknull();
 
-  // Preserve the numeric LVGL 8 API; v9 inserted CURVE before BAR.
+  // Preserve LVGL 8 values 0..3; expose v9 CURVE as the new JS value 4.
   static const lv_chart_type_t types[] = {
-    LV_CHART_TYPE_NONE, LV_CHART_TYPE_LINE, LV_CHART_TYPE_BAR, LV_CHART_TYPE_SCATTER
+    LV_CHART_TYPE_NONE, LV_CHART_TYPE_LINE, LV_CHART_TYPE_BAR, LV_CHART_TYPE_SCATTER,
+    LV_CHART_TYPE_CURVE
   };
   if (t < 0 || t >= (int)(sizeof(types) / sizeof(types[0]))) return js_mknull();
   lv_chart_set_type(obj, types[t]);

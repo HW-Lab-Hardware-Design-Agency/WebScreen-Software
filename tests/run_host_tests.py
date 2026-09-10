@@ -52,4 +52,5 @@ result = subprocess.run([os.environ.get('CXX', 'g++'), *flags, *link_flags, '-no
 if result.returncode:
     raise SystemExit(result.stderr)
 env = dict(os.environ, ASAN_OPTIONS='detect_leaks=1:halt_on_error=1', UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
-subprocess.run([str(binary)], check=True, env=env)
+subprocess.run([str(binary), str(ROOT / 'tests/lvgl95_showcase.js'), str(build / 'lvgl95-showcase'),
+                str(ROOT / 'tests/demos')], check=True, env=env)

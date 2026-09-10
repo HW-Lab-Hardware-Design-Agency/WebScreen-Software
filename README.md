@@ -2,6 +2,9 @@
 
 # WebScreen Software
 
+The `4.x` branch develops firmware **4.0.0-dev** with **LVGL 9.5** support.
+It includes the arc-label and smooth-chart APIs used by the firmware 4.0 demo apps.
+
 ![til](./docs/WebScreen_Notification.gif)
 
 WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Get the notifications you want, build custom JavaScript apps, and stay in the zone—no distractions. Powered by ESP32-S3 with an AMOLED screen, fully open hardware and software.
@@ -340,9 +343,16 @@ WebScreen includes a custom `lv_conf.h` file (LVGL 9.5 format) optimized for ESP
 **Note:** Other font sizes (8, 10, 12, 16, 18, 22, 24, etc.) are NOT available.
 
 **Enabled Widgets:**
-- **Core**: Label, Image, Arc, Line, Button, Button Matrix, Canvas
-- **Extra**: Chart, Meter, Message Box, Span (rich text)
+- **Core**: Label, Arc Label, Image, Arc, Line, Button, Canvas
+- **Extra**: Chart (including smooth curves), Scale (backs the meter API), Span (rich text)
 - **Layouts**: Flexbox and Grid
+
+Try the offline [LVGL Lab](tests/lvgl95_showcase.js) to exercise curved text,
+smooth charts, and the migrated gauge. See the [build and test steps](docs/FIRMWARE_VALIDATION.md#interactive-lvgl-lab).
+The new arc-label bindings require rebuilding this branch with its updated `lv_conf.h`.
+The [five-app demo pack](tests/demos/README.md) provides separate tests for curved
+text, charts, gauges, typography, and moving lines, with button controls and an
+offline workflow for testing every mode.
 
 **Supported Image Formats:**
 - PNG ✅, GIF ✅, JPG ✅ (SJPG not supported since LVGL 9), BMP ❌

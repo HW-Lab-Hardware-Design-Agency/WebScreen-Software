@@ -1,12 +1,18 @@
 #include <cassert>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <fstream>
+#include <filesystem>
+#include <limits>
+#include <string>
 #include <vector>
 #include <lvgl.h>
 #include <lvgl_private.h>
+#include <src/widgets/arclabel/lv_arclabel_private.h>
 #include "elk.h"
 #include "pins_config.h"
 static_assert(INPUT_PIN == 21, "Button must stay off the octal PSRAM bus");
@@ -41,8 +47,16 @@ static lv_obj_t *get_lv_obj(int handle) {
 }
 static const int MAX_RAM_IMAGES = 16;
 static struct { bool used; lv_image_dsc_t dsc; } g_ram_images[MAX_RAM_IMAGES];
-#include "ws_lvgl_chart_api.h"
+static const lv_font_t *get_font_for_size(int size) {
+  if (size == 20) return &lv_font_montserrat_20;
+  if (size == 28) return &lv_font_montserrat_28;
+  if (size == 34) return &lv_font_montserrat_34;
+  if (size == 48) return &lv_font_montserrat_48;
+  return &lv_font_montserrat_14;
+}
+#include "ws_lvgl_styles.h"
 #include "ws_lvgl_charts.h"
+#include "ws_lvgl_arclabel.h"
 
 using Binding = jsval_t (*)(struct js *, jsval_t *, int);
 static jsval_t call(Binding binding, std::initializer_list<double> numbers) {
@@ -127,6 +141,10 @@ static void test_charts_and_meters() {
   assert(lv_chart_get_type(get_lv_obj(first)) == LV_CHART_TYPE_BAR);
   call(js_lv_chart_set_type, {(double)first, 3});
   assert(lv_chart_get_type(get_lv_obj(first)) == LV_CHART_TYPE_SCATTER);
+  call(js_lv_chart_set_type, {(double)second, 4});
+  assert(lv_chart_get_type(get_lv_obj(second)) == LV_CHART_TYPE_CURVE);
+  call(js_lv_chart_set_type, {(double)second, 5});
+  assert(lv_chart_get_type(get_lv_obj(second)) == LV_CHART_TYPE_CURVE);
   call(js_lv_chart_set_point_count, {(double)first, 4});
   call(js_lv_chart_set_point_count, {(double)second, 1024});
   int series = (int)js_getnum(call(js_lv_chart_add_series, {(double)first, 0xffffff, 0}));
@@ -154,6 +172,7 @@ static void test_charts_and_meters() {
   assert(g_meter_indicators[indicator]->end == 50);
   release_subobjects_owned_by(get_lv_obj(meter));
   assert(get_meter_scale(scale, get_lv_obj(meter)) == nullptr);
+  release_subobjects_owned_by(lv_scr_act());
   lv_obj_clean(lv_scr_act());
   objects.clear();
 }
@@ -215,7 +234,240 @@ static void test_screenshot() {
   assert(count == 536 * 240 * 2);
 }
 
-int main() {
+static void register_arc_labels() {
+  js_set(js, js_glob(js), "create_arc_label", js_mkfun(js_create_arc_label));
+  js_set(js, js_glob(js), "arc_label_set_text", js_mkfun(js_arc_label_set_text));
+  js_set(js, js_glob(js), "arc_label_set_angles", js_mkfun(js_arc_label_set_angles));
+  js_set(js, js_glob(js), "arc_label_set_direction", js_mkfun(js_arc_label_set_direction));
+}
+
+static void test_arc_labels() {
+  register_arc_labels();
+  eval("let curved = create_arc_label('Curved text', 10, 20, 86);");
+  int handle = (int)js_getnum(js_eval(js, "curved;", 7));
+  lv_obj_t *object = get_lv_obj(handle);
+  assert(object && lv_obj_check_type(object, &lv_arclabel_class));
+  assert(lv_arclabel_get_radius(object) == 86);
+  assert(strcmp((char *)lv_obj_get_user_data(object), "Curved text") == 0);
+  eval("arc_label_set_text(curved, 'Updated ' + 'text');");
+  js_gc(js);
+  assert(strcmp(((lv_arclabel_t *)object)->text, "Updated text") == 0);
+  assert(js_getbool(call(js_arc_label_set_angles, {(double)handle, 270, 180})));
+  assert(lv_arclabel_get_angle_start(object) == 270);
+  assert(lv_arclabel_get_angle_size(object) == 180);
+  assert(js_getbool(call(js_arc_label_set_direction, {(double)handle, 1})));
+  assert(lv_arclabel_get_dir(object) == LV_ARCLABEL_DIR_COUNTER_CLOCKWISE);
+
+  for (double bad : {-1.0, 360.0, 1.5, 1e30, std::numeric_limits<double>::infinity()}) {
+    assert(!js_getbool(call(js_arc_label_set_angles, {(double)handle, bad, 180})));
+  }
+  assert(!js_getbool(call(js_arc_label_set_angles, {(double)handle, 0, 0})));
+  assert(!js_getbool(call(js_arc_label_set_direction, {(double)handle, 2})));
+  assert(lv_arclabel_get_angle_start(object) == 270);
+  assert(lv_arclabel_get_angle_size(object) == 180);
+  assert(js_getnum(js_eval(js, "create_arc_label('bad', 0, 0, 0);", ~0U)) == -1);
+  assert(js_getnum(js_eval(js, "create_arc_label(123, 0, 0, 50);", ~0U)) == -1);
+  std::string too_long(256, 'x');
+  jsval_t text_args[] = {js_mknum(handle), js_mkstr(js, too_long.data(), too_long.size())};
+  assert(!js_getbool(js_arc_label_set_text(js, text_args, 2)));
+  assert(strcmp(((lv_arclabel_t *)object)->text, "Updated text") == 0);
+
+  int ordinary = store_lv_obj(lv_label_create(lv_screen_active()));
+  assert(!js_getbool(call(js_arc_label_set_angles, {(double)ordinary, 0, 180})));
+  lv_obj_delete(object);
+  objects[handle] = nullptr;
+  assert(!js_getbool(call(js_arc_label_set_angles, {(double)handle, 0, 180})));
+  lv_obj_clean(lv_screen_active());
+  objects.clear();
+}
+
+// Host adapters for platform-dependent bindings; UI styles, charts, meters,
+// arc labels and timer dispatch below use the production binding fragments.
+static std::string button_callback;
+static jsval_t host_draw_rect(struct js *, jsval_t *args, int) {
+  lv_obj_t *object = lv_obj_create(lv_screen_active());
+  lv_obj_set_pos(object, js_getnum(args[0]), js_getnum(args[1]));
+  lv_obj_set_size(object, js_getnum(args[2]), js_getnum(args[3]));
+  lv_obj_set_style_bg_color(object, lv_color_hex(js_getnum(args[4])), 0);
+  lv_obj_set_style_radius(object, 5, 0);
+  return js_mknum(store_lv_obj(object));
+}
+static jsval_t host_move(struct js *, jsval_t *args, int) {
+  lv_obj_set_pos(get_lv_obj(js_getnum(args[0])), js_getnum(args[1]), js_getnum(args[2]));
+  return js_mknull();
+}
+static jsval_t host_button(struct js *engine, jsval_t *args, int) {
+  size_t size = 0;
+  const char *name = js_getstr(engine, args[0], &size);
+  button_callback.assign(name, size);
+  return js_mktrue();
+}
+static jsval_t host_number(struct js *engine, jsval_t *args, int) {
+  char buffer[32];
+  snprintf(buffer, sizeof(buffer), "%.0f", js_getnum(args[0]));
+  return js_mkstr(engine, buffer, strlen(buffer));
+}
+static jsval_t host_print(struct js *, jsval_t *, int) { return js_mknull(); }
+
+static void register_showcase_bindings() {
+  register_arc_labels();
+  struct { const char *name; Binding binding; } bindings[] = {
+    {"create_label", js_create_label}, {"label_set_text", js_label_set_text},
+    {"create_style", js_create_style}, {"obj_add_style", js_obj_add_style},
+    {"obj_set_size", js_obj_set_size}, {"style_set_text_font", js_style_set_text_font},
+    {"obj_align", js_obj_align},
+    {"style_set_text_color", js_style_set_text_color}, {"style_set_text_align", js_style_set_text_align},
+    {"style_set_radius", js_style_set_radius}, {"style_set_border_width", js_style_set_border_width},
+    {"style_set_pad_all", js_style_set_pad_all}, {"style_set_bg_opa", js_style_set_bg_opa},
+    {"style_set_bg_color", js_style_set_bg_color}, {"lv_meter_create", js_lv_meter_create},
+    {"lv_meter_add_scale", js_lv_meter_add_scale}, {"lv_meter_set_scale_ticks", js_lv_meter_set_scale_ticks},
+    {"lv_meter_set_scale_major_ticks", js_lv_meter_set_scale_major_ticks},
+    {"lv_meter_set_scale_range", js_lv_meter_set_scale_range}, {"lv_meter_add_arc", js_lv_meter_add_arc},
+    {"lv_meter_set_indicator_start_value", js_lv_meter_set_indicator_start_value},
+    {"lv_meter_set_indicator_end_value", js_lv_meter_set_indicator_end_value},
+    {"lv_meter_add_needle_line", js_lv_meter_add_needle_line},
+    {"lv_meter_set_indicator_value", js_lv_meter_set_indicator_value},
+    {"lv_chart_create", js_lv_chart_create}, {"lv_chart_set_type", js_lv_chart_set_type},
+    {"lv_chart_set_point_count", js_lv_chart_set_point_count},
+    {"lv_chart_set_div_line_count", js_lv_chart_set_div_line_count},
+    {"lv_chart_set_range", js_lv_chart_set_range}, {"lv_chart_add_series", js_lv_chart_add_series},
+    {"lv_chart_set_next_value", js_lv_chart_set_next_value}, {"create_timer", js_create_timer},
+    {"lv_chart_set_next_value2", js_lv_chart_set_next_value2},
+    {"lv_line_create", js_lv_line_create}, {"lv_line_set_points", js_lv_line_set_points},
+    {"style_set_line_width", js_style_set_line_width}, {"style_set_line_color", js_style_set_line_color},
+    {"style_set_line_rounded", js_style_set_line_rounded},
+    {"draw_rect", host_draw_rect}, {"move_obj", host_move}, {"on_button", host_button},
+    {"numberToString", host_number}, {"print", host_print}
+  };
+  for (auto &binding : bindings) js_set(js, js_glob(js), binding.name, js_mkfun(binding.binding));
+}
+
+static void capture_showcase(const std::string &path) {
+  lv_obj_update_layout(lv_screen_active());
+  std::vector<uint8_t> storage(LV_DRAW_BUF_SIZE(536, 240, LV_COLOR_FORMAT_RGB565));
+  lv_draw_buf_t snapshot;
+  assert(lv_draw_buf_init(&snapshot, 536, 240, LV_COLOR_FORMAT_RGB565,
+                         LV_STRIDE_AUTO, storage.data(), storage.size()) == LV_RESULT_OK);
+  assert(lv_snapshot_take_to_draw_buf(lv_screen_active(), LV_COLOR_FORMAT_RGB565, &snapshot) == LV_RESULT_OK);
+  std::ofstream image(path, std::ios::binary);
+  assert(image);
+  image << "P6\n536 240\n255\n";
+  for (size_t y = 0; y < 240; y++) {
+    for (size_t x = 0; x < 536; x++) {
+      uint8_t bytes[2];
+      assert(webscreen_snapshot_read(&snapshot, (y * 536 + x) * 2, bytes, 2) == 2);
+      uint16_t pixel = bytes[0] | (uint16_t(bytes[1]) << 8);
+      char rgb[] = {char(((pixel >> 11) & 31) * 255 / 31),
+                    char(((pixel >> 5) & 63) * 255 / 63), char((pixel & 31) * 255 / 31)};
+      image.write(rgb, 3);
+    }
+  }
+}
+
+static void test_showcase(const char *script_path, const char *output_prefix) {
+  std::ifstream input(script_path);
+  assert(input);
+  std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  alignas(8) static char app_arena[256 * 1024];
+  for (int run = 0; run < 3; run++) {
+    js = js_create(app_arena, sizeof(app_arena));
+    button_callback.clear();
+    register_showcase_bindings();
+    lv_obj_set_style_bg_color(lv_screen_active(), lv_color_black(), 0);
+    unsigned previous_errors = errors;
+    eval(source.c_str());
+    size_t object_count = objects.size();
+    assert(timer_count() == 1 && button_callback == "lab_button");
+    int chart = js_getnum(js_eval(js, "graph;", 6));
+    lv_obj_update_layout(lv_screen_active());
+    lv_area_t chart_area;
+    lv_obj_get_coords(get_lv_obj(chart), &chart_area);
+    assert(chart_area.x1 == 249 && chart_area.y1 == 78);
+    assert(chart_area.x2 < 536 && chart_area.y2 < 240);
+    assert(lv_chart_get_type(get_lv_obj(chart)) == LV_CHART_TYPE_CURVE);
+    for (int phase = 0; phase < 3; phase++) {
+      double before = js_getnum(js_eval(js, "turns;", 6));
+      for (int tick = 0; tick < 300; tick++) {
+        if (tick % 75 == 0) g_js_gc_requested = true;
+        now_ms += 80;
+        lv_timer_handler();
+      }
+      double after = js_getnum(js_eval(js, "turns;", 6));
+      assert((phase == 2) == (before == after));
+      assert(errors == previous_errors && objects.size() == object_count);
+      assert(timer_count() == 1);
+      if (run == 0) capture_showcase(std::string(output_prefix) + "-" + std::to_string(phase) + ".ppm");
+      eval("lab_button(1);");
+      assert(lv_chart_get_type(get_lv_obj(chart)) == (phase == 2 ? LV_CHART_TYPE_CURVE : LV_CHART_TYPE_BAR));
+    }
+    delete_all_elk_timers();
+    release_subobjects_owned_by(lv_screen_active());
+    lv_obj_clean(lv_screen_active());
+    objects.clear();
+    for (auto *&style : g_style_map) {
+      if (style) { lv_style_reset(style); delete style; style = nullptr; }
+    }
+  }
+}
+
+static void test_demo_pack(const std::filesystem::path &directory, const std::filesystem::path &output) {
+  std::vector<std::filesystem::path> scripts;
+  for (auto &entry : std::filesystem::directory_iterator(directory)) {
+    if (entry.path().extension() == ".js") scripts.push_back(entry.path());
+  }
+  assert(scripts.size() == 5);
+  std::sort(scripts.begin(), scripts.end());
+  alignas(8) static char arena[256 * 1024];
+  for (auto &script : scripts) {
+    std::ifstream input(script);
+    std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    for (int run = 0; run < 2; run++) {
+      js = js_create(arena, sizeof(arena));
+      js_setgct(js, sizeof(arena) / 4 * 3);
+      js_setmaxsteps(js, 2 * 1000 * 1000);
+      register_showcase_bindings();
+      button_callback.clear();
+      g_js_gc_requested = false;
+      unsigned previous_errors = errors;
+      eval(source.c_str());
+      assert(button_callback == "demo_button");
+      size_t object_count = objects.size();
+      unsigned timers = timer_count();
+      assert(timers <= 1);
+      int modes = js_getnum(js_eval(js, "demo_modes;", ~0U));
+      assert(modes >= 2 && modes <= 5);
+      for (int mode = 0; mode < modes; mode++) {
+        bool paused = js_getbool(js_eval(js, "demo_paused;", ~0U));
+        double before = js_getnum(js_eval(js, "demo_frame;", ~0U));
+        for (int tick = 0; tick < 437; tick++) {
+          // Match explicit /gc and automatic timer collection on the board.
+          if (tick % 71 == 0) js_gc(js);
+          now_ms += 250;
+          lv_timer_handler();
+        }
+        double after = js_getnum(js_eval(js, "demo_frame;", ~0U));
+        assert(paused ? before == after : after > before);
+        assert(errors == previous_errors);
+        assert(objects.size() == object_count && timer_count() == timers);
+        if (run == 0) {
+          capture_showcase((output / (script.stem().string() + "-" + std::to_string(mode) + ".ppm")).string());
+        }
+        eval("demo_button(1);");
+        assert(js_getnum(js_eval(js, "demo_mode;", ~0U)) == (mode + 1) % modes);
+      }
+      delete_all_elk_timers();
+      release_subobjects_owned_by(lv_screen_active());
+      lv_obj_clean(lv_screen_active());
+      objects.clear();
+      for (auto *&style : g_style_map) {
+        if (style) { lv_style_reset(style); delete style; style = nullptr; }
+      }
+    }
+    printf("PASS: %s (all modes, repeated loads, GC, snapshots)\n", script.filename().c_str());
+  }
+}
+
+int main(int argc, char **argv) {
   test_serial_and_configuration();
   lv_init();
   lv_tick_set_cb(millis);
@@ -232,7 +484,11 @@ int main() {
   test_charts_and_meters();
   test_memory_filesystem();
   test_screenshot();
+  test_arc_labels();
+  assert(argc == 4);
+  test_showcase(argv[1], argv[2]);
+  test_demo_pack(argv[3], std::filesystem::path(argv[2]).parent_path());
   lv_display_delete(display);
   lv_deinit();
-  puts("PASS: serial, configuration, timer deletion, line ownership, charts/meters, memory filesystem, RGB565 screenshots");
+  puts("PASS: serial, configuration, timers, lines, charts/meters, filesystem, screenshots, arc labels, LVGL Lab");
 }

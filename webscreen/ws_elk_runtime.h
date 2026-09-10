@@ -138,6 +138,10 @@ void register_js_functions() {
   js_set(js, global, "show_image", js_mkfun(js_lvgl_show_image));
   js_set(js, global, "create_label", js_mkfun(js_create_label));
   js_set(js, global, "label_set_text", js_mkfun(js_label_set_text));
+  js_set(js, global, "create_arc_label", js_mkfun(js_create_arc_label));
+  js_set(js, global, "arc_label_set_text", js_mkfun(js_arc_label_set_text));
+  js_set(js, global, "arc_label_set_angles", js_mkfun(js_arc_label_set_angles));
+  js_set(js, global, "arc_label_set_direction", js_mkfun(js_arc_label_set_direction));
 
   js_set(js, global, "create_image", js_mkfun(js_create_image));
   js_set(js, global, "create_image_from_ram", js_mkfun(js_create_image_from_ram));

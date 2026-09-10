@@ -1,0 +1,108 @@
+// /load lvgl95_gauges.js — short press pauses/resumes. Synthetic readings.
+let demo_name = "GAUGE DASHBOARD";
+let demo_frame = 0;
+let demo_mode = 0;
+let demo_modes = 2;
+let demo_paused = false;
+let value = 0;
+let step = 1;
+let font = function(size, color) {
+  let s = create_style();
+  style_set_text_font(s, size);
+  style_set_text_color(s, color);
+  return s;
+};
+let text = function(value, x, y, style) {
+  let o = create_label(x, y);
+  obj_add_style(o, style, 0);
+  label_set_text(o, value);
+  return o;
+};
+let heading = font(20, 0xeaf0fa);
+let small = font(14, 0x96abc4);
+let number = font(28, 0xeaf0fa);
+style_set_text_align(number, 2);
+let clean = create_style();
+style_set_border_width(clean, 0);
+style_set_pad_all(clean, 0);
+let bg = draw_rect(0, 0, 536, 240, 0x0b1423);
+obj_add_style(bg, clean, 0);
+text("GAUGE DASHBOARD", 14, 10, heading);
+text("03 / SCALES", 410, 15, small);
+let face = create_style();
+style_set_bg_opa(face, 0);
+style_set_border_width(face, 0);
+style_set_pad_all(face, 0);
+style_set_text_color(face, 0x96abc4);
+let gauge = function(x) {
+  let meter = lv_meter_create();
+  obj_set_size(meter, 148, 148);
+  obj_align(meter, 1, x, 55);
+  obj_add_style(meter, face, 0);
+  return meter;
+};
+let dial_a = gauge(17);
+let dial_b = gauge(194);
+let dial_c = gauge(371);
+let scale_a = lv_meter_add_scale(dial_a);
+let scale_b = lv_meter_add_scale(dial_b);
+let scale_c = lv_meter_add_scale(dial_c);
+let setup_scale = function(dial, scale) {
+  lv_meter_set_scale_range(dial, scale, 0, 100, 240, 150);
+  lv_meter_set_scale_ticks(dial, scale, 21, 1, 5, 0x96abc4);
+  lv_meter_set_scale_major_ticks(dial, scale, 10, 2, 8, 0xeaf0fa, 7);
+  return 0;
+};
+setup_scale(dial_a, scale_a);
+setup_scale(dial_b, scale_b);
+setup_scale(dial_c, scale_c);
+let needle_a = lv_meter_add_needle_line(dial_a, scale_a, 3, 0x3de1b4, -24);
+let needle_b = lv_meter_add_needle_line(dial_b, scale_b, 3, 0xffce75, -24);
+let needle_c = lv_meter_add_needle_line(dial_c, scale_c, 3, 0x61a9ff, -24);
+let band_a = lv_meter_add_arc(dial_a, scale_a, 4, 0x3de1b4, -3);
+let band_b = lv_meter_add_arc(dial_b, scale_b, 4, 0xffce75, -3);
+let band_c = lv_meter_add_arc(dial_c, scale_c, 4, 0x61a9ff, -3);
+lv_meter_set_indicator_start_value(dial_a, band_a, 0);
+lv_meter_set_indicator_start_value(dial_b, band_b, 0);
+lv_meter_set_indicator_start_value(dial_c, band_c, 0);
+let a = text("0", 56, 155, number);
+let b = text("100", 233, 155, number);
+let c = text("0", 410, 155, number);
+obj_set_size(a, 70, 36);
+obj_set_size(b, 70, 36);
+obj_set_size(c, 70, 36);
+text("RAMP", 72, 195, small);
+text("INVERSE", 240, 195, small);
+text("SMOOTH", 417, 195, small);
+let status = text("SYNTHETIC DATA / PRESS TO PAUSE", 14, 219, small);
+let demo_button = function() {
+  demo_mode = (demo_mode + 1) % demo_modes;
+  demo_paused = demo_mode === 1;
+  if (demo_paused) label_set_text(status, "PAUSED / PRESS TO RESUME");
+  else label_set_text(status, "SYNTHETIC DATA / PRESS TO PAUSE");
+  return 0;
+};
+let demo_tick = function() {
+  if (!demo_paused) {
+    demo_frame = demo_frame + 1;
+    value = value + step;
+    if (value >= 100) step = -1;
+    if (value <= 0) step = 1;
+    let t = value / 100;
+    let smooth = (100 * t * t * (3 - 2 * t)) | 0;
+    lv_meter_set_indicator_value(dial_a, needle_a, value);
+    lv_meter_set_indicator_value(dial_b, needle_b, 100 - value);
+    lv_meter_set_indicator_value(dial_c, needle_c, smooth);
+    lv_meter_set_indicator_end_value(dial_a, band_a, value);
+    lv_meter_set_indicator_end_value(dial_b, band_b, 100 - value);
+    lv_meter_set_indicator_end_value(dial_c, band_c, smooth);
+    label_set_text(a, numberToString(value));
+    label_set_text(b, numberToString(100 - value));
+    label_set_text(c, numberToString(smooth));
+  }
+  return 0;
+};
+demo_tick();
+on_button("demo_button");
+create_timer("demo_tick", 150);
+print("DEMO READY: GAUGE DASHBOARD");

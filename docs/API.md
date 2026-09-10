@@ -372,6 +372,30 @@ if (wifi_status() && ntp_synced()) {
 - **label_set_text(label, text)**
   Set the text content of a label.
 
+#### Arc Labels (LVGL 9)
+
+Curved text uses LVGL's [Arc Label widget](https://lvgl.io/docs/open/9.5/widgets/arclabel).
+These bindings require the updated migration firmware and `LV_USE_ARCLABEL 1`.
+
+| Function | Behavior |
+| --- | --- |
+| `create_arc_label(text, x, y, radius)` | Creates an object handle, or returns `-1`. `x/y` are the top-left of a square sized `2 * (radius + 16)` pixels. Radius is 8–256 pixels; coordinates are -4096–4096. |
+| `arc_label_set_text(handle, text)` | Replaces the owned text copy; it remains valid after JavaScript garbage collection. |
+| `arc_label_set_angles(handle, start, sweep)` | Sets the starting angle (0–359 degrees) and sweep (1–360 degrees). Zero degrees points right; 90 points down. |
+| `arc_label_set_direction(handle, direction)` | `0` draws clockwise, `1` counterclockwise. |
+
+Numeric arguments must be finite integers. Text is limited to 255 UTF-8 bytes,
+without embedded NULs. Setters return `true` on success and `false` for invalid
+arguments/handles or text-allocation failure, leaving the previous state intact.
+Use the existing text-style functions with `obj_add_style()` to change font and
+color. `obj_delete()` and app reloads release the label's text. Text is centered
+within its arc; the default arc starts at 210 degrees with a 120-degree sweep.
+
+```javascript
+let curved = create_arc_label("WebScreen", 10, 18, 86);
+arc_label_set_angles(curved, 210, 120);
+```
+
 #### Image Widgets
 
 - **create_image(filepath, x, y)**
@@ -626,7 +650,7 @@ Charts plot one or more data series. `lv_chart_create()` returns an object handl
   Create a chart widget. Returns an object handle.
 
 - **lv_chart_set_type(chart, type)**  
-  Use the preserved LVGL 8 numeric API: **0 = none, 1 = line, 2 = bar, 3 = scatter**. These values differ from the LVGL 9.5 C enum; invalid types are ignored.
+  Use **0 = none, 1 = line, 2 = bar, 3 = scatter, 4 = smooth curve**. Values 0–3 preserve the LVGL 8 JavaScript API; 4 exposes LVGL 9's curve chart. These values differ from the LVGL 9.5 C enum; invalid types are ignored.
 
 - **lv_chart_set_div_line_count(chart, y_div, x_div)**  
   Set the number of horizontal and vertical division lines.
@@ -647,7 +671,7 @@ Charts plot one or more data series. `lv_chart_create()` returns an object handl
   Add a data series with the given color and axis. Returns a series handle, or -1 on failure.
 
 - **lv_chart_set_next_value(chart, series, value)**  
-  Append the next Y value to a series (for line/bar charts).
+  Append the next Y value to a series (for line/bar/curve charts).
 
 - **lv_chart_set_next_value2(chart, series, x_value, y_value)**  
   Append the next X/Y pair to a series (for scatter charts).
@@ -858,8 +882,8 @@ style_set_text_font(style, 14);  // Use smallest/default font
 | Widget | Status | Notes |
 |--------|--------|-------|
 | Arc | ✅ Enabled | Circular progress/gauge |
+| Arc Label | ✅ Enabled | Curved text via `create_arc_label()` |
 | Button | ✅ Enabled | Clickable buttons |
-| Button Matrix | ✅ Enabled | Grid of buttons |
 | Canvas | ✅ Enabled | Custom drawing |
 | Image | ✅ Enabled | Display images |
 | Label | ✅ Enabled | Text display |
@@ -872,7 +896,7 @@ style_set_text_font(style, 14);  // Use smallest/default font
 
 The following widgets are **not available** to save memory:
 - Bar, Slider, Switch
-- Checkbox, Dropdown, Roller
+- Button Matrix, Checkbox, Dropdown, Roller
 - Textarea, Table
 - Calendar, Keyboard
 - List, Menu, Message Box

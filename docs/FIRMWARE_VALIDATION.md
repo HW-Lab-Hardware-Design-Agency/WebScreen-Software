@@ -2,7 +2,7 @@
 
 ## Build
 
-The review build uses Arduino CLI 1.5.1, ESP32 core 3.3.2, LVGL 9.5.0,
+The migration build uses Arduino CLI 1.5.1, ESP32 core 3.3.2, LVGL 9.6.0,
 ArduinoJson 7.4.2, NimBLE-Arduino 2.3.1, and PubSubClient 2.8.
 Install those libraries and copy the repository's `lv_conf.h` beside the LVGL
 library. From the repository root, for a 16 MB flash / OPI PSRAM board:
@@ -16,6 +16,28 @@ arduino-cli compile \
 
 Build into `/tmp`; the tracked exports in `webscreen/build/` are release artifacts.
 A successful compile does not validate panel timing or SD-card signal integrity.
+
+To keep another branch's installed LVGL version, unpack the 9.6.0 release into
+a separate `libraries/lvgl` directory, copy `lv_conf.h` beside it, and add
+`--library /path/to/libraries/lvgl` to the compile command. The Arduino-compatible
+`#include <lvgl.h>` remains supported in 9.6; native builds use `lvgl/include`.
+
+### LVGL 9.6 migration results (2026-09-18)
+
+- ESP32-S3 build passed with the versions and board options above:
+  **3,056,595 / 3,145,728 bytes flash (97%)**, **103,464 bytes static RAM (31%)**.
+  The 3 MB application partition has 89,133 bytes remaining.
+- Native tests passed with GCC 15.2.1, AddressSanitizer,
+  UndefinedBehaviorSanitizer, and leak checking. Coverage includes all five demo
+  apps, repeated loads/GC, scale-section styles/ranges, legacy flag masks,
+  fixed/expanding/wrapped spans, and screenshot byte order.
+- Rendered LVGL Lab, chart-gallery, and typography previews were inspected.
+- Two LVGL deprecation warnings remain deliberately in the generic JavaScript
+  flag wrappers, which preserve arbitrary legacy/custom bitmasks. Existing
+  ArduinoJson, NimBLE, and firmware compiler warnings also remain.
+- No board was connected (`arduino-cli board list`: `No boards found.`).
+  Hardware validation below is still pending; no device was flashed and tracked
+  firmware exports were not replaced.
 
 ## Native regressions
 
@@ -33,7 +55,8 @@ Leak checking requires a host environment that permits process inspection.
 
 Coverage includes timer self-deletion (success and error paths), invalid timer
 periods, chart enum compatibility, cross-owner handles, invalid meter ranges,
-independent line points, memory filesystem seeks/EOF/repeated registration,
+independent line points, legacy flag bitmasks and rich-text layout modes,
+memory filesystem seeks/EOF/repeated registration,
 RGB565 rendering and packed export, serial overflow recovery, and color parsing.
 These tests do not emulate ESP32 hardware or network stacks.
 

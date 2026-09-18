@@ -2,7 +2,7 @@
 
 # WebScreen Software
 
-The `4.x` branch develops firmware **4.0.0-dev** with **LVGL 9.5** support.
+This branch develops firmware **4.0.0-dev** with **LVGL 9.6.0** support, based on `4.x`.
 It includes the arc-label and smooth-chart APIs used by the firmware 4.0 demo apps.
 
 ![til](./docs/WebScreen_Notification.gif)
@@ -83,7 +83,7 @@ This is the easiest way to get started with WebScreen without any development se
    ```
    Library Manager → Install:
    - ArduinoJson (by Benoit Blanchon) - v6.x or later
-   - LVGL (by kisvegabor) - v9.5.x
+   - LVGL (by kisvegabor) - v9.6.x (9.6.0 tested)
    - PubSubClient (by Nick O'Leary) - v2.8 or later
    - NimBLE-Arduino - v2.3.1 tested
    ```
@@ -95,17 +95,20 @@ This is the easiest way to get started with WebScreen without any development se
    ```
 
    Key LVGL settings configured for WebScreen:
-   - Color depth: 16-bit (RGB565), display runs in byte-swapped mode for the QSPI panel
+   - Color format: `LV_COLOR_FORMAT_DEFAULT LV_COLOR_FORMAT_RGB565`; the display uses byte-swapped RGB565 for the QSPI panel
    - stdlib malloc/free for LVGL allocations
    - Display refresh: 30ms for stability
    - **Enabled fonts**: Montserrat 14, 20, 28, 34, 40, 44, 48
    - **Image formats**: PNG, GIF, JPG (BMP disabled)
-   - **Widgets**: Label, Image, Arc, Line, Button, Bar, Chart, Scale, Span
+   - **Widgets**: Label, Arc Label, Image, Arc, Line, Button, Canvas, Chart, Scale, Span
    - **Layouts**: Flexbox and Grid enabled
 
-   Note: this branch requires LVGL 9.5. The `lv_conf.h` in the repo is in the
-   v9 format and will not work with LVGL 8. If you were building an older
-   branch before, replace the LVGL library and copy the new `lv_conf.h` again.
+   Note: this branch requires LVGL 9.6.x and its new configuration format.
+   Replace the LVGL library and copy this branch's `lv_conf.h` again, even
+   when upgrading from 9.5. If Library Manager does not list 9.6.0 yet, install
+   the [upstream v9.6.0 ZIP](https://github.com/lvgl/lvgl/archive/refs/tags/v9.6.0.zip)
+   through **Sketch → Include Library → Add .ZIP Library** after moving any older
+   `lvgl` folder outside your Arduino libraries directory.
    - Complex drawing features enabled (shadows, gradients, etc.)
 
 5. **Open WebScreen Sketch**
@@ -321,7 +324,7 @@ WebScreen features a modular architecture with clear separation of concerns:
 ```
 
 #### LVGL Configuration
-WebScreen includes a custom `lv_conf.h` file (LVGL 9.5 format) optimized for ESP32-S3 with AMOLED display:
+WebScreen includes a custom `lv_conf.h` file (LVGL 9.6 format) optimized for ESP32-S3 with AMOLED display:
 
 **Display Settings:**
 - **Color Format**: 16-bit RGB565, byte-swapped at the display level (`LV_COLOR_FORMAT_RGB565_SWAPPED`)

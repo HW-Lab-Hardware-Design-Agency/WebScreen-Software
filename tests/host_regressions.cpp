@@ -10,9 +10,8 @@
 #include <limits>
 #include <string>
 #include <vector>
-#include <lvgl.h>
-#include <lvgl_private.h>
-#include <src/widgets/arclabel/lv_arclabel_private.h>
+#include <lvgl/lvgl.h>
+#include <lvgl_private/lvgl_private.h>
 #include "elk.h"
 #include "pins_config.h"
 static_assert(INPUT_PIN == 21, "Button must stay off the octal PSRAM bus");
@@ -21,7 +20,7 @@ static_assert(INPUT_PIN == 21, "Button must stay off the octal PSRAM bus");
 #include "webscreen_snapshot.h"
 #include "webscreen_line.h"
 
-static_assert(LVGL_VERSION_MAJOR == 9 && LVGL_VERSION_MINOR == 5, "Tests target LVGL 9.5");
+static_assert(LVGL_VERSION_MAJOR == 9 && LVGL_VERSION_MINOR == 6, "Tests target LVGL 9.6");
 #define LOG(...) ((void)0)
 #define LOGF(...) ((void)0)
 static uint32_t now_ms;
@@ -170,8 +169,23 @@ static void test_charts_and_meters() {
   call(js_lv_meter_set_indicator_value, {(double)meter, (double)indicator, 50});
   call(js_lv_meter_set_indicator_value, {(double)first, (double)indicator, 10});
   assert(g_meter_indicators[indicator]->end == 50);
+  int section_indicator = (int)js_getnum(call(js_lv_meter_add_scale_lines,
+    {(double)meter, (double)scale, 0x00ff00, 0x00ff00, 0, 0}));
+  assert(section_indicator >= 0);
+  call(js_lv_meter_set_indicator_start_value, {(double)meter, (double)section_indicator, 25});
+  call(js_lv_meter_set_indicator_end_value, {(double)meter, (double)section_indicator, 75});
+  auto *section = g_meter_indicators[section_indicator]->section;
+  assert(section->range_min == 25 && section->range_max == 75);
+  lv_style_value_t color;
+  assert(lv_style_get_prop(section->items_style, LV_STYLE_LINE_COLOR, &color) == LV_STYLE_RES_FOUND);
+  assert(lv_color_to_u32(color.color) == lv_color_to_u32(lv_color_hex(0x00ff00)));
+  assert(lv_style_get_prop(section->indicator_style, LV_STYLE_LINE_COLOR, &color) == LV_STYLE_RES_FOUND);
+  assert(lv_color_to_u32(color.color) == lv_color_to_u32(lv_color_hex(0x00ff00)));
+  lv_obj_update_layout(get_lv_obj(meter));
+  lv_refr_now(lv_display_get_default());
   release_subobjects_owned_by(get_lv_obj(meter));
   assert(get_meter_scale(scale, get_lv_obj(meter)) == nullptr);
+  assert(get_meter_indicator(section_indicator, get_lv_obj(meter)) == nullptr);
   release_subobjects_owned_by(lv_scr_act());
   lv_obj_clean(lv_scr_act());
   objects.clear();
@@ -202,6 +216,58 @@ static void test_memory_filesystem() {
   my_mem_close_cb(nullptr, file);
   g_gifBuffer = nullptr;
   g_gifSize = 0;
+}
+
+static void test_legacy_widget_bindings() {
+  int handle = store_lv_obj(lv_obj_create(lv_screen_active()));
+  lv_obj_t *object = get_lv_obj(handle);
+  const int flags = LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_SCROLL_CHAIN | LV_OBJ_FLAG_USER_4;
+  call(js_obj_add_flag, {(double)handle, (double)flags});
+  assert(lv_obj_is_hidden(object) && lv_obj_is_scroll_chain_hor(object));
+  assert(lv_obj_is_scroll_chain_ver(object) && lv_obj_get_user_flag(object, 3));
+  call(js_obj_clear_flag, {(double)handle, LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_SCROLL_CHAIN});
+  assert(!lv_obj_is_hidden(object) && !lv_obj_is_scroll_chain_hor(object));
+  assert(!lv_obj_is_scroll_chain_ver(object) && lv_obj_get_user_flag(object, 3));
+  call(js_obj_clear_flag, {(double)handle, LV_OBJ_FLAG_USER_4});
+  assert(!lv_obj_get_user_flag(object, 3));
+
+  int group_handle = (int)js_getnum(call(js_lv_spangroup_create, {}));
+  lv_obj_t *group = get_lv_obj(group_handle);
+  int span_handle = (int)js_getnum(call(js_lv_spangroup_new_span, {(double)group_handle}));
+  const char *text = "Rich text must still wrap after migrating to LVGL 9.6.";
+  jsval_t args[] = {js_mknum(span_handle), js_mkstr(js, text, strlen(text))};
+  js_lv_span_set_text_static(js, args, 2);
+  js_gc(js);
+  assert(strcmp(lv_span_get_text(get_span(span_handle)), text) == 0);
+  call(js_lv_spangroup_set_align, {(double)group_handle, LV_TEXT_ALIGN_CENTER});
+  assert(lv_obj_get_style_text_align(group, LV_PART_MAIN) == LV_TEXT_ALIGN_CENTER);
+
+  lv_obj_set_size(group, 160, 50);
+  call(js_lv_spangroup_set_mode, {(double)group_handle, 0});
+  lv_obj_update_layout(group);
+  assert(lv_obj_get_width(group) == 160 && lv_obj_get_height(group) == 50);
+  call(js_lv_spangroup_set_mode, {(double)group_handle, 1});
+  lv_obj_update_layout(group);
+  int32_t single_line_height = lv_obj_get_height(group);
+  assert(lv_obj_get_width(group) > 160);
+  call(js_lv_spangroup_set_mode, {(double)group_handle, 2});
+  lv_obj_update_layout(group);
+  assert(lv_obj_get_width(group) == 100 && lv_obj_get_height(group) > single_line_height);
+  call(js_lv_spangroup_set_mode, {(double)group_handle, 0});
+  lv_obj_update_layout(group);
+  assert(lv_obj_get_content_height(group) == 100);
+  lv_obj_set_size(group, 220, 50);
+  call(js_lv_spangroup_set_mode, {(double)group_handle, 2});
+  lv_obj_update_layout(group);
+  assert(lv_obj_get_width(group) == 220);
+  int32_t wrapped_height = lv_obj_get_height(group);
+  for (int invalid : {-1, 3}) call(js_lv_spangroup_set_mode, {(double)group_handle, (double)invalid});
+  lv_obj_update_layout(group);
+  assert(lv_obj_get_width(group) == 220 && lv_obj_get_height(group) == wrapped_height);
+
+  release_subobjects_owned_by(lv_screen_active());
+  lv_obj_clean(lv_screen_active());
+  objects.clear();
 }
 
 static void test_screenshot() {
@@ -482,6 +548,7 @@ int main(int argc, char **argv) {
   test_timers();
   test_lines();
   test_charts_and_meters();
+  test_legacy_widget_bindings();
   test_memory_filesystem();
   test_screenshot();
   test_arc_labels();
@@ -490,5 +557,5 @@ int main(int argc, char **argv) {
   test_demo_pack(argv[3], std::filesystem::path(argv[2]).parent_path());
   lv_display_delete(display);
   lv_deinit();
-  puts("PASS: serial, configuration, timers, lines, charts/meters, filesystem, screenshots, arc labels, LVGL Lab");
+  puts("PASS: serial, configuration, timers, lines, charts/meters, legacy flags/spans, filesystem, screenshots, arc labels, LVGL Lab");
 }

@@ -29,8 +29,8 @@ static void create_scroll_animation(lv_obj_t *obj, int32_t start, int32_t end, u
   lv_anim_set_repeat_delay(&a, 500);
   lv_anim_set_ready_cb(&a, [](lv_anim_t *anim) {
     lv_obj_t *obj = (lv_obj_t *)anim->var;
-    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(obj, true);
+    lv_obj_set_hidden(fb_gif, false);
   });
 
   lv_anim_start(&a);
@@ -84,8 +84,8 @@ void fallback_setup() {
   fb_gif = lv_gif_create(lv_scr_act());
   lv_gif_set_src(fb_gif, &notification);
   lv_obj_align(fb_gif, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_clear_flag(fb_container, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_hidden(fb_container, false);
+  lv_obj_set_hidden(fb_gif, true);
 }
 
 void fallback_loop() {
@@ -104,8 +104,8 @@ void fallback_loop() {
       lv_label_set_text(fb_label, line.c_str());
       lv_obj_update_layout(fb_container);
       lv_obj_align(fb_container, LV_ALIGN_CENTER, 0, 0);
-      lv_obj_clear_flag(fb_container, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(fb_gif, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_hidden(fb_container, false);
+      lv_obj_set_hidden(fb_gif, true);
       create_scroll_animation(fb_container, 240, -lv_obj_get_height(fb_container) - 100, 8000);
     }
   }

@@ -374,7 +374,7 @@ if (wifi_status() && ntp_synced()) {
 
 #### Arc Labels (LVGL 9)
 
-Curved text uses LVGL's [Arc Label widget](https://lvgl.io/docs/open/9.5/widgets/arclabel).
+Curved text uses LVGL's [Arc Label widget](https://lvgl.io/docs/open/widgets/arclabel).
 These bindings require the updated migration firmware and `LV_USE_ARCLABEL 1`.
 
 | Function | Behavior |
@@ -650,7 +650,7 @@ Charts plot one or more data series. `lv_chart_create()` returns an object handl
   Create a chart widget. Returns an object handle.
 
 - **lv_chart_set_type(chart, type)**  
-  Use **0 = none, 1 = line, 2 = bar, 3 = scatter, 4 = smooth curve**. Values 0–3 preserve the LVGL 8 JavaScript API; 4 exposes LVGL 9's curve chart. These values differ from the LVGL 9.5 C enum; invalid types are ignored.
+  Use **0 = none, 1 = line, 2 = bar, 3 = scatter, 4 = smooth curve**. Values 0–3 preserve the LVGL 8 JavaScript API; 4 exposes LVGL 9's curve chart. These values differ from the LVGL 9.6 C enum; invalid types are ignored.
 
 - **lv_chart_set_div_line_count(chart, y_div, x_div)**  
   Set the number of horizontal and vertical division lines.
@@ -691,7 +691,7 @@ Charts plot one or more data series. `lv_chart_create()` returns an object handl
   Create a spangroup widget for rich text.
 
 - **lv_spangroup_set_align(spangroup, align)**  
-  Set text alignment in spangroup.
+  Set text alignment through LVGL's text-align style property.
 
 - **lv_spangroup_set_overflow(spangroup, overflow)**  
   Set text overflow behavior.
@@ -700,7 +700,11 @@ Charts plot one or more data series. `lv_chart_create()` returns an object handl
   Set text indentation.
 
 - **lv_spangroup_set_mode(spangroup, mode)**  
-  Set spangroup display mode.
+  Preserve the legacy modes: **0 = fixed**, **1 = expand to content**,
+  **2 = wrap at the current width and expand height**. On LVGL 9.6 these
+  change widget dimensions directly. Switching from content width to fixed
+  or wrap uses a 100-pixel width until `obj_set_size()` sets another size;
+  switching to fixed height from content uses a 100-pixel content height.
 
 - **lv_spangroup_new_span(spangroup)**  
   Create a new span within the spangroup. Returns a span handle (small slot index, max 16 spans), or -1 if no slot is free. Pass this handle to the `lv_span_set_text*` functions; an invalid handle produces an error instead of crashing.
@@ -848,10 +852,19 @@ Errors raised in a timer callback are printed to the serial console together wit
 
 ## LVGL Configuration
 
-WebScreen uses LVGL 9.5 with the following configuration:
+WebScreen targets LVGL **9.6.x** (tested with **9.6.0**) on this branch.
+Existing JavaScript function names and chart type numbers remain compatible
+with the LVGL 9.5 firmware. The legacy `obj_add_flag()`/`obj_clear_flag()`
+bitmask bindings retain LVGL's compatibility API, including custom flag bits.
+
+Copy the updated `lv_conf.h` when upgrading: LVGL 9.6 uses
+`LV_COLOR_FORMAT_DEFAULT` instead of `LV_COLOR_DEPTH`, and introduces explicit
+argument-check and assertion settings.
 
 ### Display Settings
-- **Color Depth**: 16-bit (RGB565)
+- **Default Color Format**: `LV_COLOR_FORMAT_RGB565` (16-bit)
+- **Panel Color Format**: `LV_COLOR_FORMAT_RGB565_SWAPPED`
+- **Screenshots**: packed little-endian RGB565, unchanged for browser tools
 - **DPI**: 130
 - **Refresh Period**: 30ms
 

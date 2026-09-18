@@ -1,6 +1,9 @@
 #include "webscreen_display.h"
 #include <Arduino.h>
 #include <lvgl.h>
+#if LVGL_VERSION_MAJOR != 9 || LVGL_VERSION_MINOR != 6
+#error "This branch requires LVGL 9.6.x and the matching repository lv_conf.h"
+#endif
 #include "globals.h"
 #include "pins_config.h"
 #include "rm67162.h"

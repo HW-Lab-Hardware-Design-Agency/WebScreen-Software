@@ -1,5 +1,29 @@
 # Release Notes
 
+## Unreleased - LVGL 9.6 Migration
+
+This branch upgrades firmware 4.0.0-dev from LVGL 9.5.0 to **9.6.0**.
+Install LVGL 9.6.x and replace the Arduino libraries folder's `lv_conf.h`
+with this branch's copy. Firmware exports are not updated by this migration.
+
+- Rebase configuration on the generated 9.6 template, preserving WebScreen's
+  fonts, widgets, image decoders, cache, refresh period, and heap allocator.
+  Use `LV_COLOR_FORMAT_DEFAULT`; keep allocation/null assertions and enable
+  the new lightweight argument checks without widget-tree scans.
+- Use per-flag visibility/clickability setters and per-scale section styling
+  and range setters. Preserve legacy JavaScript flag bitmasks via LVGL's
+  compatibility API.
+- Implement JavaScript span alignment and fixed/expand/wrap modes through
+  style and size APIs, retaining the existing function names and mode numbers.
+- Update host builds for the relocated public headers and exercise 9.6 with
+  the existing graphics demos, plus flag/span compatibility regressions.
+- Keep the panel's swapped RGB565 and the serial screenshot's little-endian
+  RGB565 formats unchanged. Existing `lvgl95_*` demo filenames remain valid.
+
+See [firmware validation](docs/FIRMWARE_VALIDATION.md) for build commands and
+the hardware checklist, and the [upstream migration guide](https://lvgl.io/docs/open/changelog/migration-v9-6)
+for LVGL's changes.
+
 ## Unreleased - LVGL 9.5 Migration
 
 The firmware now builds against LVGL 9.5.0 instead of 8.3.11. If you build

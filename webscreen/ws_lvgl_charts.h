@@ -128,7 +128,7 @@ static void ws_meter_indicator_apply(ws_meter_indicator *rec) {
       lv_arc_set_end_angle(rec->obj, ws_meter_value_to_angle(rec->sc, rec->end));
       break;
     case WS_MIND_LINES:
-      lv_scale_section_set_range(rec->section, rec->start, rec->end);
+      lv_scale_set_section_range(rec->sc->scale, rec->section, rec->start, rec->end);
       lv_obj_invalidate(rec->sc->scale);
       break;
   }
@@ -274,7 +274,7 @@ static jsval_t js_lv_meter_add_arc(struct js *js, jsval_t *args, int nargs) {  /
 
   lv_obj_t *arc = lv_arc_create(sc->scale);
   lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
-  lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_clickable(arc, false);
   lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);           // hide track
   lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
   lv_obj_set_style_arc_color(arc, lv_color_hex((uint32_t)col), LV_PART_INDICATOR);
@@ -323,8 +323,8 @@ static jsval_t js_lv_meter_add_scale_lines(struct js *js, jsval_t *args, int nar
 
   rec->section = lv_scale_add_section(sc->scale);
   if (!rec->section) { g_meter_indicators[ih] = nullptr; return js_mknum(-1); }
-  lv_scale_section_set_style(rec->section, LV_PART_ITEMS, &rec->style_items);
-  lv_scale_section_set_style(rec->section, LV_PART_INDICATOR, &rec->style_ind);
+  lv_scale_set_section_style_items(sc->scale, rec->section, &rec->style_items);
+  lv_scale_set_section_style_indicator(sc->scale, rec->section, &rec->style_ind);
   ws_meter_indicator_apply(rec);
   return js_mknum(ih);
 }
@@ -504,7 +504,7 @@ static jsval_t js_lv_spangroup_set_align(struct js *js, jsval_t *args, int nargs
   lv_obj_t *spg = get_lv_obj(h);
   if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
-  lv_spangroup_set_align(spg, (lv_text_align_t)alg);
+  lv_obj_set_style_text_align(spg, (lv_text_align_t)alg, LV_PART_MAIN);
   return js_mknull();
 }
 
@@ -530,14 +530,28 @@ static jsval_t js_lv_spangroup_set_indent(struct js *js, jsval_t *args, int narg
   return js_mknull();
 }
 
-static jsval_t js_lv_spangroup_set_mode(struct js *js, jsval_t *args, int nargs) {  // (spangroupH, mode=LV_SPAN_MODE_FIXED/NOWRAP/BREAK)
+static jsval_t js_lv_spangroup_set_mode(struct js *js, jsval_t *args, int nargs) {  // (spangroupH, mode=0 fixed/1 expand/2 wrap)
   if (nargs < 2) return js_mknull();
   int h = (int)js_getnum(args[0]);
   int md = (int)js_getnum(args[1]);
   lv_obj_t *spg = get_lv_obj(h);
   if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
-  lv_spangroup_set_mode(spg, (lv_span_mode_t)md);
+  // Preserve the legacy JS modes using LVGL 9.6's size-based layout.
+  if (md < 0 || md > 2) return js_mknull();
+  if (md == 1) {
+    lv_obj_set_size(spg, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  } else {
+    if (lv_obj_get_style_width(spg, LV_PART_MAIN) == LV_SIZE_CONTENT) {
+      lv_obj_set_width(spg, 100);
+    }
+    if (md == 2) {
+      lv_obj_set_height(spg, LV_SIZE_CONTENT);
+    } else if (lv_obj_get_style_height(spg, LV_PART_MAIN) == LV_SIZE_CONTENT) {
+      lv_obj_set_content_height(spg, 100);
+    }
+  }
+  lv_spangroup_refresh(spg);
   return js_mknull();
 }
 
@@ -599,7 +613,7 @@ static jsval_t js_lv_spangroup_refr_mode(struct js *js, jsval_t *args, int nargs
   lv_obj_t *spg = get_lv_obj(h);
   if (!spg || !lv_obj_check_type(spg, &lv_spangroup_class)) return js_mknull();
 
-  lv_spangroup_refr_mode(spg);
+  lv_spangroup_refresh(spg);
   return js_mknull();
 }
 

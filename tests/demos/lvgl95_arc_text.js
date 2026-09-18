@@ -31,7 +31,7 @@ obj_add_style(bg, clean, 0);
 text("ARC TEXT", 14, 10, white);
 text("01 / CURVED LABELS", 344, 14, small);
 let outer = create_arc_label("WEBSCREEN / EXPLORE", 13, 27, 77);
-let inner = create_arc_label("LVGL 9.5", 42, 56, 48);
+let inner = create_arc_label("LVGL 9.6", 42, 56, 48);
 obj_add_style(outer, mint, 0);
 obj_add_style(inner, gold, 0);
 arc_label_set_angles(outer, 190, 220);

@@ -89,9 +89,6 @@ void fallback_setup() {
 }
 
 void fallback_loop() {
-  // Handle power button (short press = display toggle, long press = power off)
-  webscreen_hardware_handle_button();
-
   if (lv_disp_get_default()) lv_timer_handler();
   String line;
   if (SerialCommands::readLine(line)) {

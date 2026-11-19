@@ -24,8 +24,8 @@ void setup() {
   pinMode(OUTPUT_PIN, OUTPUT);
   digitalWrite(OUTPUT_PIN, HIGH);
 
-  // Power button
-  pinMode(INPUT_PIN, INPUT_PULLUP);
+  // Power button: a press powers off (no pinMode: its GPIO is shared with the PSRAM bus)
+  webscreen_hardware_init_button();
 
   if (!webscreen_hardware_init_sd_card()) {
     LOG("SD card mount fail => starting fallback mode.");

@@ -71,7 +71,7 @@ These tests do not emulate ESP32 hardware or network stacks.
    assets are needed. Loading without `save` keeps your existing startup app.
 3. Expect animated curved text around a scale-based gauge, a smooth curve chart,
    and red/green/blue swatches along the bottom.
-4. Run `/eval lab_button(1);` to cycle **curve → bar (with reversed curved text) → paused → curve**.
+4. Run `/button` to cycle **curve → bar (with reversed curved text) → paused → curve**.
    The paused view is useful for `/screenshot`. Do not press the physical button
    for this: on the current board a press powers the device off until **RST**.
 5. Check `/errors`, repeat `/restart_app`, and compare `/stats` after warm-up for

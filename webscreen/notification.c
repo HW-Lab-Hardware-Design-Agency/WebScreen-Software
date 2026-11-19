@@ -67159,6 +67159,6 @@ const lv_image_dsc_t notification = {
     .h = 240,
     .stride = 0,
   },
-  .data_size = 1709545,
+  .data_size = sizeof(notification_map),  // LVGL 9.6 reads up to this size; a larger value runs past the array
   .data = notification_map,
 };

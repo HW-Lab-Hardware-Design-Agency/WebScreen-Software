@@ -15,15 +15,15 @@ parser.add_argument('--sanitizer-lib-dir', type=Path, help='Optional directory c
 args = parser.parse_args()
 lvgl = args.lvgl.resolve()
 if not (lvgl / 'lvgl.h').is_file():
-    parser.error('--lvgl must point to an LVGL 9.5 library directory')
+    parser.error('--lvgl must point to an LVGL 9.6 library directory')
 build = args.build_dir or Path(tempfile.mkdtemp(prefix='webscreen-host-tests-'))
 build.mkdir(parents=True, exist_ok=True)
 flags = ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
          '-fno-pie', '-DLV_CONF_INCLUDE_SIMPLE', '-I' + str(ROOT),
-         '-I' + str(ROOT / 'webscreen'), '-I' + str(lvgl)]
+         '-I' + str(ROOT / 'webscreen'), '-I' + str(lvgl / 'include'), '-I' + str(lvgl)]
 sources = sorted((lvgl / 'src').rglob('*.c')) + [ROOT / 'webscreen/elk.c', ROOT / 'tests/host_regressions.cpp']
 # Rebuild when any dependency changes, including compiler options above.
-headers = list((lvgl / 'src').rglob('*.h')) + [ROOT / 'lv_conf.h', Path(__file__)]
+headers = list(lvgl.rglob('*.h')) + [ROOT / 'lv_conf.h', Path(__file__)]
 stamp = max(path.stat().st_mtime for path in headers)
 
 def compile_source(item):

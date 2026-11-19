@@ -1,4 +1,7 @@
-# LVGL 9.5 Demo Pack
+# LVGL Demo Pack
+
+This branch runs the demos on LVGL 9.6.0. The `lvgl95_*` filenames are kept
+for compatibility with existing SD-card installs and the app catalog.
 
 Five standalone apps for the 536 × 240 WebScreen display. They use the firmware's
 Elk JavaScript subset and need no Wi-Fi, images, fonts on the SD card, or additional

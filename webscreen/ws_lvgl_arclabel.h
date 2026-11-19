@@ -15,7 +15,7 @@ static lv_obj_t *ws_arc_label_object(jsval_t arg) {
   int32_t handle;
   if (!ws_arc_label_integer(arg, 0, INT32_MAX, &handle)) return nullptr;
   lv_obj_t *object = get_lv_obj(handle);
-  if (!object || !lv_obj_is_valid(object) || !lv_obj_check_type(object, &lv_arclabel_class)) return nullptr;
+  if (!object || !lv_obj_is_in_widget_tree(object) || !lv_obj_check_type(object, &lv_arclabel_class)) return nullptr;
   return object;
 }
 

@@ -1,6 +1,6 @@
 // Copy to the SD card and run /load migration_smoke.js.
 let title = create_label(8, 4);
-label_set_text(title, "LVGL 9.5 migration smoke test");
+label_set_text(title, "LVGL 9.6 migration smoke test");
 
 let chart = lv_chart_create();
 obj_set_size(chart, 250, 160);

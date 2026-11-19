@@ -44,7 +44,7 @@ style_set_pad_all(flat, 0);
 let background = draw_rect(0, 0, 536, 240, 0x0b1320);
 obj_add_style(background, flat, 0);
 text_at("LVGL LAB", 12, 6, heading);
-text_at("9.5 / SOFTWARE RENDERING", 308, 10, small);
+text_at("9.6 / SOFTWARE RENDERING", 308, 10, small);
 
 let lab_tick = function() {
   if (mode < 2) {
@@ -67,7 +67,7 @@ let lab_button = function() {
   if (mode === 0) {
     lv_chart_set_type(graph, 4);
     label_set_text(mode_label, "LIVE CHART / SMOOTH CURVE");
-    arc_label_set_text(arc_text, "WEBSCREEN / LVGL 9.5");
+    arc_label_set_text(arc_text, "WEBSCREEN / LVGL 9.6");
     arc_label_set_direction(arc_text, 0);
   }
   if (mode === 1) {
@@ -108,7 +108,7 @@ let start_lab = function() {
   dial_needle = lv_meter_add_needle_line(dial, scale, 3, blue, -22);
   lv_meter_set_indicator_value(dial, dial_needle, value);
 
-  arc_text = create_arc_label("WEBSCREEN / LVGL 9.5", 10, 18, 86);
+  arc_text = create_arc_label("WEBSCREEN / LVGL 9.6", 10, 18, 86);
   obj_add_style(arc_text, accent, 0);
   value_label = text_at("0", 77, 147, reading);
   obj_set_size(value_label, 72, 42);

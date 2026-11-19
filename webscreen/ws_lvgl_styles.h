@@ -278,6 +278,7 @@ static jsval_t js_obj_set_scroll_snap_y(struct js *js, jsval_t *args, int nargs)
   return js_mknull();
 }
 
+// LVGL 9.6's generic flag API preserves legacy JS bitmasks, including custom bits.
 static jsval_t js_obj_add_flag(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mknull();
   int handle = (int)js_getnum(args[0]);

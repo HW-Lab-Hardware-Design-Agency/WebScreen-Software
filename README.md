@@ -144,7 +144,8 @@ Build commands, native regression tests, and the device smoke test are documente
 6. Press **RESET** to run
 
 #### Power Button
-- **Press**: Power off. The screen goes dark and the device sleeps until you press **RST** or unplug and reconnect USB. The button cannot turn the device back on, and it cannot be used by apps
+- **Press**: Power off. The screen goes dark and the device sleeps until you press **RST** or unplug and reconnect USB. The button cannot turn the device back on
+- **Apps**: the physical button does not reach apps. To send a press to an app's `on_button()` handler, use **Press button** in WebScreen Admin or the Serial IDE, or the `/button` serial command
 - Avoid pressing it while files are being uploaded or saved; like pulling the cable, that can leave a file incomplete
 - **Pin**: GPIO 33 (active low, external pull-up; shared with the PSRAM bus, so the firmware never calls `pinMode()` on it)
 

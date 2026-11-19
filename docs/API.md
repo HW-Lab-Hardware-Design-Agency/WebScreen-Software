@@ -91,16 +91,18 @@ The following functions are available in your JavaScript applications:
 
 ### Button Events
 
-On the current board revision the power button cannot be used by apps: a press powers the device off, and only **RST** or reconnecting USB starts it again. The functions below remain so existing apps load without errors, but they never report a press.
+Button presses reach an app from the host, not from the physical button. On the current board revision the physical button shares a pin with the PSRAM, so a press powers the device off, and only **RST** or reconnecting USB starts it again.
+
+To send a press, use the **Press button** control in WebScreen Admin or the Serial IDE, or the `/button` serial command. Each one delivers a single press to the running app. The device must be connected over USB.
 
 - **on_button("fn_name")**
-  Accepts a handler name and returns `true` (`false` if the name is too long). The handler is never called.
+  Registers a handler; each press calls `fn_name(1)`. Returns `true` (`false` if the name is too long). `on_button("")` removes the handler.
 
 - **get_button_event()**
-  Always returns `0`.
+  Returns `1` if a press is waiting and consumes it, otherwise `0`. For apps that poll in a timer and have no handler.
 
 - **button_set_toggle(enabled)**
-  Has no effect.
+  Has no effect. It is kept so existing apps load without errors.
 
 ### String Utilities
 

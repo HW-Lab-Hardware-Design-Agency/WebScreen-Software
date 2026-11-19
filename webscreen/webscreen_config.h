@@ -31,7 +31,7 @@
 
 // Pin Definitions (ESP32-S3 WebScreen Hardware)
 #define WEBSCREEN_PIN_LED PIN_LED
-// GPIO 21 = user button. Never use GPIO 33-37: octal-PSRAM bus, pinMode() on them kills PSRAM.
+// GPIO 33 = user button, shared with the octal-PSRAM bus (GPIO 33-37): never pinMode() these pins.
 #define WEBSCREEN_PIN_BUTTON INPUT_PIN
 #define WEBSCREEN_PIN_OUTPUT OUTPUT_PIN
 
@@ -95,8 +95,10 @@
 
 // Timing
 #define WEBSCREEN_LOOP_DELAY_MS 1
-#define WEBSCREEN_BUTTON_DEBOUNCE_MS 50
-#define WEBSCREEN_POWER_OFF_HOLD_MS 3000  // Hold button 3 seconds to power off
+// Power button, sampled on a PSRAM data line: bus traffic alone reads low in up to ~57% of 1 ms samples.
+#define WEBSCREEN_BUTTON_SAMPLE_US 1000
+#define WEBSCREEN_BUTTON_OFF_SAMPLES 40   // 40 ms unbroken low = press => power off (traffic alone: 9 ms measured)
+#define WEBSCREEN_BUTTON_CRASH_SAMPLES 10 // Low this long when a crash hit => the press caused it
 #define WEBSCREEN_STATS_REPORT_INTERVAL_MS 300000  // 5 minutes
 
 // Watchdog

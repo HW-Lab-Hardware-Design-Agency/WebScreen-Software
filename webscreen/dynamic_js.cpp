@@ -18,9 +18,6 @@ bool dynamic_js_setup() {
   WiFi.mode(WIFI_STA);
   SerialCommands::init();
 
-  // Forward button presses to JS apps (on_button / get_button_event)
-  webscreen_hardware_set_button_callback(webscreen_runtime_notify_button);
-
   if (!webscreen_runtime_start_javascript(g_script_filename.c_str())) {
     LOG("Failed to start JavaScript runtime");
     return false;
@@ -30,9 +27,6 @@ bool dynamic_js_setup() {
   return true;
 }
 void dynamic_js_loop() {
-  // Handle power button (short press = display toggle, long press = power off)
-  webscreen_hardware_handle_button();
-
   // Handle serial commands
   String line;
   if (SerialCommands::readLine(line)) {

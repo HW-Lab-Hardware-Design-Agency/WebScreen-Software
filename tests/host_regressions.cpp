@@ -15,8 +15,9 @@
 #include <src/widgets/arclabel/lv_arclabel_private.h>
 #include "elk.h"
 #include "pins_config.h"
-static_assert(INPUT_PIN == 21, "Button must stay off the octal PSRAM bus");
+static_assert(INPUT_PIN == 33, "Board revision wires the user button (SW3) to GPIO 33");
 #include "webscreen_serial_line.h"
+#include "webscreen_button.h"
 #include "webscreen_config_parse.h"
 #include "webscreen_snapshot.h"
 #include "webscreen_line.h"
@@ -93,6 +94,19 @@ static void test_serial_and_configuration() {
   for (const char *bad : {(const char *)nullptr, "", "#", "123456", "#1", "#12zz56", "#1234567"}) {
     assert(webscreen_parse_color(bad, 0x123456) == 0x123456);
   }
+}
+
+static void test_button() {
+  WebscreenButton button;
+  // PSRAM bus traffic: runs shorter than the threshold never count, however often they repeat.
+  for (int i = 0; i < 1000; i++) {
+    for (int low = 0; low < 39; low++) assert(!button.sample(true, 40));
+    assert(!button.sample(false, 40));
+  }
+  // A press is reported at the threshold and for as long as it is held, without overflow.
+  for (int low = 0; low < 39; low++) assert(!button.sample(true, 40));
+  for (int low = 0; low < 100000; low++) assert(button.sample(true, 40));
+  assert(!button.sample(false, 40));
 }
 
 static void test_timers() {
@@ -469,6 +483,7 @@ static void test_demo_pack(const std::filesystem::path &directory, const std::fi
 
 int main(int argc, char **argv) {
   test_serial_and_configuration();
+  test_button();
   lv_init();
   lv_tick_set_cb(millis);
   auto *display = lv_display_create(536, 240);

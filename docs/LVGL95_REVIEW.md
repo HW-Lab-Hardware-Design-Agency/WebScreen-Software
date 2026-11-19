@@ -25,7 +25,7 @@ after transmission. A second draw buffer would not overlap work with this driver
 | Screenshots | Temporary storage explicitly uses PSRAM; export strips stride padding and allocation slack. Default `malloc` may already use PSRAM depending on ESP32 allocator settings. |
 | Timing | A monotonic tick callback replaces 1000 periodic callbacks per second. Runtime sleeps respect imminent LVGL deadlines; fallback yields CPU time. |
 | SD storage | Arduino forwards mount frequency to `max_freq_khz`; probing now requests 400 kHz and the faster remount 10000 kHz. Serial recovery follows the same path. |
-| Pins | Conflicting GPIO 33/21 aliases depended on include order. Definitions now consistently resolve to GPIO 21; the former boot path already resolved to 21 through an override. |
+| Pins | Conflicting GPIO 33/21 aliases depended on include order. Definitions now consistently resolve to GPIO 33, where the board's button is wired. GPIO 33 is also octal-PSRAM line D4, so it is read without `pinMode()` and a press powers the device off. |
 | Serial/configuration | Normal input is incremental and bounded. Colors are validated, shorthand hex expands correctly, and brightness is clamped. |
 | Recovery | Incomplete/oversized scripts are rejected; failed evaluations clean up partial apps. Reloads drop image caches and consume restart requests under the existing lock. |
 | Network time | NTP reconnect setup and JS clock reads no longer wait for synchronization on the rendering task. Initial boot still allows time for TLS clock setup. |

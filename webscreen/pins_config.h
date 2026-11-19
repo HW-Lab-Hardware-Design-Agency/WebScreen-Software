@@ -41,6 +41,8 @@
 #define PIN_SD_CLK 11
 #define PIN_SD_D0 12
 
-// GPIO 33-37 belong to octal PSRAM; the user button is on GPIO 21.
-#define INPUT_PIN PIN_BUTTON_2
+// The user button (SW3) is on GPIO 33, which is also octal-PSRAM data line D4.
+// Read it only through webscreen_hardware_button_pressed(); pinMode() or
+// gpio_config() on GPIO 33-37 detaches the PSRAM bus and crashes the firmware.
+#define INPUT_PIN 33
 #define OUTPUT_PIN 1

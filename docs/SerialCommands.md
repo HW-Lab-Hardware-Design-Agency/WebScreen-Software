@@ -72,6 +72,8 @@ WebScreen> /help
 /backup [save|restore]   - Backup/restore configuration
 /monitor [cpu|mem|net]   - Live system monitoring
 /brightness <0-255>      - Set display brightness
+/sleep                   - Turn the screen off (device stays connected)
+/wake                    - Turn the screen back on
 /time                    - Show current device time
 /settime <epoch> [tz]    - Set device time from epoch
 /factory_reset confirm   - Delete webscreen.json and reboot to fallback
@@ -151,6 +153,20 @@ JS Arena Total: 256.0 KB
 ```
 
 The JS Arena lines only appear while the JavaScript engine is running.
+
+#### `/sleep` and `/wake`
+`/sleep` turns the screen off. The device keeps running and stays connected over USB, so the app, WiFi and the serial console continue to work. `/wake` turns the screen back on at the brightness it had.
+
+This is a standby, not a power-off. A press of the physical button powers the device off completely, and only **RST** or reconnecting USB starts it again. The power button in the header of WebScreen Admin and the Serial IDE sends these two commands.
+
+**Usage:**
+```
+WebScreen> /sleep
+[OK] Screen sleeping. Send /wake to turn it back on
+
+WebScreen> /wake
+[OK] Screen awake
+```
 
 #### `/brightness <0-255>`
 Sets or queries the display brightness level.

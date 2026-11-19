@@ -57,6 +57,8 @@ const SerialCommands::Command SerialCommands::kCommands[] = {
   { "backup",      nullptr,    backup,                              ARGS_RAW,          "/backup [save|restore]",   "Backup/restore configuration" },
   { "monitor",     "mon",      monitor,                             ARGS_RAW,          "/monitor [cpu|mem|net]",   "Live system monitoring" },
   { "brightness",  nullptr,    setBrightness,                       ARGS_RAW,          "/brightness <0-255>",      "Set display brightness" },
+  { "sleep",       nullptr,    [](const String&) { sleepScreen(); }, ARGS_IGNORED,     "/sleep",                   "Turn the screen off (device stays connected)" },
+  { "wake",        nullptr,    [](const String&) { wakeScreen(); }, ARGS_IGNORED,      "/wake",                    "Turn the screen back on" },
   { "time",        nullptr,    [](const String&) { showTime(); },   ARGS_IGNORED,      "/time",                    "Show current device time" },
   { "settime",     nullptr,    setTime,                             ARGS_RAW,          "/settime <epoch> [tz]",    "Set device time from epoch" },
   { "factory_reset", nullptr,  factoryReset,                        ARGS_RAW,          "/factory_reset confirm",   "Delete webscreen.json and reboot to fallback" },
@@ -1345,6 +1347,19 @@ void SerialCommands::setBrightness(const String& args) {
 
   webscreen_display_set_brightness((uint8_t)brightness);
   printSuccess("Brightness set to " + String(brightness));
+}
+
+// Standby from the host: the screen goes dark but the device keeps running and
+// stays on USB, so the same host can wake it. (A press of the physical button
+// is a full power-off that only RST or a power cycle ends.)
+void SerialCommands::sleepScreen() {
+  webscreen_display_power(false);
+  printSuccess("Screen sleeping. Send /wake to turn it back on");
+}
+
+void SerialCommands::wakeScreen() {
+  webscreen_display_power(true);
+  printSuccess("Screen awake");
 }
 
 void SerialCommands::showTime() {

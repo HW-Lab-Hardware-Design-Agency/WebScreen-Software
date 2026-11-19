@@ -1371,8 +1371,9 @@
 /** Speeds up playback at the cost of an extra 16KB of RAM. */
 #define LV_GIF_CACHE_DECODE_DATA 0
 
-/** Wider GIFs are rejected; raising this value increases memory usage. */
-#define LV_GIF_MAX_WIDTH 480
+/** Wider GIFs are rejected; raising this value increases memory usage.
+ *  WebScreen: the panel is 536 px wide and the fallback notification GIF is full width. */
+#define LV_GIF_MAX_WIDTH 536
 
 /** Taller GIFs are rejected; this value has no impact on memory usage. */
 #define LV_GIF_MAX_HEIGHT 32768

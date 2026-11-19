@@ -104,14 +104,10 @@ extern "C" {
   // BUTTON HANDLING
   // ============================================================================
 
-  /**
- * @brief Handle power button press
- * 
- * Checks button state and handles press/release events.
- * Should be called regularly from main loop.
- */
-
-  void webscreen_hardware_handle_button(void);
+  // Start watching the power button. A press powers the device off (deep sleep,
+  // display supply cut); only RST or a power cycle starts it again. The pad is
+  // read without detaching it from the PSRAM bus.
+  void webscreen_hardware_init_button(void);
 
   /**
  * @brief Check if button is currently pressed

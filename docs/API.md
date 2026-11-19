@@ -91,33 +91,16 @@ The following functions are available in your JavaScript applications:
 
 ### Button Events
 
-The power button's short press (< 3s) can be delivered to JavaScript; the long press (>= 3s) is always handled by the firmware as power-off and never reaches JS. While an app is using the button, the default display on/off toggle is suppressed so the press is yours to handle.
-
-Button state is reset whenever the app is restarted or switched: the handler is cleared, the default toggle is restored, and any queued presses are drained.
+On the current board revision the power button cannot be used by apps: a press powers the device off, and only **RST** or reconnecting USB starts it again. The functions below remain so existing apps load without errors, but they never report a press.
 
 - **on_button("fn_name")**
-  Register the named global function as the button handler. On each short press it is called as `fn_name(1)` at the next safe point. While a handler is registered the default display toggle is suppressed. Call `on_button("")` to release the button and restore the default toggle. Returns `true` on success, `false` if the name is too long.
-  ```javascript
-  let onPress = function(evt) { print("button pressed"); };
-  on_button("onPress");
-  // ... later ...
-  on_button("");   // release, default toggle returns
-  ```
+  Accepts a handler name and returns `true` (`false` if the name is too long). The handler is never called.
 
 - **get_button_event()**
-  Poll-style alternative to `on_button()`. Returns `1` if a short press was pending (consuming it), or `0` otherwise. Pair it with `button_set_toggle(false)` so polled presses are not also consumed by the default toggle.
-  ```javascript
-  button_set_toggle(false);
-  let update = function() {
-    if (get_button_event()) {
-      print("button pressed");
-    }
-  };
-  create_timer("update", 100);
-  ```
+  Always returns `0`.
 
 - **button_set_toggle(enabled)**
-  Keep (`true`) or suppress (`false`) the default display on/off toggle. Used by poll-style apps that read `get_button_event()` without registering a handler.
+  Has no effect.
 
 ### String Utilities
 

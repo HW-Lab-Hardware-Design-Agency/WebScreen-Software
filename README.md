@@ -17,7 +17,7 @@ WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Ge
 ### Hardware Integration
 - **ESP32-S3 Platform**: Full PSRAM support and optimized memory allocation
 - **RM67162 Display**: 536x240 AMOLED with QSPI interface and brightness control
-- **Power Management**: Smart power button handling on GPIO 21
+- **Power Management**: Power-off button on GPIO 33
 - **Storage Interface**: SD_MMC card support with robust initialization
 
 ### Networking & Connectivity  
@@ -153,9 +153,9 @@ an isolated LVGL 8 library, running native sanitizer tests, and device checks.
 6. Press **RESET** to run
 
 #### Power Button
-- **Single Press**: Toggle screen on/off
-- **Long Press**: Power off (hold for 3 seconds)
-- **Pin**: GPIO 21 (INPUT_PULLUP)
+- **Press**: Power off. The screen goes dark and the device sleeps until you press **RST** or unplug and reconnect USB. The button cannot turn the device back on, and it cannot be used by apps
+- Avoid pressing it while files are being uploaded or saved; like pulling the cable, that can leave a file incomplete
+- **Pin**: GPIO 33 (active low, external pull-up; shared with the PSRAM bus, so the firmware never calls `pinMode()` on it)
 
 ## Configuration
 

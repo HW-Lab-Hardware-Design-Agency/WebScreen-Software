@@ -47,6 +47,7 @@ const SerialCommands::Command SerialCommands::kCommands[] = {
   { "download",    "dl",       downloadFile64,                      ARGS_RAW,          "/download <file>",         "Dump file as base64 (host-side download)" },
   { "load",        "run",      loadApp,                             ARGS_RAW,          "/load <script.js> [save]", "Load/switch to different JS app (save = persist to config)" },
   { "restart_app", nullptr,    [](const String&) { restartApp(); }, ARGS_IGNORED,      "/restart_app",             "Restart the JS app in place (no reboot)" },
+  { "button",      nullptr,    [](const String&) { pressButton(); }, ARGS_IGNORED,     "/button",                  "Send a button press to the JS app (on_button)" },
   { "eval",        nullptr,    evalJs,                              ARGS_RAW,          "/eval <js-code>",          "Evaluate JS in the running app (REPL)" },
   { "errors",      nullptr,    [](const String&) { showErrors(); }, ARGS_IGNORED,      "/errors",                  "Show last JS error and restart-ladder state" },
   { "gc",          nullptr,    [](const String&) { runGC(); },      ARGS_IGNORED,      "/gc",                      "Run JS garbage collection" },
@@ -1406,6 +1407,17 @@ void SerialCommands::restartApp() {
   }
   webscreen_runtime_request_restart("serial /restart_app");
   printSuccess("JS app restart requested (in-place, no reboot)");
+}
+
+// The physical button can only power the device off (it shares a pin with
+// PSRAM), so hosts send presses here; apps receive them exactly as before.
+void SerialCommands::pressButton() {
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode); no app to receive the press.");
+    return;
+  }
+  webscreen_runtime_notify_button(true);
+  printSuccess("Button press sent to the JS app");
 }
 
 void SerialCommands::evalJs(const String& args) {

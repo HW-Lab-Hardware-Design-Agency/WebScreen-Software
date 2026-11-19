@@ -37,6 +37,7 @@ private:
   static void loadApp(const String& scriptName);
   static void restartApp();
   static void runGC();
+  static void pressButton();
   static void evalJs(const String& args);
   static void showErrors();
   static bool sdReady();

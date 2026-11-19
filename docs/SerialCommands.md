@@ -62,6 +62,7 @@ WebScreen> /help
 /download <file>         - Dump file as base64 (host-side download)
 /load <script.js> [save] - Load/switch to different JS app (save = persist to config)
 /restart_app             - Restart the JS app in place (no reboot)
+/button                  - Send a button press to the JS app (on_button)
 /eval <js-code>          - Evaluate JS in the running app (REPL)
 /errors                  - Show last JS error and restart-ladder state
 /gc                      - Run JS garbage collection
@@ -321,6 +322,19 @@ WebScreen> /restart_app
 - Recover from a wedged or out-of-memory script without power-cycling
 - Re-run a script after editing it with `/write` or `/upload`
 - Leave safe mode after fixing a failing script
+
+#### `/button`
+Sends one button press to the running JavaScript app. The app receives it through `on_button()` or `get_button_event()`, the same way it used to receive a press of the physical button.
+
+The physical button cannot do this: it shares a pin with the PSRAM, so a press powers the device off. WebScreen Admin and the Serial IDE have a **Press button** control that sends this command.
+
+**Usage:**
+```
+WebScreen> /button
+[OK] Button press sent to the JS app
+```
+
+In fallback mode there is no app to receive the press and the command reports an error.
 
 #### `/eval <js-code>`
 

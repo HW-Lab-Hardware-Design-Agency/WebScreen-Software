@@ -298,7 +298,7 @@ static jsval_t js_pad_number(struct js *js, jsval_t *args, int nargs) {
 }
 
 /******************************************************************************
- * E3) Button events — presses cross loopTask -> JS task via two single-writer counters (lock-free); unused on this board revision: a press powers the device off.
+ * E3) Button events — presses cross loopTask -> JS task via two single-writer counters (lock-free); fed by the /button serial command; the physical button only powers the device off.
  ******************************************************************************/
 static std::atomic<uint32_t> g_button_evt_produced{0};  // written by loopTask only
 static std::atomic<uint32_t> g_button_evt_consumed{0};  // written by JS task only

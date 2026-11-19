@@ -140,7 +140,7 @@ let start_lab = function() {
   text_at("PRESS: CURVE / BAR / PAUSE", 268, 218, small);
   on_button("lab_button");
   create_timer("lab_tick", 80);
-  print("LVGL Lab ready. Press the button to cycle curve, bar, and pause.");
+  print("LVGL Lab ready. Run /eval lab_button(1); to cycle curve, bar, and pause.");
   return 0;
 };
 

@@ -10,16 +10,17 @@
 #include "webscreen_main.h"
 #include "pins_config.h"
 #include "rm67162.h"
+#include "webscreen_button.h"
 #include <SD_MMC.h>
+#include <driver/gpio.h>
+#include <esp_sleep.h>
+#include <esp_timer.h>
+#include <soc/gpio_periph.h>
+#include <soc/io_mux_reg.h>
 static bool g_hardware_initialized = false;
 static bool g_display_on = true;
 static uint8_t g_brightness = 200;
-static bool g_last_button_state = HIGH;
-static uint32_t g_last_button_time = 0;
-static uint32_t g_button_press_start = 0;
-static bool g_button_held = false;
-static void (*g_button_callback)(bool) = nullptr;
-static bool g_button_toggle_enabled = true;
+static WebscreenButton g_button;
 bool webscreen_hardware_init(void) {
   if (g_hardware_initialized) {
     return true;
@@ -27,7 +28,7 @@ bool webscreen_hardware_init(void) {
 
   WEBSCREEN_DEBUG_PRINTLN("Initializing hardware pins...");
   WEBSCREEN_PIN_MODE(WEBSCREEN_PIN_LED, OUTPUT);
-  WEBSCREEN_PIN_MODE(WEBSCREEN_PIN_BUTTON, INPUT_PULLUP);
+  webscreen_hardware_init_button();
   WEBSCREEN_PIN_MODE(WEBSCREEN_PIN_OUTPUT, OUTPUT);
   WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_LED);
   WEBSCREEN_PIN_HIGH(WEBSCREEN_PIN_OUTPUT);
@@ -134,55 +135,61 @@ void webscreen_display_power(bool on) {
 bool webscreen_display_is_on(void) {
   return g_display_on;
 }
-void webscreen_hardware_handle_button(void) {
-  bool current_button_state = WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON);
-  uint32_t current_time = WEBSCREEN_MILLIS();
+// Survives a panic reboot (not a power cycle): how long the button had been
+// low when the firmware last sampled it.
+static RTC_NOINIT_ATTR uint16_t g_button_run_at_reset;
 
-  // Button just pressed (HIGH -> LOW transition, active LOW with pull-up)
-  if (g_last_button_state == HIGH && current_button_state == LOW) {
-    if (current_time - g_last_button_time > WEBSCREEN_BUTTON_DEBOUNCE_MS) {
-      g_button_press_start = current_time;
-      g_button_held = true;
-      g_last_button_time = current_time;
-    }
+// Runs in the esp_timer task: internal RAM only, so it keeps working while a
+// press is corrupting PSRAM under the app.
+static void button_sample_cb(void *) {
+  bool off = g_button.sample(webscreen_hardware_button_pressed(), WEBSCREEN_BUTTON_OFF_SAMPLES);
+  g_button_run_at_reset = g_button.run;
+  if (off) webscreen_hardware_power_off();
+}
+void webscreen_hardware_init_button(void) {
+  // Left over from a previous power-off if the chip was not fully reset.
+  gpio_deep_sleep_hold_dis();
+  gpio_hold_dis((gpio_num_t)WEBSCREEN_PIN_OUTPUT);
+  gpio_hold_dis((gpio_num_t)TFT_RES);
+
+  // Enable the pad's input buffer only. The IO MUX function must stay on the
+  // PSRAM bus, and the board has an external pull-up (R7).
+  PIN_INPUT_ENABLE(GPIO_PIN_MUX_REG[WEBSCREEN_PIN_BUTTON]);
+
+  static esp_timer_handle_t timer = nullptr;
+  if (timer) return;
+
+  // The corruption from a press can crash the app before the sampler decides.
+  // If the last boot ended in a crash while the button was down, finish the
+  // power-off the user asked for instead of restarting.
+  esp_reset_reason_t reason = esp_reset_reason();
+  bool crashed = reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT || reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT;
+  uint16_t run = crashed ? g_button_run_at_reset : 0;
+  g_button_run_at_reset = 0;
+  bool held = crashed;  // Still down after the reboot? Several samples: bus traffic also reads low.
+  for (int i = 0; held && i < WEBSCREEN_BUTTON_CRASH_SAMPLES; i++) {
+    held = webscreen_hardware_button_pressed();
+    delayMicroseconds(WEBSCREEN_BUTTON_SAMPLE_US);
   }
-
-  // Button still held — check for long press power off
-  if (g_button_held && current_button_state == LOW) {
-    if (current_time - g_button_press_start >= WEBSCREEN_POWER_OFF_HOLD_MS) {
-      WEBSCREEN_DEBUG_PRINTLN("Long press detected — powering off!");
-      webscreen_hardware_power_off();
-      // Does not return
-    }
+  if (run >= WEBSCREEN_BUTTON_CRASH_SAMPLES || held) {
+    webscreen_hardware_power_off();
   }
-
-  // Button released (LOW -> HIGH transition)
-  if (g_last_button_state == LOW && current_button_state == HIGH) {
-    if (g_button_held && (current_time - g_button_press_start < WEBSCREEN_POWER_OFF_HOLD_MS)) {
-      // Short press — toggle display unless a JS app has claimed the button
-      if (g_button_toggle_enabled) {
-        g_display_on = !g_display_on;
-        webscreen_display_power(g_display_on);
-        WEBSCREEN_DEBUG_PRINTF("Button short press - Display %s\n",
-                               g_display_on ? "ON" : "OFF");
-      }
-      if (g_button_callback) {
-        g_button_callback(true);
-      }
-    }
-    g_button_held = false;
-  }
-
-  g_last_button_state = current_button_state;
+  esp_timer_create_args_t args = {};
+  args.callback = button_sample_cb;
+  args.name = "button";
+  if (esp_timer_create(&args, &timer) == ESP_OK) esp_timer_start_periodic(timer, WEBSCREEN_BUTTON_SAMPLE_US);
 }
 bool webscreen_hardware_button_pressed(void) {
-  return (WEBSCREEN_PIN_READ(WEBSCREEN_PIN_BUTTON) == LOW);
+  // Not digitalRead(): the pin is deliberately not registered as an Arduino GPIO.
+  return gpio_get_level((gpio_num_t)WEBSCREEN_PIN_BUTTON) == 0;
 }
+// The button can only power the device off on this board revision, so presses
+// never reach JS apps; these stay as no-ops for the on_button()/button_set_toggle() bindings.
 void webscreen_hardware_set_button_callback(void (*callback)(bool pressed)) {
-  g_button_callback = callback;
+  (void)callback;
 }
 void webscreen_hardware_set_button_toggle(bool enabled) {
-  g_button_toggle_enabled = enabled;
+  (void)enabled;
 }
 uint16_t webscreen_hardware_get_battery_voltage(void) {
 
@@ -204,22 +211,21 @@ void webscreen_hardware_set_power_saving(bool enable) {
 }
 void webscreen_hardware_deep_sleep(uint32_t duration_ms) {
   WEBSCREEN_DEBUG_PRINTF("Entering deep sleep for %lu ms\n", duration_ms);
+  // Timer wake only: the button's GPIO 33 is not an RTC pin and cannot wake the chip.
   esp_sleep_enable_timer_wakeup((uint64_t)duration_ms * 1000);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)WEBSCREEN_PIN_BUTTON, 0);
   esp_deep_sleep_start();
 }
 void webscreen_hardware_power_off(void) {
-  WEBSCREEN_DEBUG_PRINTLN("Power latch released — shutting down.");
-  Serial.flush();
+  // May run while PSRAM is corrupt and other tasks are wedged: direct GPIO
+  // writes only, no SPI, no locks, no heap. Panel reset blanks the AMOLED.
+  gpio_set_level((gpio_num_t)TFT_RES, 0);
+  gpio_set_level((gpio_num_t)WEBSCREEN_PIN_OUTPUT, 0);  // Display supply off
+  gpio_hold_en((gpio_num_t)TFT_RES);
+  gpio_hold_en((gpio_num_t)WEBSCREEN_PIN_OUTPUT);
+  gpio_deep_sleep_hold_en();
 
-  // Turn off display first
-  webscreen_display_power(false);
-
-  // Release the power latch
-  WEBSCREEN_PIN_LOW(WEBSCREEN_PIN_OUTPUT);
-
-  // If the latch circuit doesn't cut power immediately, halt here
-  WEBSCREEN_DELAY(1000);
+  // No wake source: GPIO 33 is not an RTC pin. RST or a power cycle restarts.
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_deep_sleep_start();
 }
 void webscreen_hardware_set_led(bool on) {

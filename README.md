@@ -20,7 +20,7 @@ WebScreen is a hackable, open-source gadget for gamers, makers, and creators! Ge
 ### Hardware Integration
 - **ESP32-S3 Platform**: Full PSRAM support and optimized memory allocation
 - **RM67162 Display**: 536x240 AMOLED with QSPI interface and brightness control
-- **Power Management**: Smart power button handling on GPIO 21
+- **Power Management**: Power-off button on GPIO 33
 - **Storage Interface**: SD_MMC card support with robust initialization
 
 ### Networking & Connectivity  
@@ -143,14 +143,10 @@ Build commands, native regression tests, and the device smoke test are documente
 5. Upload firmware
 6. Press **RESET** to run
 
-#### Power Button (GPIO 21)
-- **Short Press** (< 3s): Toggle display on/off (device keeps running)
-- **Long Press** (>= 3s): Power off via latch circuit (drives OUTPUT_PIN 1 LOW to cut power, falls back to deep sleep if latch is not present)
-- **Pin**: GPIO 21 (INPUT_PULLUP, active LOW)
-- **Debounce**: 50ms
-- **Power-on**: Press the button to supply momentary power; firmware latches power by driving OUTPUT_PIN HIGH in `setup()`
-
-> **Note**: For the power-on button press to work after a latch power-off, the hardware circuit must wire the button in parallel with the latch MOSFET so it can momentarily supply power independently of the GPIO latch output. If your circuit doesn't have this, the device will enter deep sleep instead and wake on the next button press.
+#### Power Button
+- **Press**: Power off. The screen goes dark and the device sleeps until you press **RST** or unplug and reconnect USB. The button cannot turn the device back on, and it cannot be used by apps
+- Avoid pressing it while files are being uploaded or saved; like pulling the cable, that can leave a file incomplete
+- **Pin**: GPIO 33 (active low, external pull-up; shared with the PSRAM bus, so the firmware never calls `pinMode()` on it)
 
 ## Configuration
 
@@ -488,7 +484,7 @@ The firmware exposes numerous functions to your JavaScript applications. Some hi
 - **SD Card:** `sd_read_file()`, `sd_write_file()`, `sd_list_dir()`, `sd_delete_file()`
 - **BLE:** `ble_init()`, `ble_is_connected()`, `ble_write()`
 - **Display:** `set_brightness()`, `get_brightness()`
-- **Button:** `on_button()`, `get_button_event()`, `button_set_toggle()` (power button short press)
+- **Button:** `on_button()`, `get_button_event()`, `button_set_toggle()` (kept for compatibility; on the current board a press powers the device off and never reaches apps)
 - **Time:** `get_hours()`, `get_minutes()`, `get_seconds()`, `get_year()`, `get_month()`, `get_day()`, `get_weekday()`, `get_epoch()`, `ntp_synced()`, `format_time()`
 - **UI Drawing:** `draw_label()`, `draw_rect()`, `show_image()`, `create_label()`, `label_set_text()`
 - **Image Handling:** `create_image()`, `create_image_from_ram()`, `rotate_obj()`, `move_obj()`, `animate_obj()`

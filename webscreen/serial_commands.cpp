@@ -47,6 +47,7 @@ const SerialCommands::Command SerialCommands::kCommands[] = {
   { "download",    "dl",       downloadFile64,                      ARGS_RAW,          "/download <file>",         "Dump file as base64 (host-side download)" },
   { "load",        "run",      loadApp,                             ARGS_RAW,          "/load <script.js> [save]", "Load/switch to different JS app (save = persist to config)" },
   { "restart_app", nullptr,    [](const String&) { restartApp(); }, ARGS_IGNORED,      "/restart_app",             "Restart the JS app in place (no reboot)" },
+  { "button",      nullptr,    [](const String&) { pressButton(); }, ARGS_IGNORED,     "/button",                  "Send a button press to the JS app (on_button)" },
   { "eval",        nullptr,    evalJs,                              ARGS_RAW,          "/eval <js-code>",          "Evaluate JS in the running app (REPL)" },
   { "errors",      nullptr,    [](const String&) { showErrors(); }, ARGS_IGNORED,      "/errors",                  "Show last JS error and restart-ladder state" },
   { "gc",          nullptr,    [](const String&) { runGC(); },      ARGS_IGNORED,      "/gc",                      "Run JS garbage collection" },
@@ -56,6 +57,8 @@ const SerialCommands::Command SerialCommands::kCommands[] = {
   { "backup",      nullptr,    backup,                              ARGS_RAW,          "/backup [save|restore]",   "Backup/restore configuration" },
   { "monitor",     "mon",      monitor,                             ARGS_RAW,          "/monitor [cpu|mem|net]",   "Live system monitoring" },
   { "brightness",  nullptr,    setBrightness,                       ARGS_RAW,          "/brightness <0-255>",      "Set display brightness" },
+  { "sleep",       nullptr,    [](const String&) { sleepScreen(); }, ARGS_IGNORED,     "/sleep",                   "Turn the screen off (device stays connected)" },
+  { "wake",        nullptr,    [](const String&) { wakeScreen(); }, ARGS_IGNORED,      "/wake",                    "Turn the screen back on" },
   { "time",        nullptr,    [](const String&) { showTime(); },   ARGS_IGNORED,      "/time",                    "Show current device time" },
   { "settime",     nullptr,    setTime,                             ARGS_RAW,          "/settime <epoch> [tz]",    "Set device time from epoch" },
   { "factory_reset", nullptr,  factoryReset,                        ARGS_RAW,          "/factory_reset confirm",   "Delete webscreen.json and reboot to fallback" },
@@ -1346,6 +1349,19 @@ void SerialCommands::setBrightness(const String& args) {
   printSuccess("Brightness set to " + String(brightness));
 }
 
+// Standby from the host: the screen goes dark but the device keeps running and
+// stays on USB, so the same host can wake it. (A press of the physical button
+// is a full power-off that only RST or a power cycle ends.)
+void SerialCommands::sleepScreen() {
+  webscreen_display_power(false);
+  printSuccess("Screen sleeping. Send /wake to turn it back on");
+}
+
+void SerialCommands::wakeScreen() {
+  webscreen_display_power(true);
+  printSuccess("Screen awake");
+}
+
 void SerialCommands::showTime() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo, 100)) {
@@ -1406,6 +1422,17 @@ void SerialCommands::restartApp() {
   }
   webscreen_runtime_request_restart("serial /restart_app");
   printSuccess("JS app restart requested (in-place, no reboot)");
+}
+
+// The physical button can only power the device off (it shares a pin with
+// PSRAM), so hosts send presses here; apps receive them exactly as before.
+void SerialCommands::pressButton() {
+  if (!webscreen_runtime_is_javascript_active()) {
+    printError("JS runtime is not running (fallback mode); no app to receive the press.");
+    return;
+  }
+  webscreen_runtime_notify_button(true);
+  printSuccess("Button press sent to the JS app");
 }
 
 void SerialCommands::evalJs(const String& args) {

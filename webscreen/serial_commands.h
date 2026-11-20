@@ -37,6 +37,7 @@ private:
   static void loadApp(const String& scriptName);
   static void restartApp();
   static void runGC();
+  static void pressButton();
   static void evalJs(const String& args);
   static void showErrors();
   static bool sdReady();
@@ -45,6 +46,8 @@ private:
   static void backup(const String& args);
   static void monitor(const String& args);
   static void setBrightness(const String& args);
+  static void sleepScreen();
+  static void wakeScreen();
   static void showTime();
   static void setTime(const String& args);
 

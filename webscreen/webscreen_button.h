@@ -12,3 +12,18 @@ struct WebscreenButton {
   }
   uint16_t run = 0;
 };
+
+// The BOOT button (GPIO 0) is an ordinary input once the firmware runs, so it
+// serves as the app button. Reports one click per press: true on the single
+// sample where the line has been low for `needed` samples in a row.
+struct WebscreenClick {
+  bool sample(bool low, uint16_t needed) {
+    if (!low) {
+      run = 0;
+      return false;
+    }
+    if (run >= needed) return false;
+    return ++run == needed;
+  }
+  uint16_t run = 0;
+};

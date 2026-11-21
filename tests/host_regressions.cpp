@@ -100,6 +100,22 @@ static void test_button() {
   assert(!button.sample(false, 40));
 }
 
+static void test_click() {
+  WebscreenClick click;
+  // Contact bounce shorter than the threshold never clicks.
+  for (int i = 0; i < 1000; i++) {
+    for (int low = 0; low < 29; low++) assert(!click.sample(true, 30));
+    assert(!click.sample(false, 30));
+  }
+  // A held press clicks exactly once, and again only after a release.
+  int clicks = 0;
+  for (int low = 0; low < 100000; low++) clicks += click.sample(true, 30);
+  assert(clicks == 1);
+  assert(!click.sample(false, 30));
+  for (int low = 0; low < 30; low++) clicks += click.sample(true, 30);
+  assert(clicks == 2);
+}
+
 static void test_timers() {
   js_set(js, js_glob(js), "create_timer", js_mkfun(js_create_timer));
   js_set(js, js_glob(js), "timer_delete", js_mkfun(js_timer_delete));
@@ -457,6 +473,7 @@ static void test_mqtt_queue() {
 int main() {
   test_serial_and_configuration();
   test_button();
+  test_click();
   test_mqtt_queue();
   test_engine_limits();
   test_execution_deadlines();

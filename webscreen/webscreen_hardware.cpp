@@ -21,6 +21,8 @@ static bool g_hardware_initialized = false;
 static bool g_display_on = true;
 static uint8_t g_brightness = 200;
 static WebscreenButton g_button;
+static WebscreenClick g_app_button;
+static void (*volatile g_app_button_callback)(bool) = nullptr;
 bool webscreen_hardware_init(void) {
   if (g_hardware_initialized) {
     return true;
@@ -145,6 +147,13 @@ static void button_sample_cb(void *) {
   bool off = g_button.sample(webscreen_hardware_button_pressed(), WEBSCREEN_BUTTON_OFF_SAMPLES);
   g_button_run_at_reset = g_button.run;
   if (off) webscreen_hardware_power_off();
+
+  // BOOT button: one click per press, handed to whoever registered (the JS runtime).
+  bool low = gpio_get_level((gpio_num_t)WEBSCREEN_PIN_APP_BUTTON) == 0;
+  if (g_app_button.sample(low, WEBSCREEN_APP_BUTTON_SAMPLES)) {
+    void (*callback)(bool) = g_app_button_callback;
+    if (callback) callback(true);
+  }
 }
 void webscreen_hardware_init_button(void) {
   // Left over from a previous power-off if the chip was not fully reset.
@@ -155,6 +164,9 @@ void webscreen_hardware_init_button(void) {
   // Enable the pad's input buffer only. The IO MUX function must stay on the
   // PSRAM bus, and the board has an external pull-up (R7).
   PIN_INPUT_ENABLE(GPIO_PIN_MUX_REG[WEBSCREEN_PIN_BUTTON]);
+
+  // BOOT button: a plain GPIO after reset, with the pull-up it needs as a strapping pin.
+  pinMode(WEBSCREEN_PIN_APP_BUTTON, INPUT_PULLUP);
 
   static esp_timer_handle_t timer = nullptr;
   if (timer) return;
@@ -183,11 +195,12 @@ bool webscreen_hardware_button_pressed(void) {
   // Not digitalRead(): the pin is deliberately not registered as an Arduino GPIO.
   return gpio_get_level((gpio_num_t)WEBSCREEN_PIN_BUTTON) == 0;
 }
-// The button can only power the device off on this board revision, so presses
-// never reach JS apps; these stay as no-ops for the on_button()/button_set_toggle() bindings.
+// Clicks of the BOOT button go to this callback, from the esp_timer task. The
+// power button never reaches it: on this board revision it can only power off.
 void webscreen_hardware_set_button_callback(void (*callback)(bool pressed)) {
-  (void)callback;
+  g_app_button_callback = callback;
 }
+// No-op, kept for the button_set_toggle() binding.
 void webscreen_hardware_set_button_toggle(bool enabled) {
   (void)enabled;
 }

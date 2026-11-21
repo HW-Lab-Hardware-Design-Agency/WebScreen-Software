@@ -17,8 +17,8 @@
 // Keep major >= 2: WebScreen-Admin parses this from /info to enable /upload.
 #define WEBSCREEN_VERSION_MAJOR 3
 #define WEBSCREEN_VERSION_MINOR 0
-#define WEBSCREEN_VERSION_PATCH 1
-#define WEBSCREEN_VERSION_STRING "3.0.1-dev"
+#define WEBSCREEN_VERSION_PATCH 2
+#define WEBSCREEN_VERSION_STRING "3.0.2-dev"
 
 // ============================================================================
 // HARDWARE CONFIGURATION

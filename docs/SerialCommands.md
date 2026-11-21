@@ -157,7 +157,7 @@ The JS Arena lines only appear while the JavaScript engine is running.
 #### `/sleep` and `/wake`
 `/sleep` turns the screen off. The device keeps running and stays connected over USB, so the app, WiFi and the serial console continue to work. `/wake` turns the screen back on at the brightness it had.
 
-This is a standby, not a power-off. A press of the physical button powers the device off completely, and only **RST** or reconnecting USB starts it again. The power button in the header of WebScreen Admin and the Serial IDE sends these two commands.
+This is a standby, not a power-off. A press of the power button powers the device off completely, and only **RST** or reconnecting USB starts it again. The power button in the header of WebScreen Admin and the Serial IDE sends these two commands.
 
 **Usage:**
 ```
@@ -340,9 +340,9 @@ WebScreen> /restart_app
 - Leave safe mode after fixing a failing script
 
 #### `/button`
-Sends one button press to the running JavaScript app. The app receives it through `on_button()` or `get_button_event()`, the same way it used to receive a press of the physical button.
+Sends one button press to the running JavaScript app. The app receives it through `on_button()` or `get_button_event()`, the same way it receives a click of the **BOOT** button.
 
-The physical button cannot do this: it shares a pin with the PSRAM, so a press powers the device off. WebScreen Admin and the Serial IDE have a **Press button** control that sends this command.
+Use it to press the button from a computer, for example while testing a script. WebScreen Admin and the Serial IDE have a **Press button** control that sends this command. The power button cannot do this: it shares a pin with the PSRAM, so a press powers the device off.
 
 **Usage:**
 ```

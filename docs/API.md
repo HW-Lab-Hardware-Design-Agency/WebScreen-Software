@@ -91,9 +91,11 @@ The following functions are available in your JavaScript applications:
 
 ### Button Events
 
-Button presses reach an app from the host, not from the physical button. On the current board revision the physical button shares a pin with the PSRAM, so a press powers the device off, and only **RST** or reconnecting USB starts it again.
+The **BOOT** button is the app button: each click reaches the running app. The power button cannot be used by apps. It shares a pin with the PSRAM, so a press powers the device off, and only **RST** or reconnecting USB starts it again.
 
-To send a press, use the **Press button** control in WebScreen Admin or the Serial IDE, or the `/button` serial command. Each one delivers a single press to the running app. The device must be connected over USB.
+A press can also be sent from a computer with the **Press button** control in WebScreen Admin or the Serial IDE, or with the `/button` serial command.
+
+Do not hold BOOT while pressing RST or plugging the device in: that starts the chip in firmware download mode with a blank screen. Press RST to leave it.
 
 - **on_button("fn_name")**
   Registers a handler; each press calls `fn_name(1)`. Returns `true` (`false` if the name is too long). `on_button("")` removes the handler.

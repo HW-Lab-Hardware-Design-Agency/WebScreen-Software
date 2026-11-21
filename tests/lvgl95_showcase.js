@@ -1,6 +1,6 @@
 // LVGL Lab: offline, no assets. Upload, then /load lvgl95_showcase.js.
 // Requires this branch's new arc-label bindings: rebuild/upload firmware first.
-// Short press cycles CURVE -> BAR -> PAUSED. Long press still powers off.
+// A BOOT click cycles CURVE -> BAR -> PAUSED. The power button powers off.
 let ink = 0xe9f1fa;
 let muted = 0x92a7bd;
 let mint = 0x36e4ae;
@@ -140,7 +140,7 @@ let start_lab = function() {
   text_at("PRESS: CURVE / BAR / PAUSE", 268, 218, small);
   on_button("lab_button");
   create_timer("lab_tick", 80);
-  print("LVGL Lab ready. Run /button to cycle curve, bar, and pause.");
+  print("LVGL Lab ready. Click BOOT or run /button to cycle curve, bar, and pause.");
   return 0;
 };
 

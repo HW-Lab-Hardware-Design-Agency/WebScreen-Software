@@ -1,5 +1,5 @@
 // /load lvgl95_arc_text.js — requires the arc-label migration firmware.
-// Short press: clockwise / counterclockwise / pause. Long press powers off.
+// BOOT click: clockwise / counterclockwise / pause.
 let demo_name = "ARC TEXT";
 let demo_frame = 0;
 let demo_mode = 0;

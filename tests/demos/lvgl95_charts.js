@@ -1,5 +1,5 @@
-// /load lvgl95_charts.js — short press: curve / line / bar / scatter / pause.
-// Uses synthetic data. Long press still powers off.
+// /load lvgl95_charts.js — BOOT click: curve / line / bar / scatter / pause.
+// Uses synthetic data.
 let demo_name = "CHART GALLERY";
 let demo_frame = 0;
 let demo_mode = 0;

@@ -1,4 +1,4 @@
-// /load lvgl95_gauges.js — short press pauses/resumes. Synthetic readings.
+// /load lvgl95_gauges.js — a BOOT click pauses/resumes. Synthetic readings.
 let demo_name = "GAUGE DASHBOARD";
 let demo_frame = 0;
 let demo_mode = 0;

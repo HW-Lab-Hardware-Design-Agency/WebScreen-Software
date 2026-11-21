@@ -71,8 +71,8 @@ These tests do not emulate ESP32 hardware or network stacks.
    assets are needed. Loading without `save` keeps your existing startup app.
 3. Expect animated curved text around a scale-based gauge, a smooth curve chart,
    and red/green/blue swatches along the bottom.
-4. Run `/button` to cycle **curve → bar (with reversed curved text) → paused → curve**.
-   The paused view is useful for `/screenshot`. Do not press the physical button
+4. Click **BOOT** (or run `/button`) to cycle **curve → bar (with reversed curved text) → paused → curve**.
+   The paused view is useful for `/screenshot`. Do not use the power button
    for this: on the current board a press powers the device off until **RST**.
 5. Check `/errors`, repeat `/restart_app`, and compare `/stats` after warm-up for
    continuing memory growth. Text should remain intact after `/gc`.
@@ -100,6 +100,9 @@ behavior for running each app on the board.
 5. Check brightness 0/200. Then press the power button once: the screen must go
    dark and the USB port must disappear; **RST** must boot normally. Repeat while
    an app with images is running.
+   With an app that uses `on_button()` running, click **BOOT**: the handler must
+   run once per click, and a long hold must still count as one click. Holding
+   BOOT while pressing **RST** must still enter download mode.
 6. Boot with no SD card, missing script, malformed configuration, and an app
    that creates a timer then raises an error. Verify fallback/safe-mode display
    and serial recovery. Fallback requires configuration plus `/reboot` to start JS.

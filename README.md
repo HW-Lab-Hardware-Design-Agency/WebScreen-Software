@@ -2,7 +2,7 @@
 
 # WebScreen Software
 
-This branch develops firmware **4.0.2-dev** with **LVGL 9.6.0** support, based on `4.x`.
+This branch develops firmware **4.0.3-dev** with **LVGL 9.6.0** support, based on `4.x`.
 It includes the arc-label and smooth-chart APIs used by the firmware 4.0 demo apps.
 
 ![til](./docs/WebScreen_Notification.gif)

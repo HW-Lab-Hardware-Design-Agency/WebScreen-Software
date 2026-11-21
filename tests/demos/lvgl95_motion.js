@@ -1,4 +1,4 @@
-// /load lvgl95_motion.js — short press pauses/resumes the moving lines.
+// /load lvgl95_motion.js — a BOOT click pauses/resumes the moving lines.
 // Two independent point buffers; all objects/styles are allocated once.
 let demo_name = "MOTION LINES";
 let demo_frame = 0;

@@ -1,4 +1,4 @@
-// /load lvgl95_typography.js — short press switches dark/light theme.
+// /load lvgl95_typography.js — a BOOT click switches dark/light theme.
 // Static rendering baseline: no timers, network calls, or media files.
 let demo_name = "TYPE AND COLOR";
 let demo_frame = 0;

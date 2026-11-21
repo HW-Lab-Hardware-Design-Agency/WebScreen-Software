@@ -36,7 +36,7 @@ If USB port not detected:
 - **Configuration Loading**: Reads `/webscreen.json` from SD card for WiFi, MQTT, colors, and script selection
 - **SD Card Initialization**: Robust mounting with retry logic — probe-mount at a safe 400 kHz first, then remount at 10 MHz (3 retries, low-speed fallback). Do NOT mount at a high frequency directly: `send_op_cond` times out (0x107) and leaves the host wedged so even later 400 kHz mounts fail. Serial commands only (re)mount the card when it is actually absent
 - **Mode Selection**: Chooses between dynamic JavaScript execution or fallback notification app
-- **Power Button**: Uses INPUT_PIN (GPIO 21, `WEBSCREEN_PIN_BUTTON`) for screen on/off toggle with brightness control. NEVER move this to GPIO 33-37: with octal (OPI) PSRAM those pins are the PSRAM bus and a single `pinMode()` on them corrupts all PSRAM access (boot dies at the next allocation with a wedged panic and TG1WDT reset loop, no backtrace over USB-CDC)
+- **Buttons**: the power button is on GPIO 33 (`WEBSCREEN_PIN_BUTTON`), which is also PSRAM data line D4, so a press can only power the device off (deep sleep until RST or a power cycle) and the firmware never calls `pinMode()` on GPIO 33-37. The BOOT button on GPIO 0 (`WEBSCREEN_PIN_APP_BUTTON`) is the app button: each click is queued for `on_button()`/`get_button_event()`, as is the `/button` serial command. `/sleep` and `/wake` are a screen standby for hosts
 - **Global State**: Manages MQTT enablement, color scheme, script filename, and screen power state
 
 #### Dual Runtime System
@@ -54,7 +54,7 @@ Exposes comprehensive API to JavaScript applications:
 - **Storage**: SD card file operations
 - **UI**: LVGL widget creation, styling, animation (full `lv_chart_*` family now registered)
 - **Communication**: BLE and MQTT protocols
-- **Hardware**: GPIO, display control (brightness via `set_brightness()`/`get_brightness()`), power-button short-press events (`on_button()`/`get_button_event()`/`button_set_toggle()`; long press is firmware power-off)
+- **Hardware**: GPIO, display control (brightness via `set_brightness()`/`get_brightness()`), app-button events from BOOT clicks or `/button` (`on_button()`/`get_button_event()`; `button_set_toggle()` is a no-op)
 - **Utilities**: `random()`, `str_split()`/`str_split_count()`, `format_number()`/`pad_number()`, `format_time()`
 
 JS errors carry a 1-based `(line N)` suffix (relative to a function body's first line when raised inside one). The JS/LVGL task runs on **core 1** (same priority as loopTask) so it does not compete with the WiFi/lwip stack; button responsiveness comes from FreeRTOS time-slicing. Scripts are loaded with a single sized read into PSRAM.

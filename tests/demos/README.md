@@ -16,7 +16,7 @@ libraries. Use the migration firmware with the arc-label bindings already used b
    `DEMO READY:` and `JS app restarted successfully` before starting another app
    or requesting a file listing.
 
-| Command | What to check | `/button` |
+| Command | What to check | BOOT click or `/button` |
 | --- | --- | --- |
 | `/load lvgl95_arc_text.js` | Two circular text labels with different radii and fonts | Clockwise → counterclockwise → paused |
 | `/load lvgl95_charts.js` | Two synthetic signals and preserved chart type numbering | Curve → line → bar → scatter → paused |
@@ -27,13 +27,14 @@ libraries. Use the migration firmware with the arc-label bindings already used b
 Loading without `save` leaves your normal boot app
 unchanged. Typography has no timer; the animated demos use one timer and reuse
 their objects and styles. Gauge/chart values are synthetic, not device telemetry.
-Cycle modes with `/button` in the serial console, or **Press button** in Admin. Do not use the
-physical button, whatever the on-screen "PRESS" hints say: on the current board a
-press powers the device off until **RST**, and it never reaches the app.
+Cycle modes with a click of the **BOOT** button, with `/button` in the serial
+console, or with **Press button** in Admin. The on-screen "PRESS" hints mean
+BOOT. Do not use the power button: on the current board a press powers the
+device off until **RST**, and it never reaches the app.
 
 ## Test each app
 
-- Exercise every mode with `/button`, including returning to the first mode.
+- Exercise every mode with BOOT clicks and with `/button`, including returning to the first mode.
 - Capture `/screenshot` in each mode; pause animation first if available.
 - Check `/errors` and `/stats`, run `/gc`, then check that the app still responds.
 - Run `/restart_app` and switch between demos repeatedly. Check for continuing

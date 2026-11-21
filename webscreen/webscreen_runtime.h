@@ -61,7 +61,7 @@ extern "C" {
 
   void webscreen_runtime_print_error_report(void);
 
-  /** Button press from loopTask (serial /button); queued lock-free for the JS task's on_button() handler. */
+  /** Button press (BOOT button from the esp_timer task, or serial /button from loopTask); queued lock-free for the JS task's on_button() handler. */
 
   void webscreen_runtime_notify_button(bool pressed);
 

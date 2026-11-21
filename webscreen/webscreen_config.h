@@ -33,6 +33,8 @@
 #define WEBSCREEN_PIN_LED PIN_LED
 // GPIO 33 = user button, shared with the octal-PSRAM bus (GPIO 33-37): never pinMode() these pins.
 #define WEBSCREEN_PIN_BUTTON INPUT_PIN
+// GPIO 0 = BOOT button. Only a strapping pin at reset; afterwards it is the app button (on_button()).
+#define WEBSCREEN_PIN_APP_BUTTON PIN_BUTTON_1
 #define WEBSCREEN_PIN_OUTPUT OUTPUT_PIN
 
 // Display Pins (RM67162 AMOLED)
@@ -99,6 +101,7 @@
 #define WEBSCREEN_BUTTON_SAMPLE_US 1000
 #define WEBSCREEN_BUTTON_OFF_SAMPLES 40   // 40 ms unbroken low = press => power off (traffic alone: 9 ms measured)
 #define WEBSCREEN_BUTTON_CRASH_SAMPLES 10 // Low this long when a crash hit => the press caused it
+#define WEBSCREEN_APP_BUTTON_SAMPLES 30   // BOOT button debounce: 30 ms low = one click for the app
 #define WEBSCREEN_STATS_REPORT_INTERVAL_MS 300000  // 5 minutes
 
 // Watchdog

@@ -117,8 +117,8 @@ extern "C" {
   bool webscreen_hardware_button_pressed(void);
 
   /**
- * @brief Set button callback function
- * @param callback Function to call when button is pressed
+ * @brief Set the callback for clicks of the BOOT button (the app button)
+ * @param callback Called with true once per click, from the esp_timer task
  */
 
   void webscreen_hardware_set_button_callback(void (*callback)(bool pressed));

@@ -23,6 +23,9 @@ bool dynamic_js_setup() {
     return false;
   }
 
+  // BOOT button clicks reach the app's on_button() handler.
+  webscreen_hardware_set_button_callback(webscreen_runtime_notify_button);
+
   LOG("DYNAMIC_JS: setup done!");
   return true;
 }

@@ -1,4 +1,5 @@
 // ws_elk_basics.h — fragment of the WebScreen Elk/LVGL bridge; included once, in order, by lvgl_elk.h (not standalone).
+#include <atomic>
 
 /******************************************************************************
  * E) Elk-Facing Functions (print, Wi-Fi, SD ops, etc.)
@@ -295,10 +296,10 @@ static jsval_t js_pad_number(struct js *js, jsval_t *args, int nargs) {
 }
 
 /******************************************************************************
- * E3) Button events — presses cross loopTask -> JS task via two single-writer counters (lock-free); fed by the /button serial command; the physical button only powers the device off.
+ * E3) Button events — presses reach the JS task through two atomic counters (lock-free). Producers: the BOOT button (esp_timer task) and the /button serial command (loopTask). The power button only powers the device off.
  ******************************************************************************/
-static volatile uint32_t g_button_evt_produced = 0;  // written by loopTask only
-static volatile uint32_t g_button_evt_consumed = 0;  // written by JS task only
+static std::atomic<uint32_t> g_button_evt_produced{0};  // incremented by the producers above
+static volatile uint32_t g_button_evt_consumed = 0;       // written by JS task only
 static char g_button_cb_name[56] = "";
 
 extern "C" void webscreen_hardware_set_button_toggle(bool enabled);

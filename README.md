@@ -146,9 +146,15 @@ Build commands, native regression tests, and the device smoke test are documente
 #### Power Button
 - **Press**: Power off. The screen goes dark and the device sleeps until you press **RST** or unplug and reconnect USB. The button cannot turn the device back on
 - **Standby**: to turn only the screen off and on again, use the power button in WebScreen Admin or the Serial IDE, or the `/sleep` and `/wake` serial commands. The device stays connected
-- **Apps**: the physical button does not reach apps. To send a press to an app's `on_button()` handler, use **Press button** in WebScreen Admin or the Serial IDE, or the `/button` serial command
+- **Apps**: the power button does not reach apps. Use the **BOOT** button instead (see below)
 - Avoid pressing it while files are being uploaded or saved; like pulling the cable, that can leave a file incomplete
 - **Pin**: GPIO 33 (active low, external pull-up; shared with the PSRAM bus, so the firmware never calls `pinMode()` on it)
+
+#### BOOT Button (App Button)
+- **Click**: sends a press to the running app's `on_button()` handler, for example to change pages or modes
+- The same press can be sent from a computer with **Press button** in WebScreen Admin or the Serial IDE, or with the `/button` serial command
+- Holding BOOT while pressing **RST** or plugging the device in still starts firmware download mode (blank screen); press **RST** to leave it
+- **Pin**: GPIO 0 (active low)
 
 ## Configuration
 
